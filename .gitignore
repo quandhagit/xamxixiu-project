@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-electron/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Local browser and runtime data
+.browser-data/
+.vbee-requests.json
+.vbee-callbacks.json
+
+# Secrets and local environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Generated project data and asset index
+projects/
+assets/assets.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Operating system files
+.DS_Store
+Thumbs.db

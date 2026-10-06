@@ -1,0 +1,51 @@
+{
+  "name": "xamxixiu-project",
+  "version": "1.0.0",
+  "main": "dist-electron/electron/main.js",
+  "license": "MIT",
+  "scripts": {
+    "capture": "tsx src/capture.ts",
+    "process-image": "tsx src/process-image.ts",
+    "create-project": "tsx src/create-project.ts",
+    "analyze": "tsx src/analyze.ts",
+    "scan-assets": "tsx src/scan-assets.ts",
+    "match-reactions": "tsx src/match-reactions.ts",
+    "generate-audio": "tsx src/tts/generate-audio.ts",
+    "vbee-webhook": "tsx src/tts/webhook.ts",
+    "create-timeline": "tsx src/create-timeline.ts",
+    "renderer:dev": "next dev renderer -p 3000",
+    "renderer:build": "next build renderer",
+    "electron:build": "tsc -p tsconfig.electron.json",
+    "electron:dev": "yarn electron:build && wait-on http://localhost:3000 && electron dist-electron/electron/main.js",
+    "dev": "concurrently -k \"yarn renderer:dev\" \"yarn electron:dev\"",
+    "build": "yarn renderer:build && yarn electron:build",
+    "package:win": "yarn build && electron-builder --win"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "dotenv": "^18.0.5",
+    "electron": "^44.5.1",
+    "express": "^5.2.1",
+    "music-metadata": "^12.0.0",
+    "next": "^16.3.8",
+    "openai": "^7.27.0",
+    "playwright": "^1.63.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "concurrently": "^10.0.5",
+    "electron-builder": "^26.15.3",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "wait-on": "^9.5.1"
+  },
+  "type": "module"
+}
