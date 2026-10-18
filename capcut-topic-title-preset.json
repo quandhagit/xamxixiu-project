@@ -1,0 +1,19 @@
+{
+  "capcutCliPreset": 1,
+  "style": {
+    "font_name": "Anton",
+    "font_size": 14,
+    "text_color": "#FFFFFF",
+    "alignment": 1,
+    "text_alpha": 1,
+    "fixed_width": -1,
+    "fixed_height": -1,
+    "background_color": "#000000",
+    "background_alpha": 1,
+    "background_style": 1,
+    "background_round_radius": 0,
+    "background_width": 0.8,
+    "background_height": 0.14,
+    "has_text_shadow_config": true
+  }
+}

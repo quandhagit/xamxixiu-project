@@ -1,0 +1,14 @@
+---
+alwaysApply: false
+---
+# Repository workflow
+
+- Preserve existing user changes; inspect `git status` before editing.
+- Use the Orchestrator for multi-step implementation work.
+- Delegate implementation to `dev` and independent verification to `test`; inspect the diff between them.
+- Treat `yarn quality-gate` output and exit code as authoritative.
+- Do not claim PASS when a required check failed or was unavailable.
+- Stop after the initial attempt plus at most two focused fix-and-retest cycles.
+- Do not commit, push, merge, deploy, or run destructive Git commands automatically.
+- Report unavailable lint, unit-test, or integration-test checks honestly; do not invent scripts or dependencies.
+- Read `renderer/AGENTS.md` before changing renderer files.

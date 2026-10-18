@@ -6,7 +6,8 @@ const PRESSABLE_SELECTOR =
 export async function screenshotContainer(
   page: Page,
   containerIndex: number,
-  outputPath: string
+  outputPath: string,
+  cropBottomPx = 0
 ): Promise<void> {
   const containers = page.locator(
     PRESSABLE_SELECTOR
@@ -27,9 +28,33 @@ export async function screenshotContainer(
 
   await container.scrollIntoViewIfNeeded();
 
-  await container.screenshot({
-    path: outputPath
-  });
+  if (cropBottomPx <= 0) {
+    await container.screenshot({
+      path: outputPath
+    });
+  } else {
+    const box =
+      await container.boundingBox();
+
+    if (!box) {
+      throw new Error(
+        `Could not measure container ${containerIndex}`
+      );
+    }
+
+    await page.screenshot({
+      path: outputPath,
+      clip: {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: Math.max(
+          1,
+          box.height - cropBottomPx
+        )
+      }
+    });
+  }
 
   console.log(`Saved: ${outputPath}`);
 }

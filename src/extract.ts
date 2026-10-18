@@ -34,6 +34,7 @@ export async function extractThread(
     author: string;
     text: string;
     likes: number;
+    groupContainerIndexes?: number[];
   }> = [];
 
   for (let i = 0; i < count; i++) {
@@ -72,12 +73,20 @@ export async function extractThread(
 
     const likes =
       await extractLikes(container);
+    const groupContainerIndexes =
+      await extractCommentGroupIndexes(
+        container,
+        PRESSABLE_SELECTOR
+      );
 
     results.push({
       index: i,
       author,
       text,
-      likes
+      likes,
+      ...(groupContainerIndexes
+        ? { groupContainerIndexes }
+        : {})
     });
   }
 
@@ -90,15 +99,79 @@ export async function extractThread(
   const post =
     results[0];
 
-  const comments =
+  const groupParentByContainer = new Map<
+    number,
+    number
+  >();
+  for (const item of results) {
+    const group = item.groupContainerIndexes;
+    if (!group || group.length < 2) {
+      continue;
+    }
+    const parentContainerIndex = group[0];
+    for (const childContainerIndex of group.slice(1)) {
+      groupParentByContainer.set(
+        childContainerIndex,
+        parentContainerIndex
+      );
+    }
+  }
+
+  const comments: ThreadComment[] =
     results
       .slice(1)
-      .map((item) => ({
+      .map((item, commentIndex) => ({
         author: item.author,
         text: item.text,
         likes: item.likes,
-        containerIndex: item.index
+        containerIndex: item.index,
+        commentIndex
       }));
+
+  const containerToCommentIndex = new Map(
+    comments.map((comment, index) => [
+      comment.containerIndex,
+      index
+    ])
+  );
+
+  results.slice(1).forEach((item, index) => {
+    const comment = comments[index];
+    const parentContainerIndex =
+      groupParentByContainer.get(item.index);
+    const parentFromDom =
+      parentContainerIndex !== undefined
+        ? containerToCommentIndex.get(
+          parentContainerIndex
+        )
+        : undefined;
+
+    if (
+      parentFromDom !== undefined &&
+      parentFromDom !== index
+    ) {
+      comment.parentCommentIndex = parentFromDom;
+    }
+  });
+
+  for (const comment of comments) {
+    const parentIndex = comment.parentCommentIndex;
+    if (parentIndex === undefined) {
+      continue;
+    }
+    const parent = comments[parentIndex];
+    if (!parent) {
+      delete comment.parentCommentIndex;
+      continue;
+    }
+    parent.replies = [
+      ...(parent.replies ?? []),
+      {
+        ...comment,
+        replies: undefined
+      }
+    ];
+  }
 
   return {
     url: page.url(),
@@ -108,6 +181,33 @@ export async function extractThread(
     postContainerIndex: post.index,
     comments
   };
+}
+
+async function extractCommentGroupIndexes(
+  container: ReturnType<Page["locator"]>,
+  selector: string
+): Promise<number[] | undefined> {
+  return container.evaluate(
+    (element, pressableSelector) => {
+      const wrapper = element.parentElement;
+      const group = wrapper?.parentElement;
+      if (!group || group.tagName !== "DIV") {
+        return undefined;
+      }
+
+      const all = Array.from(
+        document.querySelectorAll(pressableSelector)
+      );
+      const members = Array.from(
+        group.querySelectorAll(pressableSelector)
+      )
+        .map((member) => all.indexOf(member))
+        .filter((index) => index >= 0);
+
+      return members.length > 1 ? members : undefined;
+    },
+    selector
+  );
 }
 
 async function extractContentText(

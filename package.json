@@ -13,9 +13,11 @@
     "generate-audio": "tsx src/tts/generate-audio.ts",
     "vbee-webhook": "tsx src/tts/webhook.ts",
     "create-timeline": "tsx src/create-timeline.ts",
+    "create-capcut-project": "tsx src/create-capcut-project.ts",
     "renderer:dev": "next dev renderer -p 3000",
     "renderer:build": "next build renderer",
     "electron:build": "tsc -p tsconfig.electron.json",
+    "quality-gate": "node scripts/quality-gate.mjs",
     "electron:dev": "yarn electron:build && wait-on http://localhost:3000 && electron dist-electron/electron/main.js",
     "dev": "concurrently -k \"yarn renderer:dev\" \"yarn electron:dev\"",
     "build": "yarn renderer:build && yarn electron:build",
@@ -47,5 +49,30 @@
     "typescript": "^7.0.2",
     "wait-on": "^9.5.1"
   },
-  "type": "module"
+  "type": "module",
+  "build": {
+    "appId": "com.xamxixiu.app",
+    "productName": "Xam Xi Xiu",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "renderer/out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "**/*_sample*",
+          "**/_sample/**"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
 }

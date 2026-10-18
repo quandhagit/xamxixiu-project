@@ -91,56 +91,82 @@ async function writeCallbacks(callbacks: Record<string, VbeeWebhookPayload>): Pr
 }
 
 class RequestManager {
-  async registerRequest(requestId: string, outputFile: string): Promise<void> {
-    const requests = await readRequests();
-    const callbacks = await readCallbacks();
+  private operationQueue: Promise<void> =
+    Promise.resolve();
 
-    requests[requestId] = {
-      requestId,
-      outputFile,
-      status: "pending"
-    };
+  private async runExclusive<T>(
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous =
+      this.operationQueue;
+    let release!: () => void;
+    this.operationQueue =
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
 
-    const cachedCallback = callbacks[requestId];
-    if (cachedCallback) {
-      console.log(`[RequestManager] Match found for cached callback of ${requestId}`);
-      delete callbacks[requestId];
-      await writeCallbacks(callbacks);
-
-      try {
-        await this.processCallback(cachedCallback, outputFile);
-        requests[requestId].status = "completed";
-      } catch (err: unknown) {
-        requests[requestId].status = "failed";
-        requests[requestId].error = err instanceof Error ? err.message : "Failed to process cached callback";
-      }
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
+  }
 
-    await writeRequests(requests);
+  async registerRequest(requestId: string, outputFile: string): Promise<void> {
+    await this.runExclusive(async () => {
+      const requests = await readRequests();
+      const callbacks = await readCallbacks();
+
+      requests[requestId] = {
+        requestId,
+        outputFile,
+        status: "pending"
+      };
+
+      const cachedCallback = callbacks[requestId];
+      if (cachedCallback) {
+        console.log(`[RequestManager] Match found for cached callback of ${requestId}`);
+        delete callbacks[requestId];
+        await writeCallbacks(callbacks);
+
+        try {
+          await this.processCallback(cachedCallback, outputFile);
+          requests[requestId].status = "completed";
+        } catch (err: unknown) {
+          requests[requestId].status = "failed";
+          requests[requestId].error = err instanceof Error ? err.message : "Failed to process cached callback";
+        }
+      }
+
+      await writeRequests(requests);
+    });
   }
 
   async handleCallback(payload: VbeeWebhookPayload): Promise<void> {
-    const requestId = payload.request_id;
-    const requests = await readRequests();
+    await this.runExclusive(async () => {
+      const requestId = payload.request_id;
+      const requests = await readRequests();
 
-    const req = requests[requestId];
-    if (!req) {
-      console.log(`[RequestManager] No pending request found for ${requestId}, caching callback.`);
-      const callbacks = await readCallbacks();
-      callbacks[requestId] = payload;
-      await writeCallbacks(callbacks);
-      return;
-    }
+      const req = requests[requestId];
+      if (!req) {
+        console.log(`[RequestManager] No pending request found for ${requestId}, caching callback.`);
+        const callbacks = await readCallbacks();
+        callbacks[requestId] = payload;
+        await writeCallbacks(callbacks);
+        return;
+      }
 
-    try {
-      await this.processCallback(payload, req.outputFile);
-      req.status = "completed";
-    } catch (err: unknown) {
-      req.status = "failed";
-      req.error = err instanceof Error ? err.message : "Failed to process callback";
-    }
+      try {
+        await this.processCallback(payload, req.outputFile);
+        req.status = "completed";
+      } catch (err: unknown) {
+        req.status = "failed";
+        req.error = err instanceof Error ? err.message : "Failed to process callback";
+      }
 
-    await writeRequests(requests);
+      await writeRequests(requests);
+    });
   }
 
   private async processCallback(
@@ -181,14 +207,16 @@ class RequestManager {
     status: "completed" | "failed",
     error?: string
   ): Promise<void> {
-    const requests = await readRequests();
-    if (requests[requestId]) {
-      requests[requestId].status = status;
-      if (error) {
-        requests[requestId].error = error;
+    await this.runExclusive(async () => {
+      const requests = await readRequests();
+      if (requests[requestId]) {
+        requests[requestId].status = status;
+        if (error) {
+          requests[requestId].error = error;
+        }
+        await writeRequests(requests);
       }
-      await writeRequests(requests);
-    }
+    });
   }
 
   async waitForCompletion(

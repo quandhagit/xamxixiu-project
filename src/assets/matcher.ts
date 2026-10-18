@@ -37,6 +37,26 @@ function pickUnusedAsset(
   return asset;
 }
 
+function pickRequestedAsset(
+  requestedId: string | null | undefined,
+  candidates: Asset[],
+  allAssets: Asset[],
+  usedIds: Set<string>
+): Asset | null {
+  if (requestedId) {
+    const requested = allAssets.find(
+      asset => asset.id === requestedId
+    );
+
+    if (requested && !usedIds.has(requested.id)) {
+      usedIds.add(requested.id);
+      return requested;
+    }
+  }
+
+  return pickUnusedAsset(candidates, usedIds);
+}
+
 export function matchReactions(
   analysis: ThreadAnalysis,
   assets: Asset[]
@@ -67,22 +87,34 @@ export function matchReactions(
       )
       : [];
 
-    const meme = pickUnusedAsset(
+    let meme = pickRequestedAsset(
+      reaction.memeAssetId,
       memeCandidates,
+      memeAssets,
       usedMemeIds
     );
 
-    const sfx = pickUnusedAsset(
-      sfxCandidates,
-      usedSfxIds
-    );
+    const sfx = meme?.mediaKind === "video"
+      ? null
+      : pickRequestedAsset(
+        reaction.sfxAssetId,
+        sfxCandidates,
+        sfxAssets,
+        usedSfxIds
+      );
+
+    // Image memes must have an accompanying SFX. If the requested SFX is
+    // missing, drop the image instead of producing an invalid reaction.
+    if (meme?.mediaKind === "image" && !sfx) {
+      meme = null;
+    }
 
     return {
       commentIndex: reaction.commentIndex,
       emotion: reaction.emotion,
       meme,
       sfx,
-      animation: meme
+      animation: meme?.mediaKind === "image"
         ? reaction.animation
         : "none",
       duration: reaction.duration

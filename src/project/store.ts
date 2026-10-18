@@ -10,6 +10,7 @@ import type {
 import type {
   MatchedReaction
 } from "../assets/matcher.js";
+import type { Asset } from "../assets/scanner.js";
 
 export interface ProjectSummary {
   id: string;
@@ -31,8 +32,14 @@ export interface ProjectState extends ProjectSummary {
   audioFailures: AudioFailure[];
 }
 
+export interface CapCutBaseProject {
+  directory: string;
+  timelineId?: string;
+}
+
 interface ProjectStoreOptions {
   projectsDirectory: string;
+  capCutSettingsFile?: string;
 }
 
 async function readJson<T>(
@@ -55,6 +62,19 @@ async function readJson<T>(
 
     throw error;
   }
+}
+
+async function atomicWriteJson(
+  file: string,
+  value: unknown
+): Promise<void> {
+  const temporary = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(
+    temporary,
+    JSON.stringify(value, null, 2),
+    "utf-8"
+  );
+  await fs.rename(temporary, file);
 }
 
 async function pathIsDirectory(
@@ -81,10 +101,37 @@ async function pathIsFile(
 
 export class ProjectStore {
   private readonly projectsDirectory: string;
+  private readonly capCutSettingsFile: string;
 
   constructor(options: ProjectStoreOptions) {
     this.projectsDirectory =
       options.projectsDirectory;
+    this.capCutSettingsFile =
+      options.capCutSettingsFile ??
+      path.join(
+        this.projectsDirectory,
+        "..",
+        "capcut-settings.json"
+      );
+  }
+
+  async getCapCutBaseProject(): Promise<
+    CapCutBaseProject | undefined
+  > {
+    return readJson<CapCutBaseProject>(
+      this.capCutSettingsFile
+    );
+  }
+
+  async setCapCutBaseProject(
+    project: CapCutBaseProject
+  ): Promise<CapCutBaseProject> {
+    await fs.writeFile(
+      this.capCutSettingsFile,
+      JSON.stringify(project, null, 2),
+      "utf-8"
+    );
+    return project;
   }
 
   async getProjects(): Promise<ProjectSummary[]> {
@@ -182,6 +229,112 @@ export class ProjectStore {
     }
 
     return project;
+  }
+
+  async saveReactions(
+    projectId: string,
+    reactions: MatchedReaction[],
+    assets: Asset[],
+    selections?: {
+      backgroundAssetId?: string | null;
+      musicAssetId?: string | null;
+    }
+  ): Promise<ProjectState> {
+    if (!Array.isArray(reactions)) {
+      throw new Error("Reactions must be an array");
+    }
+    const assetIds = new Set(assets.map((asset) => asset.id));
+    for (const reaction of reactions) {
+      if (
+        !Number.isInteger(reaction.commentIndex) ||
+        !Number.isFinite(reaction.duration) ||
+        reaction.duration < 0.25 ||
+        reaction.duration > 10
+      ) {
+        throw new Error("Invalid reaction assignment");
+      }
+      if (reaction.meme && !assetIds.has(reaction.meme.id)) {
+        throw new Error(`Unknown meme asset: ${reaction.meme.id}`);
+      }
+      if (reaction.sfx && !assetIds.has(reaction.sfx.id)) {
+        throw new Error(`Unknown SFX asset: ${reaction.sfx.id}`);
+      }
+      if (
+        reaction.meme?.mediaKind === "video" &&
+        (reaction.sfx || reaction.animation !== "none")
+      ) {
+        throw new Error("Video memes cannot use SFX or animation");
+      }
+      if (
+        reaction.meme?.mediaKind === "image" &&
+        !reaction.sfx
+      ) {
+        throw new Error("Image memes require an SFX");
+      }
+    }
+    const directory = this.getProjectDirectory(projectId);
+    const analysisFile = path.join(directory, "analysis.json");
+    const analysis = selections
+      ? await readJson<ThreadAnalysis>(analysisFile)
+      : undefined;
+    if (selections && !analysis) {
+      throw new Error("Project analysis is missing");
+    }
+    if (selections && analysis) {
+      for (const [key, type] of [
+        ["backgroundAssetId", "background"],
+        ["musicAssetId", "music"]
+      ] as const) {
+        const id = selections[key];
+        if (
+          id &&
+          !assets.some(
+            (asset) => asset.id === id && asset.type === type
+          )
+        ) {
+          throw new Error(`Unknown ${type} asset: ${id}`);
+        }
+        analysis[key] = id ?? null;
+      }
+    }
+    await atomicWriteJson(
+      path.join(directory, "reactions.json"),
+      reactions
+    );
+    if (selections && analysis) {
+      await atomicWriteJson(analysisFile, analysis);
+    }
+    await fs.rm(
+      path.join(directory, "timeline.json"),
+      { force: true }
+    );
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project could not be loaded: ${projectId}`);
+    }
+    return project;
+  }
+
+  async getAssetReferences(
+    assetId: string
+  ): Promise<string[]> {
+    const references: string[] = [];
+    for (const project of await this.getProjects()) {
+      const state = await this.getProject(project.id);
+      if (
+        state?.reactions?.some(
+          (reaction) =>
+            reaction.meme?.id === assetId ||
+            reaction.sfx?.id === assetId
+        ) ||
+        state?.analysis?.topicMemeId === assetId ||
+        state?.analysis?.backgroundAssetId === assetId ||
+        state?.analysis?.musicAssetId === assetId
+      ) {
+        references.push(project.id);
+      }
+    }
+    return references;
   }
 
   getProjectDirectory(

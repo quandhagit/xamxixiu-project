@@ -55,6 +55,7 @@ function isAudioFailureTarget(
 ): value is AudioFailureTarget {
   return (
     value === "topic" ||
+    value === "topic-title" ||
     /^comment-\d+$/.test(value ?? "")
   );
 }
@@ -229,25 +230,56 @@ async function generateAudio(
       audioDir,
       "topic.mp3"
     );
+  const jobs: Promise<void>[] = [];
+
+  if (
+    analysis?.topicTitle &&
+    thread.text.length > 200 &&
+    (!onlyTarget || onlyTarget === "topic-title")
+  ) {
+    const titleJob = async (): Promise<void> => {
+      const target = "topic-title" as const;
+      const outputFile = path.join(
+        audioDir,
+        "topic-title.mp3"
+      );
+      console.log("Generating topic-title.mp3...");
+      try {
+        await tts.synthesize({
+          text: analysis.topicTitle!,
+          voice: findVoice("ngoc-huyen", 0),
+          outputFile
+        });
+        clearFailure(target);
+        console.log("✓ topic-title.mp3");
+      } catch (error: unknown) {
+        recordFailure(target, error);
+      }
+    };
+    jobs.push(titleJob());
+  }
 
   if (!onlyTarget || onlyTarget === "topic") {
-    console.log(
-      `Generating topic audio...`
-    );
-
-    try {
-      await tts.synthesize({
-        text: thread.text,
-        voice: topicVoice,
-        outputFile: topicOutput
-      });
-      clearFailure("topic");
+    const topicJob = async (): Promise<void> => {
       console.log(
-        `✓ topic.mp3`
+        `Generating topic audio...`
       );
-    } catch (error: unknown) {
-      recordFailure("topic", error);
-    }
+
+      try {
+        await tts.synthesize({
+          text: thread.text,
+          voice: topicVoice,
+          outputFile: topicOutput
+        });
+        clearFailure("topic");
+        console.log(
+          `✓ topic.mp3`
+        );
+      } catch (error: unknown) {
+        recordFailure("topic", error);
+      }
+    };
+    jobs.push(topicJob());
   }
 
   // ==========================================
@@ -255,6 +287,10 @@ async function generateAudio(
   // ==========================================
 
   for (let i = 0; i < thread.comments.length; i++) {
+    if (thread.comments[i].excluded) {
+      continue;
+    }
+
     const target: AudioFailureTarget =
       `comment-${i}`;
     if (onlyTarget && onlyTarget !== target) {
@@ -262,44 +298,45 @@ async function generateAudio(
     }
 
     const comment = thread.comments[i];
-
     const reaction =
       analysis?.reactions.find(
         (item) =>
           item.commentIndex === i
       );
-
     const voice =
       findVoice(
         reaction?.voiceId,
         i + 1
       );
-
     const outputFile =
       path.join(
         audioDir,
         `comment-${i}.mp3`
       );
 
-    console.log(
-      `Generating comment-${i}.mp3...`
-    );
-
-    try {
-      await tts.synthesize({
-        text: comment.text,
-        voice,
-        outputFile
-      });
-      clearFailure(target);
+    const commentJob = async (): Promise<void> => {
       console.log(
-        `✓ comment-${i}.mp3`
+        `Generating comment-${i}.mp3...`
       );
-    } catch (error: unknown) {
-      recordFailure(target, error);
-    }
+
+      try {
+        await tts.synthesize({
+          text: comment.text,
+          voice,
+          outputFile
+        });
+        clearFailure(target);
+        console.log(
+          `✓ comment-${i}.mp3`
+        );
+      } catch (error: unknown) {
+        recordFailure(target, error);
+      }
+    };
+    jobs.push(commentJob());
   }
 
+  await Promise.all(jobs);
   await saveFailures();
   console.log("");
   console.log(
@@ -308,6 +345,19 @@ async function generateAudio(
   if (failures.length > 0) {
     console.log(
       `Failed audio items: ${failures.length}`
+    );
+  }
+  if (
+    onlyTarget &&
+    failures.some((failure) => failure.target === onlyTarget)
+  ) {
+    const failure = failures.find(
+      (item) => item.target === onlyTarget
+    );
+    throw new Error(
+      `Không tạo được ${onlyTarget}: ${
+        failure?.message ?? "lỗi không xác định"
+      }`
     );
   }
 }

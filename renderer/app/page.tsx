@@ -13,6 +13,12 @@ import type {
   ProjectState,
   ProjectSummary
 } from "../../src/project/store";
+import {
+  TimelinePreview
+} from "../features/preview/TimelinePreview";
+import {
+  AssetWorkspace
+} from "../features/assets/AssetWorkspace";
 
 const steps = [
   "INPUT",
@@ -25,7 +31,6 @@ const steps = [
 ] as const;
 
 type Step = (typeof steps)[number];
-
 function formatProjectId(
   project: ProjectSummary
 ): string {
@@ -33,6 +38,38 @@ function formatProjectId(
     /-thread$/,
     ""
   );
+}
+
+function formatAssetFile(
+  file: string | undefined
+): string {
+  if (!file) {
+    return "none";
+  }
+
+  return file.split(/[\\/]/).pop() ?? file;
+}
+
+function getAssetMediaKind(
+  file: string | undefined
+): string {
+  if (!file) {
+    return "none";
+  }
+
+  const extension =
+    file.split(".").pop()?.toLowerCase();
+  if (extension === "mp4" || extension === "mov") {
+    return "video";
+  }
+  if (
+    extension === "mp3" ||
+    extension === "wav" ||
+    extension === "m4a"
+  ) {
+    return "audio";
+  }
+  return "image";
 }
 
 export default function Home(): React.ReactElement {
@@ -46,6 +83,12 @@ export default function Home(): React.ReactElement {
     useState<ContentData>();
   const [captureAssets, setCaptureAssets] =
     useState<Record<string, string>>({});
+  const [audioAssets, setAudioAssets] =
+    useState<Record<string, string>>({});
+  const [previewAssets, setPreviewAssets] =
+    useState<Record<string, string>>({});
+  const [capCutOutput, setCapCutOutput] =
+    useState<string>();
   const [url, setUrl] = useState("");
   const [loading, setLoading] =
     useState(true);
@@ -131,6 +174,95 @@ export default function Home(): React.ReactElement {
     );
   }
 
+  async function loadAudioAssets(
+    project: ProjectState
+  ): Promise<void> {
+    const files = project.audioFiles;
+    if (files.length === 0) {
+      setAudioAssets({});
+      return;
+    }
+
+    const entries = await Promise.all(
+      files.map(async (file) => {
+        try {
+          return [
+            file,
+            await window.xamxixiu.getProjectAsset(
+              project.id,
+              `audio/${file}`
+            )
+          ] as const;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    setAudioAssets(
+      Object.fromEntries(
+        entries.filter(
+          (entry): entry is readonly [string, string] =>
+            entry !== null
+        )
+      )
+    );
+  }
+
+  async function loadPreviewAssets(
+    project: ProjectState
+  ): Promise<void> {
+    if (!project.timeline) {
+      setPreviewAssets({});
+      return;
+    }
+    const sources = [
+      project.timeline.backgroundFile,
+      project.timeline.musicFile,
+      project.timeline.topicIntro?.titleVoiceFile,
+      project.timeline.topicIntro?.openSfxFile,
+      project.timeline.topicIntro?.memeFile,
+      ...project.timeline.scenes.flatMap(
+        (scene) =>
+          (scene.blocks ?? [scene]).flatMap(
+            (block) => [
+              block.imageFile,
+              block.audioFile,
+              ...block.overlays.map(
+                (overlay) => overlay.file
+              )
+            ]
+          )
+      )
+    ].filter(
+      (source): source is string =>
+        Boolean(source)
+    );
+    const entries = await Promise.all(
+      [...new Set(sources)].map(async (source) => {
+        try {
+          return [
+            source,
+            await window.xamxixiu.getPreviewAsset(
+              project.id,
+              source
+            )
+          ] as const;
+        } catch {
+          return null;
+        }
+      })
+    );
+    setPreviewAssets(
+      Object.fromEntries(
+        entries.filter(
+          (entry): entry is readonly [string, string] =>
+            entry !== null
+        )
+      )
+    );
+  }
+
   async function selectProject(
     projectId: string
   ): Promise<void> {
@@ -148,6 +280,8 @@ export default function Home(): React.ReactElement {
           project.content ?? project.thread
         );
         await loadCaptureAssets(project);
+        await loadAudioAssets(project);
+        await loadPreviewAssets(project);
         setCurrentStep("CAPTURE");
       }
     } catch (reason: unknown) {
@@ -177,6 +311,8 @@ export default function Home(): React.ReactElement {
         project.content ?? project.thread
       );
       await loadCaptureAssets(project);
+      await loadAudioAssets(project);
+      await loadPreviewAssets(project);
       setProjects(
         await window.xamxixiu.getProjects()
       );
@@ -228,24 +364,18 @@ export default function Home(): React.ReactElement {
     }
 
     setError(undefined);
+    if (currentStep === "CAPTURE") {
+      setCurrentStep("ANALYZE");
+      return;
+    }
+    if (currentStep === "ANALYZE") {
+      setCurrentStep("VOICE");
+      return;
+    }
     setOperationLoading(true);
 
     try {
-      if (currentStep === "CAPTURE") {
-        setCurrentStep("ANALYZE");
-        setSelectedProject(
-          await window.xamxixiu.analyzeProject(
-            selectedProject.id
-          )
-        );
-      } else if (currentStep === "ANALYZE") {
-        setSelectedProject(
-          await window.xamxixiu.generateAudio(
-            selectedProject.id
-          )
-        );
-        setCurrentStep("VOICE");
-      } else if (currentStep === "VOICE") {
+      if (currentStep === "VOICE") {
         setSelectedProject(
           await window.xamxixiu.matchReactions(
             selectedProject.id
@@ -266,6 +396,145 @@ export default function Home(): React.ReactElement {
     }
   }
 
+  async function analyzeProject(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      let project = selectedProject;
+      if (draftContent) {
+        project = await window.xamxixiu.updateContent({
+          projectId: selectedProject.id,
+          content: draftContent
+        });
+      }
+      setSelectedProject(
+        await window.xamxixiu.analyzeProject(
+          project.id
+        )
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Analyze thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function generateAllAudio(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      let project = selectedProject;
+      if (draftContent) {
+        project = await window.xamxixiu.updateContent({
+          projectId: selectedProject.id,
+          content: draftContent
+        });
+      }
+      const generatedProject =
+        await window.xamxixiu.generateAudio(
+          project.id
+        );
+      setSelectedProject(generatedProject);
+      await loadAudioAssets(generatedProject);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Generate voice thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function createTimeline(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      const project =
+        await window.xamxixiu.createTimeline(
+          selectedProject.id
+        );
+      setSelectedProject(project);
+      await loadPreviewAssets(project);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Tạo timeline thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function rematchAssets(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    setOperationLoading(true);
+    setError(undefined);
+    try {
+      setSelectedProject(
+        await window.xamxixiu.matchReactions(
+          selectedProject.id
+        )
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Rematch asset thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function createCapCutProject(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      setCapCutOutput(
+        await window.xamxixiu.createCapCutProject(
+          selectedProject.id
+        )
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Tạo project CapCut thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
   async function retryAudio(
     target: AudioFailureTarget
   ): Promise<void> {
@@ -277,12 +546,21 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
 
     try {
-      setSelectedProject(
+      let project = selectedProject;
+      if (draftContent) {
+        project = await window.xamxixiu.updateContent({
+          projectId: selectedProject.id,
+          content: draftContent
+        });
+        setSelectedProject(project);
+      }
+      const generatedProject =
         await window.xamxixiu.retryAudio(
-          selectedProject.id,
+          project.id,
           target
-        )
-      );
+        );
+      setSelectedProject(generatedProject);
+      await loadAudioAssets(generatedProject);
     } catch (reason: unknown) {
       setError(
         reason instanceof Error
@@ -511,26 +789,66 @@ export default function Home(): React.ReactElement {
                           (comment, index) => (
                             <div
                               key={`${comment.containerIndex}-${index}`}
-                              className="grid gap-5 rounded-2xl border border-white/10 bg-white/[0.04] p-5 lg:grid-cols-[0.35fr_1fr]"
+                              className={[
+                                "relative grid gap-5 rounded-2xl border p-5 lg:grid-cols-[0.8fr_1.2fr]",
+                                comment.parentCommentIndex !== undefined
+                                  ? "ml-8 border-l-2 border-l-cyan-400/50 pl-6 before:absolute before:-left-6 before:top-8 before:h-px before:w-6 before:bg-cyan-400/50"
+                                  : "",
+                                comment.excluded
+                                  ? "border-amber-400/20 bg-amber-400/5 opacity-70"
+                                  : "border-white/10 bg-white/[0.04]"
+                              ].join(" ")}
                             >
-                              <div className="flex min-h-[180px] items-start justify-center rounded-xl bg-black/20 p-3">
+                              <div className="flex min-h-[360px] items-start justify-center rounded-xl bg-black/20 p-4">
                                 {captureAssets[`comment-${index}`] ? (
                                   <img
                                     src={captureAssets[`comment-${index}`]}
                                     alt={`Comment ${index + 1} screenshot`}
-                                    className="max-h-[260px] max-w-full rounded-lg object-contain"
+                                    className="max-h-[520px] max-w-full rounded-xl object-contain"
                                   />
                                 ) : (
-                                  <p className="py-16 text-xs text-zinc-500">
+                                  <p className="py-20 text-sm text-zinc-500">
                                     Đang tải...
                                   </p>
                                 )}
                               </div>
                               <div>
-                                <div className="flex justify-between text-xs text-zinc-500">
-                                  <span>{comment.author}</span>
-                                  <span>{comment.likes} likes</span>
+                                <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
+                                  <span>
+                                    {comment.parentCommentIndex !== undefined
+                                      ? `Reply to comment #${comment.parentCommentIndex}`
+                                      : comment.author}
+                                  </span>
+                                  {comment.parentCommentIndex !== undefined && (
+                                    <span>{comment.author}</span>
+                                  )}
+                                  <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+                                    <input
+                                      type="checkbox"
+                                      checked={comment.excluded === true}
+                                      onChange={(event) =>
+                                        setDraftContent({
+                                          ...draftContent,
+                                          comments: draftContent.comments.map(
+                                            (item, itemIndex) =>
+                                              itemIndex === index
+                                                ? {
+                                                    ...item,
+                                                    excluded:
+                                                      event.target.checked
+                                                  }
+                                                : item
+                                          )
+                                        })
+                                      }
+                                      className="accent-amber-400"
+                                    />
+                                    Exclude khỏi Analyze
+                                  </label>
                                 </div>
+                                <p className="mt-2 text-xs text-zinc-500">
+                                  {comment.likes} likes
+                                </p>
                                 <textarea
                                   value={comment.text}
                                   onChange={(event) =>
@@ -575,9 +893,16 @@ export default function Home(): React.ReactElement {
                           Đang analyze...
                         </span>
                       ) : (
-                        <span className="rounded-full bg-fuchsia-400/10 px-3 py-1 text-xs text-fuchsia-200">
-                          {selectedProject?.analysis?.tone ?? "Chưa chạy"}
-                        </span>
+                        <button
+                          type="button"
+                          disabled={operationLoading}
+                          onClick={() => void analyzeProject()}
+                          className="rounded-lg bg-fuchsia-500 px-4 py-2 text-xs font-medium text-white transition hover:bg-fuchsia-400 disabled:opacity-50"
+                        >
+                          {selectedProject?.analysis
+                            ? "Analyze lại"
+                            : "Analyze"}
+                        </button>
                       )}
                     </div>
                     {operationLoading && (
@@ -617,6 +942,16 @@ export default function Home(): React.ReactElement {
 
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
                         <p className="text-xs uppercase tracking-wider text-zinc-500">
+                          Topic title
+                        </p>
+                        <p className="mt-2 text-sm text-fuchsia-200">
+                          {selectedProject.analysis.topicTitle ??
+                            "Chưa có title — hãy Analyze lại"}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                        <p className="text-xs uppercase tracking-wider text-zinc-500">
                           Topic voice
                         </p>
                         <p className="mt-2 text-sm text-fuchsia-200">
@@ -641,6 +976,16 @@ export default function Home(): React.ReactElement {
                                 key={reaction.commentIndex}
                                 className="grid gap-3 rounded-xl border border-white/10 bg-black/10 p-4 sm:grid-cols-4"
                               >
+                                <div className="sm:col-span-4">
+                                  <p className="text-xs text-zinc-500">
+                                    Text
+                                  </p>
+                                  <p className="mt-1 text-sm leading-6 text-zinc-200">
+                                    {draftContent?.comments[
+                                      reaction.commentIndex
+                                    ]?.text ?? "Không tìm thấy text"}
+                                  </p>
+                                </div>
                                 <div>
                                   <p className="text-xs text-zinc-500">
                                     Comment
@@ -682,103 +1027,432 @@ export default function Home(): React.ReactElement {
                   )}
                 </div>
               ) : currentStep === "VOICE" ? (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-                  <h3 className="font-medium">
-                    Voice generation
-                  </h3>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {selectedProject?.audioFiles.map(
-                      (file) => (
-                        <div
-                          key={file}
-                          className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3 text-sm text-zinc-300"
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <h3 className="font-medium">
+                          Voice generation
+                        </h3>
+                        <p className="mt-1 text-sm text-zinc-400">
+                          Chỉnh text bên trái. Voice được chọn bởi AI ở bên phải.
+                        </p>
+                      </div>
+                      {operationLoading && (
+                        <span className="flex items-center gap-2 rounded-full bg-amber-400/10 px-3 py-1 text-xs text-amber-200">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-300" />
+                          Đang generate voice...
+                        </span>
+                      )}
+                      {!operationLoading && (
+                        <button
+                          type="button"
+                          onClick={() => void generateAllAudio()}
+                          className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-medium text-black transition hover:bg-amber-400"
                         >
-                          <span className="mr-2 text-emerald-300">
-                            ✓
-                          </span>
-                          {file}
-                        </div>
-                      )
-                    )}
-                  </div>
-                  {(selectedProject?.audioFailures.length ?? 0) > 0 && (
-                    <div className="mt-5 space-y-3">
-                      <p className="text-sm font-medium text-red-300">
-                        Voice failed — có thể retry từng item
-                      </p>
-                      {selectedProject?.audioFailures.map(
-                        (failure) => (
-                          <div
-                            key={failure.target}
-                            className="flex items-center justify-between gap-3 rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-sm"
-                          >
-                            <div className="min-w-0">
-                              <p className="text-red-200">
-                                {failure.target}
-                              </p>
-                              <p className="truncate text-xs text-zinc-500">
-                                {failure.message}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={operationLoading}
-                              onClick={() =>
-                                void retryAudio(failure.target)
-                              }
-                              className="shrink-0 rounded-lg border border-red-300/30 px-3 py-1.5 text-xs text-red-200 transition hover:bg-red-400/10 disabled:opacity-50"
-                            >
-                              Retry
-                            </button>
-                          </div>
-                        )
+                          Generate all
+                        </button>
                       )}
                     </div>
-                  )}
-                  {selectedProject?.audioFiles.length === 0 && (
-                    <p className="mt-4 text-sm text-zinc-500">
-                      Chưa có audio. Bấm Next để generate toàn bộ voice.
+                  </div>
+
+                  <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/5 p-5">
+                    <p className="text-xs uppercase tracking-wider text-fuchsia-300">
+                      Topic title voice
                     </p>
+                    <p className="mt-2 rounded-xl bg-black px-4 py-3 text-sm text-white">
+                      {selectedProject?.analysis?.topicTitle ??
+                        "Chưa có topic title"}
+                    </p>
+                    <p className="mt-3 text-xs text-zinc-500">
+                      Voice Vbee ngoc-huyen
+                    </p>
+                    {audioAssets["topic-title.mp3"] ? (
+                      <audio
+                        className="mt-4 w-full"
+                        controls
+                        preload="metadata"
+                        src={audioAssets["topic-title.mp3"]}
+                      >
+                        Trình duyệt không hỗ trợ audio.
+                      </audio>
+                    ) : (
+                      <p className="mt-3 text-xs text-amber-200">
+                        Chưa có audio. Bấm Generate all để tạo.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      disabled={
+                        operationLoading ||
+                        !selectedProject?.analysis?.topicTitle
+                      }
+                      onClick={() =>
+                        void retryAudio("topic-title")
+                      }
+                      className="mt-4 rounded-lg border border-fuchsia-300/30 px-3 py-2 text-xs text-fuchsia-200 transition hover:bg-fuchsia-400/10 disabled:opacity-50"
+                    >
+                      {operationLoading
+                        ? "Đang tạo..."
+                        : audioAssets["topic-title.mp3"]
+                          ? "Generate lại title voice"
+                          : "Generate topic title voice"}
+                    </button>
+                  </div>
+
+                  {draftContent && (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5 lg:grid-cols-[1fr_0.45fr]">
+                        <div>
+                          <p className="text-xs uppercase tracking-wider text-zinc-500">
+                            Topic text
+                          </p>
+                          <textarea
+                            value={draftContent.text}
+                            onChange={(event) =>
+                              setDraftContent({
+                                ...draftContent,
+                                text: event.target.value
+                              })
+                            }
+                            className="mt-3 min-h-[130px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
+                          />
+                        </div>
+                        <div className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/5 p-4">
+                          {(() => {
+                            const topicFailure =
+                              selectedProject?.audioFailures.find(
+                                (item) => item.target === "topic"
+                              );
+
+                            return (
+                              <>
+                          <p className="text-xs uppercase tracking-wider text-zinc-500">
+                            Topic voice
+                          </p>
+                          <p className="mt-3 text-sm text-fuchsia-200">
+                            {selectedProject?.analysis?.topicVoiceId ??
+                              "Chưa được chọn"}
+                          </p>
+                          <p className="mt-3 text-xs text-zinc-500">
+                            {selectedProject?.audioFiles.includes("topic.mp3")
+                              ? "✓ Audio generated"
+                              : operationLoading
+                                ? "Đang xử lý..."
+                                : topicFailure?.message ??
+                                  "Chưa có audio"}
+                          </p>
+                          {audioAssets["topic.mp3"] && (
+                            <audio
+                              className="mt-4 w-full"
+                              controls
+                              preload="metadata"
+                              src={audioAssets["topic.mp3"]}
+                            >
+                              Trình duyệt không hỗ trợ audio.
+                            </audio>
+                          )}
+                          <button
+                            type="button"
+                            disabled={operationLoading}
+                            onClick={() =>
+                              void retryAudio("topic")
+                            }
+                            className="mt-4 rounded-lg border border-amber-300/30 px-3 py-1.5 text-xs text-amber-200 transition hover:bg-amber-400/10 disabled:opacity-50"
+                          >
+                            {topicFailure
+                              ? "Retry"
+                              : "Generate"}
+                          </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+
+                      {draftContent.comments
+                        .map((comment, index) => ({
+                          comment,
+                          index
+                        }))
+                        .filter(
+                          ({ comment }) =>
+                            !comment.excluded
+                        )
+                        .map(
+                          ({ comment, index }) => {
+                          const target: AudioFailureTarget =
+                            `comment-${index}`;
+                          const failure =
+                            selectedProject?.audioFailures.find(
+                              (item) => item.target === target
+                            );
+                          const audioFile =
+                            `comment-${index}.mp3`;
+                          const reaction =
+                            selectedProject?.analysis?.reactions.find(
+                              (item) =>
+                                item.commentIndex === index
+                            );
+
+                          return (
+                            <div
+                              key={`${comment.containerIndex}-${index}`}
+                              className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-5 lg:grid-cols-[1fr_0.45fr]"
+                            >
+                              <div>
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs uppercase tracking-wider text-zinc-500">
+                                    Comment {index}
+                                  </p>
+                                  <span className="text-xs text-zinc-500">
+                                    {comment.author}
+                                  </span>
+                                </div>
+                                <textarea
+                                  value={comment.text}
+                                  onChange={(event) =>
+                                    setDraftContent({
+                                      ...draftContent,
+                                      comments: draftContent.comments.map(
+                                        (item, itemIndex) =>
+                                          itemIndex === index
+                                            ? {
+                                                ...item,
+                                                text: event.target.value
+                                              }
+                                            : item
+                                      )
+                                    })
+                                  }
+                                  className="mt-3 min-h-[120px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
+                                />
+                              </div>
+                              <div className="rounded-xl border border-white/10 bg-black/10 p-4">
+                                <p className="text-xs uppercase tracking-wider text-zinc-500">
+                                  Selected voice
+                                </p>
+                                <p className="mt-2 text-sm text-fuchsia-200">
+                                  {reaction?.voiceId ?? "Chưa được chọn"}
+                                </p>
+                                <p className="mt-3 text-xs text-zinc-500">
+                                  {selectedProject?.audioFiles.includes(
+                                    audioFile
+                                  )
+                                    ? "✓ Audio generated"
+                                    : failure
+                                      ? failure.message
+                                      : operationLoading
+                                        ? "Đang xử lý..."
+                                        : "Chưa có audio"}
+                                </p>
+                                {audioAssets[audioFile] && (
+                                  <audio
+                                    className="mt-4 w-full"
+                                    controls
+                                    preload="metadata"
+                                    src={audioAssets[audioFile]}
+                                  >
+                                    Trình duyệt không hỗ trợ audio.
+                                  </audio>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={
+                                    operationLoading ||
+                                    comment.excluded === true
+                                  }
+                                  onClick={() =>
+                                    void retryAudio(target)
+                                  }
+                                  className="mt-4 rounded-lg border border-amber-300/30 px-3 py-1.5 text-xs text-amber-200 transition hover:bg-amber-400/10 disabled:opacity-50"
+                                >
+                                  {comment.excluded
+                                    ? "Excluded"
+                                    : failure
+                                    ? "Retry"
+                                    : "Generate"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                          }
+                        )}
+                    </div>
                   )}
                 </div>
               ) : currentStep === "ASSETS" ? (
+                selectedProject ? (
+                  <AssetWorkspace
+                    projectId={selectedProject.id}
+                    content={draftContent}
+                    reactions={selectedProject.reactions ?? []}
+                    backgroundAssetId={
+                      selectedProject.analysis?.backgroundAssetId
+                    }
+                    musicAssetId={
+                      selectedProject.analysis?.musicAssetId
+                    }
+                    onSaved={setSelectedProject}
+                    onRematch={rematchAssets}
+                  />
+                ) : null
+              ) : currentStep === "TIMELINE" ? (
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-6">
+                    <div>
+                      <h3 className="font-medium">
+                        Timeline builder
+                      </h3>
+                      <p className="mt-1 text-sm text-zinc-400">
+                        Ghép topic, voice, screenshot và reaction thành timeline 9:16.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={operationLoading}
+                      onClick={() => void createTimeline()}
+                      className="rounded-lg bg-cyan-400 px-4 py-2 text-xs font-semibold text-cyan-950 transition hover:bg-cyan-300 disabled:opacity-50"
+                    >
+                      {operationLoading
+                        ? "Đang tạo..."
+                        : selectedProject?.timeline
+                          ? "Tạo lại timeline"
+                          : "Create timeline"}
+                    </button>
+                  </div>
+
+                  {selectedProject?.timeline && (
+                    <TimelinePreview
+                      timeline={selectedProject.timeline}
+                      assets={previewAssets}
+                    />
+                  )}
+
+                  {selectedProject?.timeline && (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-medium">
+                          Scenes
+                        </h3>
+                        <span className="text-xs text-zinc-500">
+                          {selectedProject.timeline.scenes.length} scenes ·{" "}
+                          {selectedProject.timeline.totalDuration.toFixed(2)}s
+                        </span>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {selectedProject.timeline.scenes.map(
+                          (scene, index) => (
+                            <div
+                              key={scene.id}
+                              className="rounded-xl border border-white/10 bg-black/10 p-4"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-cyan-200">
+                                  Scene {index + 1}
+                                  {scene.commentIndex === null
+                                    ? " · Topic"
+                                    : ` · Comment #${scene.commentIndex}`}
+                                </span>
+                                <span className="text-xs text-zinc-500">
+                                  {scene.audioDuration.toFixed(2)}s
+                                </span>
+                              </div>
+                              {scene.commentIndex !== null && (
+                                <div className="mt-2 space-y-2">
+                                  {(scene.blocks ?? [scene]).map(
+                                    (block) => (
+                                      <p
+                                        key={block.commentIndex}
+                                        className="text-sm leading-6 text-zinc-300"
+                                      >
+                                        <span className="mr-2 text-xs text-cyan-300">
+                                          Comment #{block.commentIndex}
+                                        </span>
+                                        {block.commentIndex === null
+                                          ? "Topic"
+                                          : draftContent?.comments[
+                                            block.commentIndex
+                                          ]?.text ?? "Không tìm thấy text"}
+                                      </p>
+                                    )
+                                  )}
+                                </div>
+                              )}
+                              <div className="mt-3 flex gap-4 text-xs text-zinc-500">
+                                <span>
+                                  Meme: {((scene.blocks ?? [scene])
+                                    .flatMap((block) => block.overlays)
+                                    .filter((overlay) => overlay.type === "meme")
+                                    .map((overlay) => formatAssetFile(overlay.file))
+                                    .join(", ")) || "none"}
+                                </span>
+                                <span>
+                                  Loại: {((scene.blocks ?? [scene])
+                                    .flatMap((block) => block.overlays)
+                                    .filter((overlay) => overlay.type === "meme")
+                                    .map((overlay) => getAssetMediaKind(overlay.file))
+                                    .join(", ")) || "none"}
+                                </span>
+                                <span>
+                                  SFX: {((scene.blocks ?? [scene])
+                                    .flatMap((block) => block.overlays)
+                                    .filter((overlay) => overlay.type === "sfx")
+                                    .map((overlay) => formatAssetFile(overlay.file))
+                                    .join(", ")) || "none"}
+                                </span>
+                                <span>
+                                  Audio: {scene.audioDuration.toFixed(2)}s
+                                </span>
+                              </div>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : currentStep === "CAPCUT" ? (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-medium">
-                      Reaction assets
-                    </h3>
-                    <span className="text-xs text-zinc-500">
-                      {selectedProject?.reactions?.length ?? 0} reactions
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm leading-6 text-zinc-400">
-                    Đây là bước chọn và chỉnh meme, SFX, animation và
-                    duration cho từng comment. Các asset đều lấy từ thư mục
-                    assets đã scan, không tự tạo filename mới.
+                  <h3 className="font-medium">
+                    CapCut project
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-zinc-400">
+                    App sẽ tự tạo project rỗng đúng schema CapCut bằng
+                    capcut-cli rồi compile timeline editable vào đó.
                   </p>
-                  <div className="mt-5 space-y-3">
-                    {selectedProject?.reactions?.map(
-                      (reaction) => (
-                        <div
-                          key={reaction.commentIndex}
-                          className="grid gap-3 rounded-xl border border-white/5 bg-black/10 p-4 md:grid-cols-4"
-                        >
-                          <span className="text-sm text-zinc-400">
-                            Comment {reaction.commentIndex}
-                          </span>
-                          <span className="text-sm text-zinc-300">
-                            Meme: {reaction.meme?.id ?? "none"}
-                          </span>
-                          <span className="text-sm text-zinc-300">
-                            SFX: {reaction.sfx?.id ?? "none"}
-                          </span>
-                          <span className="text-sm text-zinc-400">
-                            {reaction.animation} · {reaction.duration}s
-                          </span>
-                        </div>
-                      )
-                    )}
-                  </div>
+                  <p className="mt-5 rounded-xl border border-white/10 bg-black/10 p-4 text-sm text-zinc-400">
+                    Project mới sẽ được tạo tự động trong thư mục CapCut
+                    mặc định khi bấm Generate.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={
+                      operationLoading ||
+                      !selectedProject?.timeline
+                    }
+                    onClick={() =>
+                      void createCapCutProject()
+                    }
+                    className="mt-5 rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 disabled:opacity-50"
+                  >
+                    {operationLoading
+                      ? "Đang generate..."
+                      : "Generate CapCut project"}
+                  </button>
+                  {capCutOutput && (
+                    <div className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
+                      <p className="text-xs text-zinc-500">
+                        Output folder
+                      </p>
+                      <p className="mt-2 break-all text-sm text-emerald-200">
+                        {capCutOutput}
+                      </p>
+                      <p className="mt-3 text-xs text-zinc-500">
+                        Đóng CapCut nếu đang mở, sau đó mở project folder này.
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-12 text-center">

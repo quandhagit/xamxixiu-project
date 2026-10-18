@@ -13,6 +13,7 @@ import type {
 import {
   VOICE_POOL
 } from "./tts/voice-pool.js";
+import { scanAssets } from "./assets/scanner.js";
 
 const EMOTIONS: ReactionEmotion[] = [
   "happy",
@@ -30,11 +31,49 @@ const EMOTIONS: ReactionEmotion[] = [
 ];
 
 const ANIMATIONS: ReactionAnimation[] = [
-  "scale-in",
-  "pop",
-  "shake",
-  "slide-in",
   "fade-in",
+  "zoom-1",
+  "rock-vertically",
+  "slide-down",
+  "slide-up",
+  "slide-right",
+  "slide-left",
+  "rotate",
+  "flame-risen",
+  "rotation-opening",
+  "retro-fadein-2",
+  "retro-fadein",
+  "screen-wipe",
+  "rgb-scanlines",
+  "zoom-2",
+  "zoom-out",
+  "zoom-in",
+  "shake-3",
+  "crt-bands",
+  "vibrating-panels",
+  "swing-top-right",
+  "anime-frame",
+  "rock-horizontally",
+  "gray-mask",
+  "shake-1",
+  "spin-up-2",
+  "whirl",
+  "mini-zoom",
+  "spin-up-1",
+  "swing-bottom",
+  "swing-right",
+  "swing-bottom-left",
+  "flip",
+  "shake-2",
+  "blinds",
+  "swing-bottom-right",
+  "puzzle",
+  "swing-top-left",
+  "shake-down",
+  "swing",
+  "wiper",
+  "roll-right",
+  "spin-left",
   "none"
 ];
 
@@ -106,11 +145,17 @@ Use meme reactions mainly when the content is:
 For humorous or entertainment-oriented content, use memes frequently.
 
 For approximately 10 comments:
-- Target 7–9 comments with meme reactions.
-- Meme reactions do NOT need an SFX.
+- When the content is reaction-friendly, target roughly 65% of total reaction
+  overlay duration as video meme content.
+- The remaining roughly 35% may use an image meme paired with an SFX, or an
+  SFX-only transition.
+- These are editing targets, not hard rules. Do not force a meme or SFX when
+  it does not fit the content.
 - SFX should be used more selectively.
 - Approximately 4–7 comments may have SFX.
-- Some stronger moments can have both meme + SFX.
+- Video memes do not need SFX or animation. When selecting a video meme, set
+  sfxCategory to null and animation to "none".
+- Image memes MUST always be paired with an SFX.
 
 IMPORTANT: MEME CATEGORY IS AN EDITING CHOICE, NOT A DIRECT EMOTION LABEL.
 
@@ -225,26 +270,28 @@ A reaction event represents a visual treatment for a specific comment.
 A reaction can contain:
 
 - emotion
+- memeAssetId
 - memeCategory
 - sfxCategory
 - animation
 - duration
 
-Meme and SFX are independent.
+Video meme reactions do not use SFX or animation. Image memes require SFX and
+may use animation.
 
 Examples:
 
 Funny comment:
-    meme + no SFX
+    video meme + no SFX
 
 Very funny comment:
-    meme + SFX
+    video meme + no SFX + no animation
 
 Awkward moment:
-    meme + record-scratch
+    image meme + record-scratch
 
 Strong punchline:
-    meme + impact/boom
+    image meme + impact/boom
 
 Serious comment:
     no meme + no SFX
@@ -334,25 +381,28 @@ ANIMATION
 
 Available animations:
 
-- scale-in
-- pop
-- shake
-- slide-in
 - fade-in
+- zoom-in
+- zoom-out
+- shake-1
+- shake-2
+- slide-down
+- slide-up
+- slide-right
+- slide-left
+- rotate
+- flip
 - none
 
 Use:
 
-scale-in:
+zoom-in:
     Meme appears small and grows into place.
 
-pop:
-    Fast comedic appearance.
-
-shake:
+shake-1:
     Shock, panic, intense reaction, absurdity.
 
-slide-in:
+slide-right:
     Meme enters from the side.
 
 fade-in:
@@ -388,12 +438,13 @@ REACTION DENSITY
 
 For HUMOROUS / SARCASTIC / ENTERTAINMENT content:
 
-Target 70–90% meme coverage.
+Target roughly 65% of total reaction overlay duration as video memes.
+The remaining roughly 35% can use image meme + SFX or SFX-only.
 
 Examples:
-- 10 comments → approximately 7–9 meme reactions
-- 12 comments → approximately 9–11 meme reactions
-- 15 comments → approximately 11–14 meme reactions
+- 10 meme reactions → approximately 6–7 video memes
+- 12 meme reactions → approximately 7–8 video memes
+- 15 meme reactions → approximately 9–10 video memes
 
 Meme density is a target, NOT an absolute rule.
 
@@ -459,7 +510,7 @@ Possible:
 emotion = laughing
 memeCategory = cringe
 sfxCategory = slap
-animation = pop
+animation = zoom-in
 
 Comment:
 "That's actually a really good point."
@@ -468,7 +519,7 @@ Possible:
 emotion = agree
 memeCategory = agree
 sfxCategory = ding
-animation = pop
+animation = fade-in
 
 Comment:
 "Then he suddenly disappeared."
@@ -477,7 +528,7 @@ Possible:
 emotion = shocked
 memeCategory = shocked
 sfxCategory = record-scratch
-animation = scale-in
+animation = shake-1
 
 ==================================================
 DO NOT OVERUSE SFX
@@ -516,6 +567,7 @@ Do NOT include explanations.
 The JSON must follow this exact structure:
 
 {
+  "topicTitle": "short title summarizing the topic",
   "topicVoiceId": "one id from the configured voice pool",
   "tone": "serious | sarcastic | casual | dramatic | humorous",
   "topicType": "social | relationship | work | technology | news | entertainment | history | storytelling | educational | other",
@@ -525,9 +577,10 @@ The JSON must follow this exact structure:
       "commentIndex": 1,
       "voiceId": "one id from the configured voice pool",
       "emotion": "happy | laughing | sad | angry | shocked | surprised | confused | shy | cringe | scared | agree | neutral",
+      "memeAssetId": "one id from the available meme assets or null",
       "memeCategory": "agree | angry | confused | cringe | happy | laughing | sad | scared | shocked | shy | null",
       "sfxCategory": "boom | ding | fail | impact | record-scratch | sad | slap | suspicious | wow | null",
-      "animation": "scale-in | pop | shake | slide-in | fade-in | none",
+      "animation": "fade-in | zoom-in | zoom-out | shake-1 | shake-2 | slide-down | slide-up | slide-right | slide-left | rotate | flip | none",
       "duration": 0.25
     }
   ],
@@ -545,11 +598,13 @@ FINAL CHECK BEFORE OUTPUT
    sensitive, or storytelling-focused?
    → If YES, do NOT force memes.
 
-3. If memes are appropriate, target roughly 70–90% meme coverage.
+3. If memes are appropriate, target roughly 65% video memes and use image
+   memes only with SFX. Video memes must have no SFX and animation "none".
 
-4. SFX should be more selective than memes.
+4. SFX should be more selective than memes, except that image memes require it.
 
-5. Meme and SFX do not need to appear together.
+5. Video memes use sfxCategory null and animation "none"; image memes and SFX
+   must appear together.
 
 6. If memeCategory is null:
    animation MUST be "none".
@@ -560,9 +615,13 @@ FINAL CHECK BEFORE OUTPUT
 
 9. commentIndex must refer to an actual comment.
 
-10. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
+10. Use Parent comment metadata to understand reply context. A reply should
+    be interpreted together with its parent, but still gets its own reaction
+    event when a separate reaction is appropriate.
 
-11. Return JSON only.
+11. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
+
+12. Return JSON only.
 `;
 
 async function main(): Promise<void> {
@@ -573,6 +632,10 @@ async function main(): Promise<void> {
       "Usage: yarn analyze <project-directory>"
     );
   }
+
+  console.log("Scanning assets before analysis...");
+  const assets = await scanAssets();
+  console.log(`Scanned ${assets.length} assets.`);
 
   const threadPath = path.join(
     projectDir,
@@ -611,6 +674,30 @@ async function main(): Promise<void> {
 
   const thread =
     JSON.parse(threadContent) as ThreadData;
+  const topicMemeIds = assets
+    .filter(
+      (asset) =>
+        asset.type === "meme" &&
+        asset.category === "topic"
+    )
+    .map((asset) => asset.id);
+  const memeAssetOptions = assets
+    .filter((asset) => asset.type === "meme")
+    .map((asset) => ({
+      id: asset.id,
+      category: asset.category,
+      mediaKind: asset.mediaKind,
+      spec: asset.spec ?? ""
+    }));
+  const includedComments =
+    thread.comments
+      .map((comment, index) => ({
+        comment,
+        index
+      }))
+      .filter(
+        ({ comment }) => !comment.excluded
+      );
 
   const prompt = `
 ${SYSTEM_PROMPT}
@@ -618,12 +705,35 @@ ${SYSTEM_PROMPT}
 AVAILABLE VOICES:
 ${JSON.stringify(VOICE_OPTIONS, null, 2)}
 
+AVAILABLE MEME ASSETS:
+${JSON.stringify(memeAssetOptions, null, 2)}
+
+AVAILABLE TOPIC MEMES:
+${JSON.stringify(topicMemeIds, null, 2)}
+
 VOICE SELECTION:
 - Select voiceId only from AVAILABLE VOICES.
 - Use the wording and context to choose the most suitable voice.
 - If the content clearly suggests a male or female speaker, use a voice with that gender.
 - If there is not enough evidence, choose the voice that best matches the tone.
 - Never invent a voiceId or voiceCode.
+- Select topicMemeId only from AVAILABLE TOPIC MEMES.
+- If AVAILABLE TOPIC MEMES is empty, return topicMemeId as null.
+
+MEME ASSET SELECTION:
+- Read the spec of each AVAILABLE MEME ASSET before choosing it.
+- For a meme reaction, select exactly one memeAssetId from AVAILABLE MEME ASSETS.
+- Choose the asset whose spec best matches the specific comment and intended
+  editing effect; do not choose only from the emotion or category label.
+- A video asset has mediaKind "video". Prefer video assets for approximately
+  65% of total reaction overlay duration when the content is reaction-friendly.
+- Video assets do not need SFX or animation. If memeAssetId is a video, set
+  sfxCategory to null and animation to "none".
+- An image asset has mediaKind "image" and MUST have a non-null sfxCategory.
+- If no meme is appropriate, set memeAssetId and memeCategory to null and
+  animation to "none".
+- If no listed asset fits, use an SFX-only reaction or no reaction rather than
+  inventing an asset ID.
 
 THREAD:
 
@@ -638,10 +748,11 @@ ${thread.likes}
 
 COMMENTS:
 
-${thread.comments
+${includedComments
       .map(
-        (comment, index) => `
+        ({ comment, index }) => `
 Comment ${index}:
+Parent comment: ${comment.parentCommentIndex ?? "none"}
 Author: ${comment.author}
 Text: ${comment.text}
 Likes: ${comment.likes}
@@ -652,7 +763,9 @@ Likes: ${comment.likes}
 Return this exact JSON structure:
 
 {
+  "topicTitle": "short title summarizing the topic",
   "topicVoiceId": "one id from AVAILABLE VOICES",
+  "topicMemeId": "one id from AVAILABLE TOPIC MEMES or null",
   "tone": "serious | sarcastic | casual | dramatic | humorous",
   "topicType": "social | relationship | work | technology | news | entertainment | other",
   "intensity": 0.0,
@@ -661,9 +774,10 @@ Return this exact JSON structure:
       "commentIndex": 0,
       "voiceId": "one id from AVAILABLE VOICES",
       "emotion": "laughing",
+      "memeAssetId": "one id from AVAILABLE MEME ASSETS or null",
       "memeCategory": "laughing",
-      "sfxCategory": "boom",
-      "animation": "pop",
+      "sfxCategory": null,
+      "animation": "none",
       "duration": 0.4
     }
   ],
@@ -677,6 +791,8 @@ Rules for duration:
 
 Rules for intensity:
 - Must be a number from 0.0 to 1.0.
+- topicTitle must summarize the main topic in Vietnamese, be concise,
+  and be no longer than 80 characters.
 `;
 
   console.log("Analyzing thread with DeepSeek...");
@@ -771,6 +887,14 @@ Rules for intensity:
     throw new Error(
       "Failed to parse DeepSeek response as JSON."
     );
+  }
+
+  const topicTitle = analysis.topicTitle?.trim();
+  if (topicTitle) {
+    analysis.topicTitle =
+      topicTitle.length > 80
+        ? `${topicTitle.slice(0, 77).trimEnd()}...`
+        : topicTitle;
   }
 
   await fs.writeFile(

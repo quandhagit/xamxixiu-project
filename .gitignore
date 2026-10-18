@@ -23,6 +23,40 @@ coverage/
 # Generated project data and asset index
 projects/
 assets/assets.json
+assets/catalog.json
+
+# Local user media library. Keep one _sample file per runtime category,
+# plus the meme spec template and the video sample spec.
+/assets/**/spec.md
+!/assets/memes/_template/spec.md
+!/assets/memes/video/_sample/spec.md
+/assets/**/*.png
+/assets/**/*.jpg
+/assets/**/*.jpeg
+/assets/**/*.webp
+/assets/**/*.gif
+/assets/**/*.mp4
+/assets/**/*.mov
+/assets/**/*.webm
+/assets/**/*.mp3
+/assets/**/*.wav
+/assets/**/*.m4a
+
+!/assets/backgrounds/_sample.mp4
+!/assets/music/_sample.mp3
+!/assets/sfx/*/_sample.mp3
+!/assets/memes/agree/_sample.jpg
+!/assets/memes/angry/_sample.jpg
+!/assets/memes/confused/_sample.jpg
+!/assets/memes/cringe/_sample.jpg
+!/assets/memes/happy/_sample.jpg
+!/assets/memes/laughing/_sample.jpg
+!/assets/memes/sad/_sample.jpg
+!/assets/memes/scared/_sample.jpg
+!/assets/memes/shocked/_sample.jpg
+!/assets/memes/shy/_sample.jpg
+!/assets/memes/topic/_sample.png
+!/assets/memes/video/_sample/reaction.mp4
 
 # Logs and temporary files
 *.log

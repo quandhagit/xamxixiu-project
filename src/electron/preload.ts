@@ -5,6 +5,9 @@ import {
 
 import type {
   DesktopApi,
+  ImportAssetsPayload,
+  SaveAssetAssignmentsPayload,
+  UpdateAssetPayload,
   UpdateContentPayload
 } from "./ipc-types.js";
 
@@ -40,6 +43,28 @@ const api: DesktopApi = {
       projectId
     ),
 
+  createTimeline: (projectId) =>
+    ipcRenderer.invoke(
+      "project:create-timeline",
+      projectId
+    ),
+
+  createCapCutProject: (projectId) =>
+    ipcRenderer.invoke(
+      "project:create-capcut-project",
+      projectId
+    ),
+
+  getCapCutBaseProject: () =>
+    ipcRenderer.invoke(
+      "capcut:get-base-project"
+    ),
+
+  chooseCapCutBaseProject: () =>
+    ipcRenderer.invoke(
+      "capcut:choose-base-project"
+    ),
+
   getProjects: () =>
     ipcRenderer.invoke("projects:get-all"),
 
@@ -54,6 +79,33 @@ const api: DesktopApi = {
       "project:get-asset",
       projectId,
       relativePath
+    ),
+  getPreviewAsset: (projectId, sourcePath) =>
+    ipcRenderer.invoke(
+      "project:get-preview-asset",
+      projectId,
+      sourcePath
+    ),
+  listAssets: () =>
+    ipcRenderer.invoke("assets:list"),
+  importAssets: (
+    payload: ImportAssetsPayload
+  ) =>
+    ipcRenderer.invoke("assets:import", payload),
+  updateAsset: (
+    payload: UpdateAssetPayload
+  ) =>
+    ipcRenderer.invoke("assets:update", payload),
+  deleteAsset: (assetId) =>
+    ipcRenderer.invoke("assets:delete", assetId),
+  getAssetPreview: (assetId) =>
+    ipcRenderer.invoke("assets:preview", assetId),
+  saveAssetAssignments: (
+    payload: SaveAssetAssignmentsPayload
+  ) =>
+    ipcRenderer.invoke(
+      "projects:save-asset-assignments",
+      payload
     ),
 
   updateContent: (

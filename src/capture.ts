@@ -79,7 +79,8 @@ export async function captureThread(
     await screenshotContainer(
       page,
       thread.postContainerIndex,
-      path.join(rawDir, "topic.png")
+      path.join(rawDir, "topic.png"),
+      124
     );
 
     // Screenshot comments

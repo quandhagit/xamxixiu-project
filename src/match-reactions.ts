@@ -1,16 +1,14 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import {
   matchReactions
 } from "./assets/matcher.js";
+import { scanAssets } from "./assets/scanner.js";
 
 import type {
   ThreadAnalysis
 } from "./types.js";
-
-import type {
-  Asset
-} from "./assets/scanner.js";
 
 const projectDir = process.argv[2];
 
@@ -23,9 +21,6 @@ if (!projectDir) {
 const analysisPath =
   `${projectDir}/analysis.json`;
 
-const assetsPath =
-  "assets/assets.json";
-
 const outputPath =
   `${projectDir}/reactions.json`;
 
@@ -35,21 +30,12 @@ const analysisRaw =
     "utf-8"
   );
 
-const assetsRaw =
-  await fs.readFile(
-    assetsPath,
-    "utf-8"
-  );
-
 const analysis =
   JSON.parse(
     analysisRaw
   ) as ThreadAnalysis;
 
-const assets =
-  JSON.parse(
-    assetsRaw
-  ) as Asset[];
+const assets = await scanAssets();
 
 const reactions =
   matchReactions(
@@ -57,8 +43,9 @@ const reactions =
     assets
   );
 
+const temporary = `${outputPath}.tmp`;
 await fs.writeFile(
-  outputPath,
+  temporary,
   JSON.stringify(
     reactions,
     null,
@@ -66,6 +53,8 @@ await fs.writeFile(
   ),
   "utf-8"
 );
+await fs.rename(temporary, outputPath);
+await fs.rm(path.join(projectDir, "timeline.json"), { force: true });
 
 console.log(
   `Matched ${reactions.length} reactions.`
