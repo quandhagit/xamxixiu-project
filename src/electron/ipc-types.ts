@@ -1,5 +1,6 @@
 import type {
-  ContentData
+  ContentData,
+  ThreadComment
 } from "../types.js";
 import type {
   AudioFailureTarget
@@ -13,21 +14,45 @@ import type {
 } from "../project/store.js";
 import type {
   Asset,
+  AssetMediaKind,
   AssetType,
   AssetUpdate
 } from "../assets/library.js";
 import type {
   MatchedReaction
 } from "../assets/matcher.js";
+import type {
+  TimelineAssetTarget
+} from "../timeline/replace-asset.js";
+
+export type { TimelineAssetTarget };
 
 export interface UpdateContentPayload {
   projectId: string;
   content: ContentData;
+  imageOrder?: number[];
+}
+
+export interface UpdateVoicePayload {
+  projectId: string;
+  target: AudioFailureTarget;
+  voiceId: string;
+}
+
+export interface CaptureCommentPayload {
+  projectId: string;
+  url: string;
+  imageIndex: number;
+  existing: Array<{
+    author: string;
+    text: string;
+  }>;
 }
 
 export interface ImportAssetsPayload {
   type: AssetType;
   category?: string;
+  mediaKind?: AssetMediaKind;
 }
 
 export interface UpdateAssetPayload {
@@ -40,6 +65,13 @@ export interface SaveAssetAssignmentsPayload {
   reactions: MatchedReaction[];
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
+  topicMemeId?: string | null;
+}
+
+export interface ReplaceTimelineAssetPayload {
+  projectId: string;
+  target: TimelineAssetTarget;
+  assetId: string | null;
 }
 
 export interface DeleteAssetResult {
@@ -47,10 +79,36 @@ export interface DeleteAssetResult {
   projectReferences: string[];
 }
 
+export interface AppSettings {
+  deepseekApiKey: string;
+  deepseekBaseUrl: string;
+  deepseekModel: string;
+  vbeeAccessToken: string;
+  vbeeAppId: string;
+  vbeeWebhookPort: string;
+  capcutDraftsDir: string;
+}
+
+export interface SaveSettingsResult {
+  settings: AppSettings;
+  tunnelRestarted: boolean;
+  tunnelError?: string;
+}
+
+export interface ExportProgress {
+  phase: "preparing" | "rendering" | "done";
+  percent: number;
+  time?: number;
+  duration?: number;
+}
+
 export interface DesktopApi {
   captureThread(
     url: string
   ): Promise<ProjectState>;
+  captureComment(
+    payload: CaptureCommentPayload
+  ): Promise<ThreadComment>;
   analyzeProject(
     projectId: string
   ): Promise<ProjectState>;
@@ -61,6 +119,9 @@ export interface DesktopApi {
     projectId: string,
     target: AudioFailureTarget
   ): Promise<ProjectState>;
+  updateVoice(
+    payload: UpdateVoicePayload
+  ): Promise<ProjectState>;
   matchReactions(
     projectId: string
   ): Promise<ProjectState>;
@@ -70,6 +131,16 @@ export interface DesktopApi {
   createCapCutProject(
     projectId: string
   ): Promise<string>;
+  exportVideo(
+    projectId: string
+  ): Promise<string | null>;
+  onExportProgress(
+    callback: (progress: ExportProgress) => void
+  ): () => void;
+  showItemInFolder(
+    targetPath: string
+  ): Promise<void>;
+  openPath(targetPath: string): Promise<void>;
   getCapCutBaseProject(): Promise<
     CapCutBaseProject | undefined
   >;
@@ -80,6 +151,9 @@ export interface DesktopApi {
   getProject(
     projectId: string
   ): Promise<ProjectState | undefined>;
+  deleteProject(
+    projectId: string
+  ): Promise<void>;
   getProjectAsset(
     projectId: string,
     relativePath: string
@@ -104,8 +178,14 @@ export interface DesktopApi {
   saveAssetAssignments(
     payload: SaveAssetAssignmentsPayload
   ): Promise<ProjectState>;
+  replaceTimelineAsset(
+    payload: ReplaceTimelineAssetPayload
+  ): Promise<ProjectState>;
   updateContent(
     payload: UpdateContentPayload
+  ): Promise<ProjectState>;
+  resetContent(
+    projectId: string
   ): Promise<ProjectState>;
   createProjectState(
     projectId: string
@@ -113,4 +193,9 @@ export interface DesktopApi {
   openProjectFolder(
     projectId: string
   ): Promise<void>;
+  getSettings(): Promise<AppSettings>;
+  saveSettings(
+    settings: AppSettings
+  ): Promise<SaveSettingsResult>;
+  chooseSettingsDirectory(): Promise<string | null>;
 }

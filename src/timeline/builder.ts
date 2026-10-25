@@ -12,13 +12,18 @@ import type {
 } from "../types.js";
 import type { MatchedReaction } from "../assets/matcher.js";
 import type { Asset } from "../assets/scanner.js";
-import { scanAssets } from "../assets/scanner.js";
+import {
+  findAsset,
+  scanAssets
+} from "../assets/scanner.js";
 import {
   SCENE_GAP_SECONDS,
   getSceneDuration
 } from "./timing.js";
 import { getTopicMemeLayout } from "./topic-layout.js";
+import { shouldGenerateTopicTitleVoice } from "./topic-constants.js";
 import { readMediaDuration } from "../media-duration.js";
+import { renderTopicTitleCard } from "../capcut/compile/title-card.js";
 
 const CANVAS = {
   width: 1080,
@@ -204,9 +209,9 @@ async function combineCommentScenes(
       previousHeight === 0
         ? COMMENT_IMAGE_Y
         : previousCenterY +
-          previousHeight / 2 +
-          COMMENT_STACK_PADDING +
-          height / 2;
+        previousHeight / 2 +
+        COMMENT_STACK_PADDING +
+        height / 2;
     block.imageY =
       (CANVAS.height / 2 - centerY) /
       (CANVAS.height / 2);
@@ -349,16 +354,16 @@ async function createCommentScene(
           MIN_OVERLAY_DURATION,
           reaction.duration
         );
-    overlays.push(
-      createOverlay(
-        "meme",
-        projectPath(reaction.meme.file),
-        memeDuration,
-        reaction.animation,
-        audioDuration,
-        0.5
-      )
+    const memeOverlay = createOverlay(
+      "meme",
+      projectPath(reaction.meme.file),
+      memeDuration,
+      reaction.animation,
+      audioDuration,
+      0.5
     );
+    memeOverlay.scale = 1;
+    overlays.push(memeOverlay);
     postVoiceDuration = Math.max(
       postVoiceDuration,
       memeDuration
@@ -373,9 +378,8 @@ async function createCommentScene(
       sfxAbsolute,
       `SFX asset ${reaction.sfx.id}`
     );
-    const sfxDuration = Math.max(
-      MIN_OVERLAY_DURATION,
-      await readMediaDuration(sfxAbsolute)
+    const sfxDuration = await readMediaDuration(
+      sfxAbsolute
     );
     overlays.push(
       createOverlay(
@@ -492,22 +496,57 @@ export async function buildTimeline(
     "audio",
     "topic-title.mp3"
   );
-  const openTopicSfx = inputs.assets.find(
-    (asset) =>
+  const openTopicSfx =
+    inputs.assets.find((asset) =>
       asset.type === "sfx" &&
-      asset.category === "open topic"
-  )?.file;
+      (
+        asset.category === "open topic" ||
+        asset.category === "open-topic" ||
+        asset.tags.includes("open-topic") ||
+        asset.tags.includes("open topic")
+      )
+    )?.file;
   const topicMeme =
-    inputs.assets.find(
-      (asset) =>
-        asset.type === "meme" &&
-        asset.category === "topic" &&
-        asset.id === inputs.analysis.topicMemeId
-    );
+    findAsset(inputs.assets, {
+      id: inputs.analysis.topicMemeId,
+      type: "meme"
+    }) ??
+    findAsset(inputs.assets, {
+      type: "meme",
+      category: "topic"
+    });
   const topicOverlays: TimelineOverlay[] = [];
   let topicIntro: VideoTimeline["topicIntro"];
   let topicCaptureStart = 0;
   let topicAudioStart = 0;
+  const introCase = shouldGenerateTopicTitleVoice(
+    thread.text
+  )
+    ? "long"
+    : "short";
+  const hasTitleAudio =
+    await fs.access(titleAudioAbsolute)
+      .then(() => true)
+      .catch(() => false);
+  const hasTopicIntro =
+    Boolean(inputs.analysis.topicTitle?.trim()) &&
+    Boolean(openTopicSfx) &&
+    (introCase === "short" || hasTitleAudio);
+  const titleAudioDuration =
+    hasTopicIntro && introCase === "long"
+      ? await readMediaDuration(titleAudioAbsolute)
+      : 0;
+  const blocksDuration =
+    introCase === "long"
+      ? 0.2 + titleAudioDuration
+      : Math.min(3, topicDuration);
+
+  if (hasTopicIntro) {
+    topicCaptureStart =
+      introCase === "long" ? blocksDuration : 0;
+    topicAudioStart =
+      introCase === "long" ? blocksDuration : 0;
+  }
 
   if (topicMeme) {
     const topicMemeAbsolute =
@@ -516,34 +555,6 @@ export async function buildTimeline(
       topicMemeAbsolute,
       `Topic meme asset ${topicMeme.id}`
     );
-    const introCase =
-      thread.text.length > 200
-        ? "long"
-        : "short";
-    const hasTitleAudio =
-      await fs.access(titleAudioAbsolute)
-        .then(() => true)
-        .catch(() => false);
-    const hasTopicIntro =
-      Boolean(inputs.analysis.topicTitle) &&
-      Boolean(openTopicSfx) &&
-      (introCase === "short" || hasTitleAudio);
-    const titleAudioDuration =
-      hasTopicIntro && introCase === "long"
-        ? await readMediaDuration(titleAudioAbsolute)
-        : 0;
-    const blocksDuration =
-      introCase === "long"
-        ? 0.2 + titleAudioDuration
-        : Math.min(3, topicDuration);
-    topicCaptureStart =
-      introCase === "long"
-        ? blocksDuration
-        : 0;
-    topicAudioStart =
-      introCase === "long"
-        ? blocksDuration
-        : 0;
     const topicMemeLayout =
       await getTopicMemeLayout(topicMemeAbsolute);
     topicOverlays.push(
@@ -565,24 +576,38 @@ export async function buildTimeline(
       topicOverlay.x = 0;
       topicOverlay.y = topicMemeLayout.y;
     }
-    if (hasTopicIntro && openTopicSfx) {
-      const openTopicSfxDuration =
-        await readMediaDuration(openTopicSfx);
-      topicIntro = {
-        case: introCase,
-        title: topicTitle,
-        titleVoiceFile: timelineFile(
-          titleAudioAbsolute
-        ),
-        titleVoiceDuration: titleAudioDuration,
-        openSfxFile: timelineFile(openTopicSfx),
-        openSfxDuration: openTopicSfxDuration,
-        memeFile: projectPath(topicMeme.file),
-        animationDuration: 0.2,
-        blocksDuration,
-        captureStart: topicCaptureStart
-      };
-    }
+  }
+  if (hasTopicIntro && openTopicSfx) {
+    const openTopicSfxDuration =
+      await readMediaDuration(openTopicSfx);
+    const titleCardAbsolute =
+      await renderTopicTitleCard(
+        projectDir,
+        topicTitle
+      );
+    topicIntro = {
+      case: introCase,
+      title: topicTitle,
+      ...(introCase === "long" && hasTitleAudio
+        ? {
+            titleVoiceFile: timelineFile(
+              titleAudioAbsolute
+            )
+          }
+        : {}),
+      titleVoiceDuration: titleAudioDuration,
+      openSfxFile: timelineFile(openTopicSfx),
+      openSfxDuration: openTopicSfxDuration,
+      titleCardFile: timelineFile(
+        titleCardAbsolute
+      ),
+      ...(topicMeme
+        ? { memeFile: projectPath(topicMeme.file) }
+        : {}),
+      animationDuration: 0.2,
+      blocksDuration,
+      captureStart: topicCaptureStart
+    };
   }
 
   const scenes: TimelineScene[] = [

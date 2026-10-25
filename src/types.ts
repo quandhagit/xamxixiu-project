@@ -103,6 +103,7 @@ export interface ReactionEvent {
 export interface ThreadAnalysis {
   topicTitle?: string;
   topicVoiceId?: string;
+  topicTitleVoiceId?: string;
   topicMemeId?: string | null;
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
@@ -197,10 +198,11 @@ export interface TimelineScene {
 export interface TimelineTopicIntro {
   case: "long" | "short";
   title: string;
-  titleVoiceFile: string;
+  titleVoiceFile?: string;
   titleVoiceDuration: number;
   openSfxFile: string;
   openSfxDuration: number;
+  titleCardFile?: string;
   memeFile?: string;
   animationDuration: number;
   blocksDuration: number;

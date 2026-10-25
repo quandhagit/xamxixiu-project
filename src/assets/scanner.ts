@@ -7,6 +7,7 @@ export type {
   AssetMediaKind,
   AssetType
 } from "./library.js";
+export { findAsset } from "./library.js";
 
 export async function scanAssets(
   root = getAssetRoot()

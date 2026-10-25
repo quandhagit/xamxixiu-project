@@ -1,11 +1,12 @@
 import sharp from "sharp";
 import {
+  TOPIC_MEME_SCALE,
   TOPIC_TITLE_CENTER_FRACTION,
   TOPIC_TITLE_MAX_HEIGHT,
   TOPIC_TITLE_TRANSFORM_Y
 } from "./topic-constants.js";
 
-export const TOPIC_MEME_SCALE = 0.8;
+export { TOPIC_MEME_SCALE } from "./topic-constants.js";
 export {
   TOPIC_TITLE_CENTER_FRACTION,
   TOPIC_TITLE_MAX_HEIGHT,
@@ -39,8 +40,9 @@ export async function getTopicMemeLayout(
   }
 
   const scale = TOPIC_MEME_SCALE;
-  const width = metadata.width * scale;
-  const height = metadata.height * scale;
+  const width = CANVAS_WIDTH * scale;
+  const height =
+    width * (metadata.height / metadata.width);
   const titleBottom =
     CANVAS_HEIGHT * TOPIC_TITLE_CENTER_FRACTION +
     TOPIC_TITLE_MAX_HEIGHT / 2;

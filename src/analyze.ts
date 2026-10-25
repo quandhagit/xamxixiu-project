@@ -7,7 +7,6 @@ import {
 import type {
   ThreadAnalysis,
   ReactionEmotion,
-  ReactionAnimation,
   ThreadData
 } from "./types.js";
 import {
@@ -28,53 +27,6 @@ const EMOTIONS: ReactionEmotion[] = [
   "scared",
   "agree",
   "neutral"
-];
-
-const ANIMATIONS: ReactionAnimation[] = [
-  "fade-in",
-  "zoom-1",
-  "rock-vertically",
-  "slide-down",
-  "slide-up",
-  "slide-right",
-  "slide-left",
-  "rotate",
-  "flame-risen",
-  "rotation-opening",
-  "retro-fadein-2",
-  "retro-fadein",
-  "screen-wipe",
-  "rgb-scanlines",
-  "zoom-2",
-  "zoom-out",
-  "zoom-in",
-  "shake-3",
-  "crt-bands",
-  "vibrating-panels",
-  "swing-top-right",
-  "anime-frame",
-  "rock-horizontally",
-  "gray-mask",
-  "shake-1",
-  "spin-up-2",
-  "whirl",
-  "mini-zoom",
-  "spin-up-1",
-  "swing-bottom",
-  "swing-right",
-  "swing-bottom-left",
-  "flip",
-  "shake-2",
-  "blinds",
-  "swing-bottom-right",
-  "puzzle",
-  "swing-top-left",
-  "shake-down",
-  "swing",
-  "wiper",
-  "roll-right",
-  "spin-left",
-  "none"
 ];
 
 const VOICE_OPTIONS = VOICE_POOL.map(
@@ -153,8 +105,8 @@ For approximately 10 comments:
   it does not fit the content.
 - SFX should be used more selectively.
 - Approximately 4–7 comments may have SFX.
-- Video memes do not need SFX or animation. When selecting a video meme, set
-  sfxCategory to null and animation to "none".
+- Video memes do not need SFX. When selecting a video meme, set
+  sfxCategory to null.
 - Image memes MUST always be paired with an SFX.
 
 IMPORTANT: MEME CATEGORY IS AN EDITING CHOICE, NOT A DIRECT EMOTION LABEL.
@@ -190,7 +142,6 @@ A comment that reveals something unexpected:
 A serious/sad comment in a serious story:
 → memeCategory = null
 → sfxCategory = null
-→ animation = none
 
 Prioritize the editing effect and entertainment value over
 literal emotion matching.
@@ -217,7 +168,6 @@ For these topics:
 - reactions can be completely empty
 - memeCategory should usually be null
 - sfxCategory should usually be null
-- animation should be "none"
 
 Do NOT add memes simply to satisfy a reaction count.
 
@@ -273,11 +223,8 @@ A reaction can contain:
 - memeAssetId
 - memeCategory
 - sfxCategory
-- animation
-- duration
 
-Video meme reactions do not use SFX or animation. Image memes require SFX and
-may use animation.
+Video meme reactions do not use SFX. Image memes require SFX.
 
 Examples:
 
@@ -285,7 +232,7 @@ Funny comment:
     video meme + no SFX
 
 Very funny comment:
-    video meme + no SFX + no animation
+    video meme + no SFX
 
 Awkward moment:
     image meme + record-scratch
@@ -376,63 +323,6 @@ For example:
 - correct/agreement moment → ding
 
 ==================================================
-ANIMATION
-==================================================
-
-Available animations:
-
-- fade-in
-- zoom-in
-- zoom-out
-- shake-1
-- shake-2
-- slide-down
-- slide-up
-- slide-right
-- slide-left
-- rotate
-- flip
-- none
-
-Use:
-
-zoom-in:
-    Meme appears small and grows into place.
-
-shake-1:
-    Shock, panic, intense reaction, absurdity.
-
-slide-right:
-    Meme enters from the side.
-
-fade-in:
-    Subtle appearance.
-
-none:
-    No meme.
-
-If memeCategory is null:
-    animation MUST be "none".
-
-==================================================
-DURATION
-==================================================
-
-Reaction duration should normally be:
-
-0.25 – 1.0 seconds
-
-Use shorter durations for:
-- quick jokes
-- small reactions
-- punchlines
-
-Use longer durations for:
-- stronger reactions
-- awkward moments
-- important visual jokes
-
-==================================================
 REACTION DENSITY
 ==================================================
 
@@ -510,7 +400,6 @@ Possible:
 emotion = laughing
 memeCategory = cringe
 sfxCategory = slap
-animation = zoom-in
 
 Comment:
 "That's actually a really good point."
@@ -519,7 +408,6 @@ Possible:
 emotion = agree
 memeCategory = agree
 sfxCategory = ding
-animation = fade-in
 
 Comment:
 "Then he suddenly disappeared."
@@ -528,7 +416,6 @@ Possible:
 emotion = shocked
 memeCategory = shocked
 sfxCategory = record-scratch
-animation = shake-1
 
 ==================================================
 DO NOT OVERUSE SFX
@@ -579,9 +466,7 @@ The JSON must follow this exact structure:
       "emotion": "happy | laughing | sad | angry | shocked | surprised | confused | shy | cringe | scared | agree | neutral",
       "memeAssetId": "one id from the available meme assets or null",
       "memeCategory": "agree | angry | confused | cringe | happy | laughing | sad | scared | shocked | shy | null",
-      "sfxCategory": "boom | ding | fail | impact | record-scratch | sad | slap | suspicious | wow | null",
-      "animation": "fade-in | zoom-in | zoom-out | shake-1 | shake-2 | slide-down | slide-up | slide-right | slide-left | rotate | flip | none",
-      "duration": 0.25
+      "sfxCategory": "boom | ding | fail | impact | record-scratch | sad | slap | suspicious | wow | null"
     }
   ],
   "musicType": "funny | dramatic | chill | sad | neutral"
@@ -599,29 +484,23 @@ FINAL CHECK BEFORE OUTPUT
    → If YES, do NOT force memes.
 
 3. If memes are appropriate, target roughly 65% video memes and use image
-   memes only with SFX. Video memes must have no SFX and animation "none".
+   memes only with SFX. Video memes must have no SFX.
 
 4. SFX should be more selective than memes, except that image memes require it.
 
-5. Video memes use sfxCategory null and animation "none"; image memes and SFX
-   must appear together.
+5. Video memes use sfxCategory null; image memes and SFX must appear together.
 
-6. If memeCategory is null:
-   animation MUST be "none".
+6. Only use the allowed categories listed above.
 
-7. Only use the allowed categories listed above.
+7. commentIndex must refer to an actual comment.
 
-8. duration must be between 0.25 and 1.0.
-
-9. commentIndex must refer to an actual comment.
-
-10. Use Parent comment metadata to understand reply context. A reply should
+8. Use Parent comment metadata to understand reply context. A reply should
     be interpreted together with its parent, but still gets its own reaction
     event when a separate reaction is appropriate.
 
-11. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
+9. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
 
-12. Return JSON only.
+10. Return JSON only. Do not choose or return animation or duration.
 `;
 
 async function main(): Promise<void> {
@@ -727,13 +606,13 @@ MEME ASSET SELECTION:
   editing effect; do not choose only from the emotion or category label.
 - A video asset has mediaKind "video". Prefer video assets for approximately
   65% of total reaction overlay duration when the content is reaction-friendly.
-- Video assets do not need SFX or animation. If memeAssetId is a video, set
-  sfxCategory to null and animation to "none".
+- Video assets do not need SFX. If memeAssetId is a video, set sfxCategory to null.
 - An image asset has mediaKind "image" and MUST have a non-null sfxCategory.
-- If no meme is appropriate, set memeAssetId and memeCategory to null and
-  animation to "none".
+- If no meme is appropriate, set memeAssetId and memeCategory to null.
 - If no listed asset fits, use an SFX-only reaction or no reaction rather than
   inventing an asset ID.
+- Do not choose or return animation or duration. Overlay length comes from the
+  media files, not from analysis.
 
 THREAD:
 
@@ -776,18 +655,11 @@ Return this exact JSON structure:
       "emotion": "laughing",
       "memeAssetId": "one id from AVAILABLE MEME ASSETS or null",
       "memeCategory": "laughing",
-      "sfxCategory": null,
-      "animation": "none",
-      "duration": 0.4
+      "sfxCategory": null
     }
   ],
   "musicType": "funny | dramatic | chill | sad | neutral"
 }
-
-Rules for duration:
-- Usually between 0.25 and 0.8 seconds.
-- Strong reactions can use up to 1.0 second.
-- Keep reactions short because this is a short-form video.
 
 Rules for intensity:
 - Must be a number from 0.0 to 1.0.
@@ -896,6 +768,12 @@ Rules for intensity:
         ? `${topicTitle.slice(0, 77).trimEnd()}...`
         : topicTitle;
   }
+
+  analysis.reactions = (analysis.reactions ?? []).map((reaction) => ({
+    ...reaction,
+    animation: "none",
+    duration: 1
+  }));
 
   await fs.writeFile(
     outputPath,

@@ -19,7 +19,6 @@ export interface Asset {
   tags: string[];
   intensity: number;
   mediaKind: AssetMediaKind;
-  usage?: string;
   spec?: string;
   createdAt: string;
   updatedAt: string;
@@ -38,7 +37,6 @@ export interface AssetUpdate {
   category?: string;
   tags?: string[];
   intensity?: number;
-  usage?: string;
   spec?: string;
 }
 
@@ -166,6 +164,55 @@ export function isSupportedAssetFile(
   return EXTENSIONS[type].has(path.extname(file).toLowerCase());
 }
 
+export function pathAssetId(relativePath: string): string {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const extension = path.posix.extname(normalized);
+  return extension
+    ? normalized.slice(0, -extension.length)
+    : normalized;
+}
+
+export function findAsset(
+  assets: Asset[],
+  options: {
+    id?: string | null;
+    type?: AssetType;
+    category?: string;
+  }
+): Asset | undefined {
+  const needle = options.id?.replaceAll("\\", "/");
+  if (needle) {
+    const exact = assets.find((asset) =>
+      asset.id === needle &&
+      (!options.type || asset.type === options.type)
+    );
+    if (exact) {
+      return exact;
+    }
+    const byPath = assets.find((asset) => {
+      if (options.type && asset.type !== options.type) {
+        return false;
+      }
+      const file = asset.file.replaceAll("\\", "/");
+      const withoutExt = file.replace(/\.[^/.]+$/, "");
+      return asset.id === needle ||
+        withoutExt.endsWith(`/${needle}`) ||
+        withoutExt.endsWith(needle) ||
+        pathAssetId(file).endsWith(needle);
+    });
+    if (byPath) {
+      return byPath;
+    }
+  }
+  if (options.category) {
+    return assets.find((asset) =>
+      (!options.type || asset.type === options.type) &&
+      asset.category === options.category
+    );
+  }
+  return undefined;
+}
+
 function safeSegment(value: string, fallback: string): string {
   const cleaned = value
     .normalize("NFKC")
@@ -180,7 +227,13 @@ async function atomicWriteJson(file: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(value, null, 2), "utf-8");
-  await fs.rename(temporary, file);
+  try {
+    await fs.rename(temporary, file);
+  } catch {
+    // Windows cannot always rename over an existing locked file.
+    await fs.copyFile(temporary, file);
+    await fs.rm(temporary, { force: true });
+  }
 }
 
 async function walk(directory: string): Promise<string[]> {
@@ -207,6 +260,7 @@ async function walk(directory: string): Promise<string[]> {
 export class AssetLibrary {
   readonly root: string;
   private readonly catalogFile: string;
+  private inFlightInitialize?: Promise<void>;
 
   constructor(root = getAssetRoot()) {
     this.root = path.resolve(root);
@@ -214,6 +268,13 @@ export class AssetLibrary {
   }
 
   async initialize(sampleRoot?: string): Promise<void> {
+    this.inFlightInitialize ??= this.runInitialize(sampleRoot).finally(() => {
+      this.inFlightInitialize = undefined;
+    });
+    return this.inFlightInitialize;
+  }
+
+  private async runInitialize(sampleRoot?: string): Promise<void> {
     await fs.mkdir(this.root, { recursive: true });
     for (const [type, directory] of Object.entries(TYPE_DIRECTORIES) as Array<[AssetType, string]>) {
       await fs.mkdir(path.join(this.root, directory), { recursive: true });
@@ -221,20 +282,26 @@ export class AssetLibrary {
         await fs.mkdir(path.join(this.root, directory, category), { recursive: true });
       }
     }
+    let catalog: AssetCatalog | undefined;
     try {
-      await fs.access(this.catalogFile);
-      return;
+      catalog = JSON.parse(await fs.readFile(this.catalogFile, "utf-8")) as AssetCatalog;
+      if (catalog.version !== 1 || !Array.isArray(catalog.assets)) {
+        catalog = undefined;
+      }
     } catch {
-      // First run.
+      catalog = undefined;
     }
-
-    const catalog: AssetCatalog = { version: 1, assets: [] };
-    if (sampleRoot) {
+    const created = catalog === undefined;
+    catalog ??= { version: 1, assets: [] };
+    if (created && sampleRoot) {
       await this.seedSamples(path.resolve(sampleRoot), catalog);
-    } else {
-      await this.indexExistingFiles(catalog);
     }
-    await atomicWriteJson(this.catalogFile, catalog);
+    const migrated = this.restorePathIds(catalog);
+    const beforeCount = catalog.assets.length;
+    await this.indexExistingFiles(catalog);
+    if (created || migrated || catalog.assets.length !== beforeCount) {
+      await atomicWriteJson(this.catalogFile, catalog);
+    }
   }
 
   async list(): Promise<Asset[]> {
@@ -328,14 +395,11 @@ export class AssetLibrary {
       }
       entry.intensity = update.intensity;
     }
-    for (const field of ["usage", "spec"] as const) {
-      const value = update[field];
-      if (value !== undefined) {
-        if (typeof value !== "string") {
-          throw new Error(`Asset ${field} must be a string`);
-        }
-        entry[field] = value.trim() || undefined;
+    if (update.spec !== undefined) {
+      if (typeof update.spec !== "string") {
+        throw new Error("Asset spec must be a string");
       }
+      entry.spec = update.spec.trim() || undefined;
     }
     entry.updatedAt = new Date().toISOString();
     await atomicWriteJson(this.catalogFile, catalog);
@@ -377,6 +441,16 @@ export class AssetLibrary {
     if (parsed.version !== 1 || !Array.isArray(parsed.assets)) {
       throw new Error("Invalid asset catalog");
     }
+    let removedUsage = false;
+    for (const asset of parsed.assets) {
+      if ("usage" in asset) {
+        delete (asset as { usage?: unknown }).usage;
+        removedUsage = true;
+      }
+    }
+    if (removedUsage) {
+      await atomicWriteJson(this.catalogFile, parsed);
+    }
     return parsed;
   }
 
@@ -394,17 +468,21 @@ export class AssetLibrary {
   }
 
   private async indexExistingFiles(catalog: AssetCatalog): Promise<void> {
+    const known = new Set(catalog.assets.map((asset) => asset.relativePath));
     for (const type of ASSET_TYPES) {
       const base = path.join(this.root, TYPE_DIRECTORIES[type]);
       for (const file of await walk(base)) {
         if (!isSupportedAssetFile(type, file)) continue;
+        const relativePath = path.relative(this.root, file).replaceAll("\\", "/");
+        if (known.has(relativePath)) continue;
+        known.add(relativePath);
         const relative = path.relative(base, file);
         const parts = relative.split(path.sep);
         const category = parts.length > 1 ? parts[0] : type;
         const now = new Date().toISOString();
         catalog.assets.push({
-          id: crypto.createHash("sha256").update(`${type}:${relative.replaceAll("\\", "/")}`).digest("hex").slice(0, 24),
-          relativePath: path.relative(this.root, file).replaceAll("\\", "/"),
+          id: pathAssetId(relative.replaceAll("\\", "/")),
+          relativePath,
           type,
           category,
           tags: defaultTags(type, category),
@@ -447,7 +525,10 @@ export class AssetLibrary {
       const category = parts.length > 1 ? parts[0] : type;
       const now = new Date().toISOString();
       catalog.assets.push({
-        id: crypto.createHash("sha256").update(`sample:${normalized}`).digest("hex").slice(0, 24),
+        id: pathAssetId(path.relative(
+          path.join(sampleRoot, TYPE_DIRECTORIES[type]),
+          source
+        ).replaceAll("\\", "/")),
         relativePath: relative.replaceAll("\\", "/"),
         type,
         category,
@@ -459,6 +540,22 @@ export class AssetLibrary {
         updatedAt: now
       });
     }
+  }
+
+  private restorePathIds(catalog: AssetCatalog): boolean {
+    let migrated = false;
+    for (const entry of catalog.assets) {
+      const prefix = `${TYPE_DIRECTORIES[entry.type]}/`;
+      const withinType = entry.relativePath.startsWith(prefix)
+        ? entry.relativePath.slice(prefix.length)
+        : entry.relativePath;
+      const pathId = pathAssetId(withinType);
+      if (pathId && entry.id !== pathId) {
+        entry.id = pathId;
+        migrated = true;
+      }
+    }
+    return migrated;
   }
 
   private async readNearbySpec(file: string, root: string): Promise<string | undefined> {

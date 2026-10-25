@@ -4,11 +4,16 @@ import {
 } from "electron";
 
 import type {
+  CaptureCommentPayload,
   DesktopApi,
   ImportAssetsPayload,
+  ReplaceTimelineAssetPayload,
   SaveAssetAssignmentsPayload,
   UpdateAssetPayload,
-  UpdateContentPayload
+  UpdateContentPayload,
+  UpdateVoicePayload,
+  AppSettings,
+  ExportProgress
 } from "./ipc-types.js";
 
 const api: DesktopApi = {
@@ -16,6 +21,14 @@ const api: DesktopApi = {
     ipcRenderer.invoke(
       "capture:thread",
       url
+    ),
+
+  captureComment: (
+    payload: CaptureCommentPayload
+  ) =>
+    ipcRenderer.invoke(
+      "capture:comment",
+      payload
     ),
 
   analyzeProject: (projectId) =>
@@ -37,6 +50,12 @@ const api: DesktopApi = {
       target
     ),
 
+  updateVoice: (payload: UpdateVoicePayload) =>
+    ipcRenderer.invoke(
+      "project:update-voice",
+      payload
+    ),
+
   matchReactions: (projectId) =>
     ipcRenderer.invoke(
       "project:match-reactions",
@@ -55,6 +74,40 @@ const api: DesktopApi = {
       projectId
     ),
 
+  exportVideo: (projectId) =>
+    ipcRenderer.invoke(
+      "project:export-video",
+      projectId
+    ),
+
+  onExportProgress: (callback) => {
+    const listener = (
+      _event: unknown,
+      progress: ExportProgress
+    ): void => {
+      callback(progress);
+    };
+    ipcRenderer.on("export:progress", listener);
+    return () => {
+      ipcRenderer.removeListener(
+        "export:progress",
+        listener
+      );
+    };
+  },
+
+  showItemInFolder: (targetPath) =>
+    ipcRenderer.invoke(
+      "shell:show-item",
+      targetPath
+    ),
+
+  openPath: (targetPath) =>
+    ipcRenderer.invoke(
+      "shell:open-path",
+      targetPath
+    ),
+
   getCapCutBaseProject: () =>
     ipcRenderer.invoke(
       "capcut:get-base-project"
@@ -71,6 +124,12 @@ const api: DesktopApi = {
   getProject: (projectId) =>
     ipcRenderer.invoke(
       "projects:get",
+      projectId
+    ),
+
+  deleteProject: (projectId) =>
+    ipcRenderer.invoke(
+      "projects:delete",
       projectId
     ),
 
@@ -107,6 +166,13 @@ const api: DesktopApi = {
       "projects:save-asset-assignments",
       payload
     ),
+  replaceTimelineAsset: (
+    payload: ReplaceTimelineAssetPayload
+  ) =>
+    ipcRenderer.invoke(
+      "project:replace-timeline-asset",
+      payload
+    ),
 
   updateContent: (
     payload: UpdateContentPayload
@@ -114,6 +180,12 @@ const api: DesktopApi = {
     ipcRenderer.invoke(
       "project:update-content",
       payload
+    ),
+
+  resetContent: (projectId) =>
+    ipcRenderer.invoke(
+      "project:reset-content",
+      projectId
     ),
 
   createProjectState: (projectId) =>
@@ -126,6 +198,20 @@ const api: DesktopApi = {
     ipcRenderer.invoke(
       "projects:open-folder",
       projectId
+    ),
+
+  getSettings: () =>
+    ipcRenderer.invoke("settings:get"),
+
+  saveSettings: (settings: AppSettings) =>
+    ipcRenderer.invoke(
+      "settings:save",
+      settings
+    ),
+
+  chooseSettingsDirectory: () =>
+    ipcRenderer.invoke(
+      "settings:choose-directory"
     )
 };
 

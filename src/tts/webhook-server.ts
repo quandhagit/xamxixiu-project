@@ -9,7 +9,7 @@ import {
 } from "./request-manager.js";
 
 export function startWebhookServer(
-  requestedPort = process.env.VBEE_WEBHOOK_PORT ?? "3000"
+  requestedPort = process.env.VBEE_WEBHOOK_PORT ?? "3001"
 ): Promise<Server> {
   const port = Number(requestedPort);
 

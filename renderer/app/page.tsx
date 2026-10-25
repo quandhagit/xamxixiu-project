@@ -3,34 +3,62 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 import type {
   AudioFailureTarget,
-  ContentData
+  ContentData,
+  ThreadAnalysis
 } from "../../src/types";
 import type {
   ProjectState,
   ProjectSummary
 } from "../../src/project/store";
 import {
-  TimelinePreview
-} from "../features/preview/TimelinePreview";
+  CaptureComments
+} from "../features/capture/CaptureComments";
 import {
-  AssetWorkspace
-} from "../features/assets/AssetWorkspace";
+  TimelineWorkspace
+} from "../features/preview/TimelineWorkspace";
+import {
+  AppChrome
+} from "../features/app/AppChrome";
+import {
+  TOPIC_TITLE_CARD_FILE,
+  shouldGenerateTopicTitleVoice
+} from "../../src/timeline/topic-constants";
+import {
+  VoiceSelect
+} from "../features/voice/VoiceSelect";
 
 const steps = [
   "INPUT",
   "CAPTURE",
   "ANALYZE",
   "VOICE",
-  "ASSETS",
-  "TIMELINE",
-  "CAPCUT"
+  "TIMELINE"
 ] as const;
 
 type Step = (typeof steps)[number];
+
+function identityImageSlots(
+  count: number
+): number[] {
+  return Array.from(
+    { length: count },
+    (_value, index) => index
+  );
+}
+
+function cloneContent(
+  content: ContentData
+): ContentData {
+  return JSON.parse(
+    JSON.stringify(content)
+  ) as ContentData;
+}
+
 function formatProjectId(
   project: ProjectSummary
 ): string {
@@ -40,36 +68,37 @@ function formatProjectId(
   );
 }
 
-function formatAssetFile(
-  file: string | undefined
-): string {
-  if (!file) {
-    return "none";
+function withVoiceAssignment(
+  analysis: ThreadAnalysis,
+  target: AudioFailureTarget,
+  voiceId: string
+): ThreadAnalysis {
+  if (target === "topic") {
+    return {
+      ...analysis,
+      topicVoiceId: voiceId
+    };
   }
 
-  return file.split(/[\\/]/).pop() ?? file;
-}
-
-function getAssetMediaKind(
-  file: string | undefined
-): string {
-  if (!file) {
-    return "none";
+  if (target === "topic-title") {
+    return {
+      ...analysis,
+      topicTitleVoiceId: voiceId
+    };
   }
 
-  const extension =
-    file.split(".").pop()?.toLowerCase();
-  if (extension === "mp4" || extension === "mov") {
-    return "video";
-  }
-  if (
-    extension === "mp3" ||
-    extension === "wav" ||
-    extension === "m4a"
-  ) {
-    return "audio";
-  }
-  return "image";
+  return {
+    ...analysis,
+    reactions: analysis.reactions.map(
+      (reaction) =>
+        `comment-${reaction.commentIndex}` === target
+          ? {
+              ...reaction,
+              voiceId
+            }
+          : reaction
+    )
+  };
 }
 
 export default function Home(): React.ReactElement {
@@ -81,14 +110,16 @@ export default function Home(): React.ReactElement {
     useState<ProjectState>();
   const [draftContent, setDraftContent] =
     useState<ContentData>();
+  const [imageSlots, setImageSlots] =
+    useState<number[]>([]);
+  const [addCommentLoading, setAddCommentLoading] =
+    useState(false);
   const [captureAssets, setCaptureAssets] =
     useState<Record<string, string>>({});
   const [audioAssets, setAudioAssets] =
     useState<Record<string, string>>({});
   const [previewAssets, setPreviewAssets] =
     useState<Record<string, string>>({});
-  const [capCutOutput, setCapCutOutput] =
-    useState<string>();
   const [url, setUrl] = useState("");
   const [loading, setLoading] =
     useState(true);
@@ -98,6 +129,9 @@ export default function Home(): React.ReactElement {
     useState(false);
   const [error, setError] =
     useState<string>();
+  const pendingVoiceSave = useRef(
+    Promise.resolve()
+  );
 
   const currentIndex = steps.indexOf(
     currentStep
@@ -219,9 +253,13 @@ export default function Home(): React.ReactElement {
     const sources = [
       project.timeline.backgroundFile,
       project.timeline.musicFile,
-      project.timeline.topicIntro?.titleVoiceFile,
+      project.timeline.topicIntro?.case === "long"
+        ? project.timeline.topicIntro.titleVoiceFile
+        : undefined,
       project.timeline.topicIntro?.openSfxFile,
+      project.timeline.topicIntro?.titleCardFile,
       project.timeline.topicIntro?.memeFile,
+      TOPIC_TITLE_CARD_FILE,
       ...project.timeline.scenes.flatMap(
         (scene) =>
           (scene.blocks ?? [scene]).flatMap(
@@ -241,13 +279,15 @@ export default function Home(): React.ReactElement {
     const entries = await Promise.all(
       [...new Set(sources)].map(async (source) => {
         try {
-          return [
-            source,
+          const dataUrl =
             await window.xamxixiu.getPreviewAsset(
               project.id,
               source
-            )
-          ] as const;
+            );
+          if (!dataUrl) {
+            return null;
+          }
+          return [source, dataUrl] as const;
         } catch {
           return null;
         }
@@ -263,6 +303,65 @@ export default function Home(): React.ReactElement {
     );
   }
 
+  function clearSelectedProject(): void {
+    setSelectedProject(undefined);
+    setDraftContent(undefined);
+    setImageSlots([]);
+    setCaptureAssets({});
+    setAudioAssets({});
+    setPreviewAssets({});
+    setCurrentStep("INPUT");
+  }
+
+  async function deleteProject(
+    projectId: string
+  ): Promise<void> {
+    const label = projectId.replace(
+      /-thread$/,
+      ""
+    );
+    const confirmed = window.confirm(
+      `Xóa project ${label}? Toàn bộ file trong thư mục project sẽ bị xóa và không thể hoàn tác.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    if (
+      typeof window.xamxixiu.deleteProject !==
+      "function"
+    ) {
+      setError(
+        "Hãy khởi động lại desktop app để dùng chức năng xóa project."
+      );
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      await window.xamxixiu.deleteProject(
+        projectId
+      );
+      setProjects(
+        await window.xamxixiu.getProjects()
+      );
+      if (selectedProject?.id === projectId) {
+        clearSelectedProject();
+      }
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không thể xóa project."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
   async function selectProject(
     projectId: string
   ): Promise<void> {
@@ -276,8 +375,13 @@ export default function Home(): React.ReactElement {
         );
       setSelectedProject(project);
       if (project) {
-        setDraftContent(
-          project.content ?? project.thread
+        const content =
+          project.content ?? project.thread;
+        setDraftContent(content);
+        setImageSlots(
+          identityImageSlots(
+            content?.comments.length ?? 0
+          )
         );
         await loadCaptureAssets(project);
         await loadAudioAssets(project);
@@ -306,9 +410,14 @@ export default function Home(): React.ReactElement {
     try {
       const project =
         await window.xamxixiu.captureThread(url);
+      const content =
+        project.content ?? project.thread;
       setSelectedProject(project);
-      setDraftContent(
-        project.content ?? project.thread
+      setDraftContent(content);
+      setImageSlots(
+        identityImageSlots(
+          content?.comments.length ?? 0
+        )
       );
       await loadCaptureAssets(project);
       await loadAudioAssets(project);
@@ -328,6 +437,30 @@ export default function Home(): React.ReactElement {
     }
   }
 
+  async function persistDraft(): Promise<
+    ProjectState | undefined
+  > {
+    if (!selectedProject || !draftContent) {
+      return undefined;
+    }
+
+    const project =
+      await window.xamxixiu.updateContent({
+        projectId: selectedProject.id,
+        content: draftContent,
+        imageOrder: imageSlots
+      });
+    const saved =
+      project.content ?? draftContent;
+
+    setImageSlots(
+      identityImageSlots(saved.comments.length)
+    );
+    await loadCaptureAssets(project);
+
+    return project;
+  }
+
   async function saveContent(): Promise<void> {
     if (!selectedProject || !draftContent) {
       return;
@@ -337,11 +470,12 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
 
     try {
-      const project =
-        await window.xamxixiu.updateContent({
-          projectId: selectedProject.id,
-          content: draftContent
-        });
+      const project = await persistDraft();
+
+      if (!project) {
+        return;
+      }
+
       setSelectedProject(project);
       setDraftContent(
         project.content ?? draftContent
@@ -354,6 +488,130 @@ export default function Home(): React.ReactElement {
       );
     } finally {
       setOperationLoading(false);
+    }
+  }
+
+  async function resetContent(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Khôi phục nội dung đã lưu? Thứ tự kéo thả, comment thêm và sửa chưa lưu sẽ bị hủy."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      let project = selectedProject;
+      if (
+        typeof window.xamxixiu.resetContent ===
+        "function"
+      ) {
+        project =
+          await window.xamxixiu.resetContent(
+            selectedProject.id
+          );
+      } else {
+        project =
+          (await window.xamxixiu.getProject(
+            selectedProject.id
+          )) ?? selectedProject;
+      }
+      const saved =
+        project.content ?? project.thread;
+
+      setSelectedProject(project);
+      setDraftContent(
+        saved ? cloneContent(saved) : undefined
+      );
+      setImageSlots(
+        identityImageSlots(
+          saved?.comments.length ?? 0
+        )
+      );
+      await loadCaptureAssets(project);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không thể reset nội dung."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function addComment(
+    replyUrl: string
+  ): Promise<void> {
+    if (!selectedProject || !draftContent) {
+      return;
+    }
+
+    const projectId = selectedProject.id;
+    const imageIndex = draftContent.comments.length;
+    const existing = draftContent.comments.map(
+      (item) => ({
+        author: item.author,
+        text: item.text
+      })
+    );
+
+    setError(undefined);
+    setAddCommentLoading(true);
+
+    try {
+      const comment =
+        await window.xamxixiu.captureComment({
+          projectId,
+          url: replyUrl,
+          imageIndex,
+          existing
+        });
+
+      setDraftContent((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          comments: [
+            ...current.comments,
+            comment
+          ]
+        };
+      });
+      setImageSlots(
+        (slots) => [...slots, imageIndex]
+      );
+
+      const assetUrl =
+        await window.xamxixiu.getProjectAsset(
+          projectId,
+          `processed/comment-${String(
+            imageIndex + 1
+          ).padStart(2, "0")}.png`
+        );
+
+      setCaptureAssets((assets) => ({
+        ...assets,
+        [`comment-${imageIndex}`]: assetUrl
+      }));
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không thể thêm comment."
+      );
+    } finally {
+      setAddCommentLoading(false);
     }
   }
 
@@ -376,12 +634,16 @@ export default function Home(): React.ReactElement {
 
     try {
       if (currentStep === "VOICE") {
-        setSelectedProject(
-          await window.xamxixiu.matchReactions(
-            selectedProject.id
-          )
+        await window.xamxixiu.matchReactions(
+          selectedProject.id
         );
-        setCurrentStep("ASSETS");
+        const project =
+          await window.xamxixiu.createTimeline(
+            selectedProject.id
+          );
+        setSelectedProject(project);
+        await loadPreviewAssets(project);
+        setCurrentStep("TIMELINE");
       } else {
         nextStep();
       }
@@ -407,10 +669,11 @@ export default function Home(): React.ReactElement {
     try {
       let project = selectedProject;
       if (draftContent) {
-        project = await window.xamxixiu.updateContent({
-          projectId: selectedProject.id,
-          content: draftContent
-        });
+        const saved = await persistDraft();
+
+        if (saved) {
+          project = saved;
+        }
       }
       setSelectedProject(
         await window.xamxixiu.analyzeProject(
@@ -437,12 +700,14 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
 
     try {
+      await pendingVoiceSave.current;
       let project = selectedProject;
       if (draftContent) {
-        project = await window.xamxixiu.updateContent({
-          projectId: selectedProject.id,
-          content: draftContent
-        });
+        const saved = await persistDraft();
+
+        if (saved) {
+          project = saved;
+        }
       }
       const generatedProject =
         await window.xamxixiu.generateAudio(
@@ -494,41 +759,20 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
     setError(undefined);
     try {
-      setSelectedProject(
-        await window.xamxixiu.matchReactions(
-          selectedProject.id
-        )
+      await window.xamxixiu.matchReactions(
+        selectedProject.id
       );
+      const project =
+        await window.xamxixiu.createTimeline(
+          selectedProject.id
+        );
+      setSelectedProject(project);
+      await loadPreviewAssets(project);
     } catch (reason: unknown) {
       setError(
         reason instanceof Error
           ? reason.message
           : "Rematch asset thất bại."
-      );
-    } finally {
-      setOperationLoading(false);
-    }
-  }
-
-  async function createCapCutProject(): Promise<void> {
-    if (!selectedProject) {
-      return;
-    }
-
-    setError(undefined);
-    setOperationLoading(true);
-
-    try {
-      setCapCutOutput(
-        await window.xamxixiu.createCapCutProject(
-          selectedProject.id
-        )
-      );
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Tạo project CapCut thất bại."
       );
     } finally {
       setOperationLoading(false);
@@ -546,13 +790,15 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
 
     try {
+      await pendingVoiceSave.current;
       let project = selectedProject;
       if (draftContent) {
-        project = await window.xamxixiu.updateContent({
-          projectId: selectedProject.id,
-          content: draftContent
-        });
-        setSelectedProject(project);
+        const saved = await persistDraft();
+
+        if (saved) {
+          project = saved;
+          setSelectedProject(project);
+        }
       }
       const generatedProject =
         await window.xamxixiu.retryAudio(
@@ -572,6 +818,77 @@ export default function Home(): React.ReactElement {
     }
   }
 
+  function updateVoice(
+    target: AudioFailureTarget,
+    voiceId: string
+  ): void {
+    if (!selectedProject?.analysis) {
+      setError(
+        "Chưa có analysis. Hãy Analyze trước khi chọn voice."
+      );
+      return;
+    }
+
+    if (
+      typeof window.xamxixiu.updateVoice !==
+      "function"
+    ) {
+      setError(
+        "Cần restart app để chọn lại voice."
+      );
+      return;
+    }
+
+    const projectId = selectedProject.id;
+    setSelectedProject((current) => {
+      if (!current?.analysis) {
+        return current;
+      }
+
+      return {
+        ...current,
+        analysis: withVoiceAssignment(
+          current.analysis,
+          target,
+          voiceId
+        )
+      };
+    });
+    setError(undefined);
+
+    const task = window.xamxixiu
+      .updateVoice({
+        projectId,
+        target,
+        voiceId
+      })
+      .catch(async (reason: unknown) => {
+        try {
+          const project =
+            await window.xamxixiu.getProject(
+              projectId
+            );
+          if (project) {
+            setSelectedProject(project);
+          }
+        } catch {
+          // Keep the optimistic value if reload fails.
+        }
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Không lưu được voice."
+        );
+      })
+      .then(() => undefined);
+
+    pendingVoiceSave.current =
+      pendingVoiceSave.current.then(
+        () => task,
+        () => task
+      );
+  }
+
   function nextStep(): void {
     const next = steps[currentIndex + 1];
     if (next) {
@@ -586,24 +903,19 @@ export default function Home(): React.ReactElement {
     }
   }
 
-  return (
-    <main className="flex min-h-screen flex-col">
-      <header className="flex h-20 items-center justify-between border-b border-white/10 px-8">
-        <div>
-          <p className="text-xs font-semibold tracking-[0.35em] text-fuchsia-300">
-            XÀM XÍ XIẾU
-          </p>
-          <h1 className="mt-1 text-lg font-semibold">
-            Threads content workspace
-          </h1>
-        </div>
-        <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-400">
-          {projectLabel}
-        </div>
-      </header>
+  const topicText =
+    draftContent?.text ??
+    selectedProject?.content?.text ??
+    selectedProject?.thread?.text;
+  const skipTopicTitleVoice =
+    Boolean(topicText) &&
+    !shouldGenerateTopicTitleVoice(topicText);
 
-      <div className="flex flex-1">
-        <aside className="w-64 border-r border-white/10 p-5">
+  return (
+    <AppChrome active="workflow" projectLabel={projectLabel}>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside className="w-64 shrink-0 border-r border-white/10 p-5">
           <p className="mb-4 text-xs font-medium uppercase tracking-widest text-zinc-500">
             Workflow
           </p>
@@ -644,21 +956,41 @@ export default function Home(): React.ReactElement {
           </nav>
         </aside>
 
-        <section className="flex flex-1 flex-col">
-          <div className="flex-1 p-10">
-            <div className="mx-auto max-w-5xl">
-              <div className="mb-8">
-                <p className="text-sm text-fuchsia-300">
-                  0{currentIndex + 1} / 07
-                </p>
-                <h2 className="mt-2 text-3xl font-semibold">
-                  {currentStep}
-                </h2>
-                <p className="mt-2 text-zinc-400">
-                  {selectedProject
-                    ? "Project đã được lưu cục bộ."
-                    : "Bắt đầu một project mới hoặc mở project hiện có."}
-                </p>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto p-10">
+            <div className={currentStep === "TIMELINE" ? "mx-auto max-w-6xl" : "mx-auto max-w-5xl"}>
+              <div className="mb-8 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm text-fuchsia-300">
+                    {String(currentIndex + 1).padStart(2, "0")} /{" "}
+                    {String(steps.length).padStart(2, "0")}
+                  </p>
+                  <h2 className="mt-2 text-3xl font-semibold">
+                    {currentStep}
+                  </h2>
+                  <p className="mt-2 text-zinc-400">
+                    {selectedProject
+                      ? "Project đã được lưu cục bộ."
+                      : "Bắt đầu một project mới hoặc mở project hiện có."}
+                  </p>
+                </div>
+                {selectedProject ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void deleteProject(
+                        selectedProject.id
+                      )
+                    }
+                    disabled={
+                      operationLoading ||
+                      captureLoading
+                    }
+                    className="rounded-xl border border-red-400/20 px-4 py-2 text-sm text-red-200 hover:bg-red-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Xóa project
+                  </button>
+                ) : null}
               </div>
 
               {currentStep === "INPUT" ? (
@@ -706,23 +1038,45 @@ export default function Home(): React.ReactElement {
                         {projects.length}
                       </span>
                     </div>
-                    <div className="mt-4 space-y-2">
+                    <div className="mt-4 max-h-80 space-y-2 overflow-y-auto">
                       {projects.length === 0 ? (
                         <p className="text-sm text-zinc-500">
                           Chưa có project nào.
                         </p>
                       ) : (
-                        projects.slice(0, 5).map((project) => (
-                          <button
+                        projects.map((project) => (
+                          <div
                             key={project.id}
-                            type="button"
-                            onClick={() =>
-                              void selectProject(project.id)
-                            }
-                            className="w-full rounded-xl border border-white/5 bg-black/10 px-3 py-3 text-left text-sm text-zinc-300 hover:border-fuchsia-400/30 hover:bg-fuchsia-400/5"
+                            className="flex items-center gap-2"
                           >
-                            {formatProjectId(project)}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void selectProject(
+                                  project.id
+                                )
+                              }
+                              className="min-w-0 flex-1 rounded-xl border border-white/5 bg-black/10 px-3 py-3 text-left text-sm text-zinc-300 hover:border-fuchsia-400/30 hover:bg-fuchsia-400/5"
+                            >
+                              {formatProjectId(project)}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void deleteProject(
+                                  project.id
+                                )
+                              }
+                              disabled={
+                                operationLoading ||
+                                captureLoading
+                              }
+                              aria-label={`Xóa project ${formatProjectId(project)}`}
+                              className="shrink-0 rounded-xl border border-red-400/20 px-3 py-3 text-xs text-red-200 hover:bg-red-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Xóa
+                            </button>
+                          </div>
                         ))
                       )}
                     </div>
@@ -734,31 +1088,44 @@ export default function Home(): React.ReactElement {
                     <p className="text-sm text-zinc-400">
                       Screenshot bên trái · Nội dung có thể sửa bên phải
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => void saveContent()}
-                      disabled={
-                        !draftContent ||
-                        operationLoading
-                      }
-                      className="rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300 disabled:opacity-40"
-                    >
-                      Lưu nội dung
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void resetContent()}
+                        disabled={
+                          !selectedProject ||
+                          operationLoading
+                        }
+                        className="rounded-xl border border-white/10 px-4 py-2 text-sm text-zinc-300 hover:bg-white/5 disabled:opacity-40"
+                      >
+                        Reset mặc định
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void saveContent()}
+                        disabled={
+                          !draftContent ||
+                          operationLoading
+                        }
+                        className="rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300 disabled:opacity-40"
+                      >
+                        Lưu nội dung
+                      </button>
+                    </div>
                   </div>
 
                   {draftContent && (
                     <>
                       <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
-                        <div className="flex min-h-[360px] items-start justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
+                        <div className="flex min-h-[180px] items-start justify-center rounded-2xl border border-white/10 bg-black/20 p-4">
                           {captureAssets.topic ? (
                             <img
                               src={captureAssets.topic}
                               alt="Threads topic screenshot"
-                              className="max-h-[520px] max-w-full rounded-xl object-contain"
+                              className="max-h-[260px] max-w-full rounded-xl object-contain"
                             />
                           ) : (
-                            <p className="py-20 text-sm text-zinc-500">
+                            <p className="py-10 text-sm text-zinc-500">
                               Đang tải screenshot...
                             </p>
                           )}
@@ -776,102 +1143,27 @@ export default function Home(): React.ReactElement {
                                 text: event.target.value
                               })
                             }
-                            className="mt-4 min-h-[320px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-7 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
+                            className="mt-4 min-h-[160px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-7 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
                           />
                         </div>
                       </div>
 
-                      <div className="space-y-4">
-                        <h3 className="text-sm font-medium text-zinc-300">
-                          Comments ({draftContent.comments.length})
-                        </h3>
-                        {draftContent.comments.map(
-                          (comment, index) => (
-                            <div
-                              key={`${comment.containerIndex}-${index}`}
-                              className={[
-                                "relative grid gap-5 rounded-2xl border p-5 lg:grid-cols-[0.8fr_1.2fr]",
-                                comment.parentCommentIndex !== undefined
-                                  ? "ml-8 border-l-2 border-l-cyan-400/50 pl-6 before:absolute before:-left-6 before:top-8 before:h-px before:w-6 before:bg-cyan-400/50"
-                                  : "",
-                                comment.excluded
-                                  ? "border-amber-400/20 bg-amber-400/5 opacity-70"
-                                  : "border-white/10 bg-white/[0.04]"
-                              ].join(" ")}
-                            >
-                              <div className="flex min-h-[360px] items-start justify-center rounded-xl bg-black/20 p-4">
-                                {captureAssets[`comment-${index}`] ? (
-                                  <img
-                                    src={captureAssets[`comment-${index}`]}
-                                    alt={`Comment ${index + 1} screenshot`}
-                                    className="max-h-[520px] max-w-full rounded-xl object-contain"
-                                  />
-                                ) : (
-                                  <p className="py-20 text-sm text-zinc-500">
-                                    Đang tải...
-                                  </p>
-                                )}
-                              </div>
-                              <div>
-                                <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
-                                  <span>
-                                    {comment.parentCommentIndex !== undefined
-                                      ? `Reply to comment #${comment.parentCommentIndex}`
-                                      : comment.author}
-                                  </span>
-                                  {comment.parentCommentIndex !== undefined && (
-                                    <span>{comment.author}</span>
-                                  )}
-                                  <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
-                                    <input
-                                      type="checkbox"
-                                      checked={comment.excluded === true}
-                                      onChange={(event) =>
-                                        setDraftContent({
-                                          ...draftContent,
-                                          comments: draftContent.comments.map(
-                                            (item, itemIndex) =>
-                                              itemIndex === index
-                                                ? {
-                                                    ...item,
-                                                    excluded:
-                                                      event.target.checked
-                                                  }
-                                                : item
-                                          )
-                                        })
-                                      }
-                                      className="accent-amber-400"
-                                    />
-                                    Exclude khỏi Analyze
-                                  </label>
-                                </div>
-                                <p className="mt-2 text-xs text-zinc-500">
-                                  {comment.likes} likes
-                                </p>
-                                <textarea
-                                  value={comment.text}
-                                  onChange={(event) =>
-                                    setDraftContent({
-                                      ...draftContent,
-                                      comments: draftContent.comments.map(
-                                        (item, itemIndex) =>
-                                          itemIndex === index
-                                            ? {
-                                                ...item,
-                                                text: event.target.value
-                                              }
-                                            : item
-                                      )
-                                    })
-                                  }
-                                  className="mt-3 min-h-[160px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
-                                />
-                              </div>
-                            </div>
-                          )
-                        )}
-                      </div>
+                      <CaptureComments
+                        comments={draftContent.comments}
+                        imageSlots={imageSlots}
+                        assets={captureAssets}
+                        addLoading={addCommentLoading}
+                        onChange={(comments, slots) => {
+                          setDraftContent({
+                            ...draftContent,
+                            comments
+                          });
+                          setImageSlots(slots);
+                        }}
+                        onAdd={(url) => {
+                          void addComment(url);
+                        }}
+                      />
                     </>
                   )}
                 </div>
@@ -974,9 +1266,9 @@ export default function Home(): React.ReactElement {
                             (reaction) => (
                               <div
                                 key={reaction.commentIndex}
-                                className="grid gap-3 rounded-xl border border-white/10 bg-black/10 p-4 sm:grid-cols-4"
+                                className="grid gap-3 rounded-xl border border-white/10 bg-black/10 p-4 sm:grid-cols-3"
                               >
-                                <div className="sm:col-span-4">
+                                <div className="sm:col-span-3">
                                   <p className="text-xs text-zinc-500">
                                     Text
                                   </p>
@@ -1010,14 +1302,6 @@ export default function Home(): React.ReactElement {
                                     {reaction.emotion}
                                   </p>
                                 </div>
-                                <div>
-                                  <p className="text-xs text-zinc-500">
-                                    Animation / duration
-                                  </p>
-                                  <p className="mt-1 text-sm text-zinc-300">
-                                    {reaction.animation} / {reaction.duration}s
-                                  </p>
-                                </div>
                               </div>
                             )
                           )}
@@ -1035,7 +1319,7 @@ export default function Home(): React.ReactElement {
                           Voice generation
                         </h3>
                         <p className="mt-1 text-sm text-zinc-400">
-                          Chỉnh text bên trái. Voice được chọn bởi AI ở bên phải.
+                          Chỉnh text bên trái. Chọn lại voice ở bên phải rồi Generate.
                         </p>
                       </div>
                       {operationLoading && (
@@ -1056,7 +1340,13 @@ export default function Home(): React.ReactElement {
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/5 p-5">
+                  <div
+                    className={`rounded-2xl border p-5 ${
+                      skipTopicTitleVoice
+                        ? "border-white/10 bg-white/[0.03] opacity-70"
+                        : "border-fuchsia-400/20 bg-fuchsia-400/5"
+                    }`}
+                  >
                     <p className="text-xs uppercase tracking-wider text-fuchsia-300">
                       Topic title voice
                     </p>
@@ -1064,39 +1354,67 @@ export default function Home(): React.ReactElement {
                       {selectedProject?.analysis?.topicTitle ??
                         "Chưa có topic title"}
                     </p>
-                    <p className="mt-3 text-xs text-zinc-500">
-                      Voice Vbee ngoc-huyen
-                    </p>
-                    {audioAssets["topic-title.mp3"] ? (
-                      <audio
-                        className="mt-4 w-full"
-                        controls
-                        preload="metadata"
-                        src={audioAssets["topic-title.mp3"]}
-                      >
-                        Trình duyệt không hỗ trợ audio.
-                      </audio>
-                    ) : (
+                    {skipTopicTitleVoice ? (
                       <p className="mt-3 text-xs text-amber-200">
-                        Chưa có audio. Bấm Generate all để tạo.
+                        Topic text ngắn nên không generate topic title voice.
                       </p>
+                    ) : (
+                      <>
+                        <p className="mt-3 text-xs text-zinc-500">
+                          Voice
+                        </p>
+                        <VoiceSelect
+                          value={
+                            selectedProject?.analysis
+                              ?.topicTitleVoiceId ??
+                            "ngoc-huyen"
+                          }
+                          disabled={
+                            operationLoading ||
+                            !selectedProject?.analysis
+                          }
+                          onChange={(voiceId) =>
+                            updateVoice(
+                              "topic-title",
+                              voiceId
+                            )
+                          }
+                        />
+                        {audioAssets["topic-title.mp3"] ? (
+                          <audio
+                            className="mt-4 w-full"
+                            controls
+                            preload="metadata"
+                            src={audioAssets["topic-title.mp3"]}
+                          >
+                            Trình duyệt không hỗ trợ audio.
+                          </audio>
+                        ) : (
+                          <p className="mt-3 text-xs text-amber-200">
+                            Chưa có audio. Bấm Generate all để tạo.
+                          </p>
+                        )}
+                      </>
                     )}
                     <button
                       type="button"
                       disabled={
                         operationLoading ||
+                        skipTopicTitleVoice ||
                         !selectedProject?.analysis?.topicTitle
                       }
                       onClick={() =>
                         void retryAudio("topic-title")
                       }
-                      className="mt-4 rounded-lg border border-fuchsia-300/30 px-3 py-2 text-xs text-fuchsia-200 transition hover:bg-fuchsia-400/10 disabled:opacity-50"
+                      className="mt-4 rounded-lg border border-fuchsia-300/30 px-3 py-2 text-xs text-fuchsia-200 transition hover:bg-fuchsia-400/10 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {operationLoading
-                        ? "Đang tạo..."
-                        : audioAssets["topic-title.mp3"]
-                          ? "Generate lại title voice"
-                          : "Generate topic title voice"}
+                      {skipTopicTitleVoice
+                        ? "Không generate topic title voice"
+                        : operationLoading
+                          ? "Đang tạo..."
+                          : audioAssets["topic-title.mp3"]
+                            ? "Generate lại title voice"
+                            : "Generate topic title voice"}
                     </button>
                   </div>
 
@@ -1130,10 +1448,22 @@ export default function Home(): React.ReactElement {
                           <p className="text-xs uppercase tracking-wider text-zinc-500">
                             Topic voice
                           </p>
-                          <p className="mt-3 text-sm text-fuchsia-200">
-                            {selectedProject?.analysis?.topicVoiceId ??
-                              "Chưa được chọn"}
-                          </p>
+                          <VoiceSelect
+                            value={
+                              selectedProject?.analysis
+                                ?.topicVoiceId
+                            }
+                            disabled={
+                              operationLoading ||
+                              !selectedProject?.analysis
+                            }
+                            onChange={(voiceId) =>
+                              updateVoice(
+                                "topic",
+                                voiceId
+                              )
+                            }
+                          />
                           <p className="mt-3 text-xs text-zinc-500">
                             {selectedProject?.audioFiles.includes("topic.mp3")
                               ? "✓ Audio generated"
@@ -1232,9 +1562,19 @@ export default function Home(): React.ReactElement {
                                 <p className="text-xs uppercase tracking-wider text-zinc-500">
                                   Selected voice
                                 </p>
-                                <p className="mt-2 text-sm text-fuchsia-200">
-                                  {reaction?.voiceId ?? "Chưa được chọn"}
-                                </p>
+                                <VoiceSelect
+                                  value={reaction?.voiceId}
+                                  disabled={
+                                    operationLoading ||
+                                    !reaction
+                                  }
+                                  onChange={(voiceId) =>
+                                    updateVoice(
+                                      target,
+                                      voiceId
+                                    )
+                                  }
+                                />
                                 <p className="mt-3 text-xs text-zinc-500">
                                   {selectedProject?.audioFiles.includes(
                                     audioFile
@@ -1281,179 +1621,23 @@ export default function Home(): React.ReactElement {
                     </div>
                   )}
                 </div>
-              ) : currentStep === "ASSETS" ? (
+              ) : currentStep === "TIMELINE" ? (
                 selectedProject ? (
-                  <AssetWorkspace
+                  <TimelineWorkspace
                     projectId={selectedProject.id}
-                    content={draftContent}
-                    reactions={selectedProject.reactions ?? []}
-                    backgroundAssetId={
-                      selectedProject.analysis?.backgroundAssetId
-                    }
-                    musicAssetId={
-                      selectedProject.analysis?.musicAssetId
-                    }
-                    onSaved={setSelectedProject}
+                    timeline={selectedProject.timeline}
+                    previewAssets={previewAssets}
+                    analysis={selectedProject.analysis}
+                    reactions={selectedProject.reactions}
+                    loading={operationLoading}
+                    onProjectUpdated={async (project) => {
+                      setSelectedProject(project);
+                      await loadPreviewAssets(project);
+                    }}
+                    onCreateTimeline={createTimeline}
                     onRematch={rematchAssets}
                   />
                 ) : null
-              ) : currentStep === "TIMELINE" ? (
-                <div className="space-y-5">
-                  <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-                    <div>
-                      <h3 className="font-medium">
-                        Timeline builder
-                      </h3>
-                      <p className="mt-1 text-sm text-zinc-400">
-                        Ghép topic, voice, screenshot và reaction thành timeline 9:16.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={operationLoading}
-                      onClick={() => void createTimeline()}
-                      className="rounded-lg bg-cyan-400 px-4 py-2 text-xs font-semibold text-cyan-950 transition hover:bg-cyan-300 disabled:opacity-50"
-                    >
-                      {operationLoading
-                        ? "Đang tạo..."
-                        : selectedProject?.timeline
-                          ? "Tạo lại timeline"
-                          : "Create timeline"}
-                    </button>
-                  </div>
-
-                  {selectedProject?.timeline && (
-                    <TimelinePreview
-                      timeline={selectedProject.timeline}
-                      assets={previewAssets}
-                    />
-                  )}
-
-                  {selectedProject?.timeline && (
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-medium">
-                          Scenes
-                        </h3>
-                        <span className="text-xs text-zinc-500">
-                          {selectedProject.timeline.scenes.length} scenes ·{" "}
-                          {selectedProject.timeline.totalDuration.toFixed(2)}s
-                        </span>
-                      </div>
-                      <div className="mt-4 space-y-3">
-                        {selectedProject.timeline.scenes.map(
-                          (scene, index) => (
-                            <div
-                              key={scene.id}
-                              className="rounded-xl border border-white/10 bg-black/10 p-4"
-                            >
-                              <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium text-cyan-200">
-                                  Scene {index + 1}
-                                  {scene.commentIndex === null
-                                    ? " · Topic"
-                                    : ` · Comment #${scene.commentIndex}`}
-                                </span>
-                                <span className="text-xs text-zinc-500">
-                                  {scene.audioDuration.toFixed(2)}s
-                                </span>
-                              </div>
-                              {scene.commentIndex !== null && (
-                                <div className="mt-2 space-y-2">
-                                  {(scene.blocks ?? [scene]).map(
-                                    (block) => (
-                                      <p
-                                        key={block.commentIndex}
-                                        className="text-sm leading-6 text-zinc-300"
-                                      >
-                                        <span className="mr-2 text-xs text-cyan-300">
-                                          Comment #{block.commentIndex}
-                                        </span>
-                                        {block.commentIndex === null
-                                          ? "Topic"
-                                          : draftContent?.comments[
-                                            block.commentIndex
-                                          ]?.text ?? "Không tìm thấy text"}
-                                      </p>
-                                    )
-                                  )}
-                                </div>
-                              )}
-                              <div className="mt-3 flex gap-4 text-xs text-zinc-500">
-                                <span>
-                                  Meme: {((scene.blocks ?? [scene])
-                                    .flatMap((block) => block.overlays)
-                                    .filter((overlay) => overlay.type === "meme")
-                                    .map((overlay) => formatAssetFile(overlay.file))
-                                    .join(", ")) || "none"}
-                                </span>
-                                <span>
-                                  Loại: {((scene.blocks ?? [scene])
-                                    .flatMap((block) => block.overlays)
-                                    .filter((overlay) => overlay.type === "meme")
-                                    .map((overlay) => getAssetMediaKind(overlay.file))
-                                    .join(", ")) || "none"}
-                                </span>
-                                <span>
-                                  SFX: {((scene.blocks ?? [scene])
-                                    .flatMap((block) => block.overlays)
-                                    .filter((overlay) => overlay.type === "sfx")
-                                    .map((overlay) => formatAssetFile(overlay.file))
-                                    .join(", ")) || "none"}
-                                </span>
-                                <span>
-                                  Audio: {scene.audioDuration.toFixed(2)}s
-                                </span>
-                              </div>
-                            </div>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : currentStep === "CAPCUT" ? (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-                  <h3 className="font-medium">
-                    CapCut project
-                  </h3>
-                  <p className="mt-2 text-sm leading-6 text-zinc-400">
-                    App sẽ tự tạo project rỗng đúng schema CapCut bằng
-                    capcut-cli rồi compile timeline editable vào đó.
-                  </p>
-                  <p className="mt-5 rounded-xl border border-white/10 bg-black/10 p-4 text-sm text-zinc-400">
-                    Project mới sẽ được tạo tự động trong thư mục CapCut
-                    mặc định khi bấm Generate.
-                  </p>
-                  <button
-                    type="button"
-                    disabled={
-                      operationLoading ||
-                      !selectedProject?.timeline
-                    }
-                    onClick={() =>
-                      void createCapCutProject()
-                    }
-                    className="mt-5 rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 disabled:opacity-50"
-                  >
-                    {operationLoading
-                      ? "Đang generate..."
-                      : "Generate CapCut project"}
-                  </button>
-                  {capCutOutput && (
-                    <div className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-                      <p className="text-xs text-zinc-500">
-                        Output folder
-                      </p>
-                      <p className="mt-2 break-all text-sm text-emerald-200">
-                        {capCutOutput}
-                      </p>
-                      <p className="mt-3 text-xs text-zinc-500">
-                        Đóng CapCut nếu đang mở, sau đó mở project folder này.
-                      </p>
-                    </div>
-                  )}
-                </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-12 text-center">
                   <p className="text-lg font-medium">
@@ -1479,7 +1663,7 @@ export default function Home(): React.ReactElement {
             </div>
           </div>
 
-          <footer className="flex items-center justify-between border-t border-white/10 px-10 py-5">
+          <footer className="flex shrink-0 items-center justify-between border-t border-white/10 px-10 py-5">
             <button
               type="button"
               onClick={previousStep}
@@ -1508,6 +1692,6 @@ export default function Home(): React.ReactElement {
           </footer>
         </section>
       </div>
-    </main>
+    </AppChrome>
   );
 }

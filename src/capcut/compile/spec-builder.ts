@@ -53,7 +53,8 @@ async function addSceneItems(
   imageItems: CompileItem[],
   overlayItems: CompileItem[],
   voiceItems: CompileItem[],
-  sfxItems: CompileItem[]
+  sfxItems: CompileItem[],
+  preserveVideoMemeDuration: boolean
 ): Promise<void> {
   for (const block of getSceneBlocks(scene)) {
     await addBlockItems(
@@ -62,7 +63,8 @@ async function addSceneItems(
       imageItems,
       overlayItems,
       voiceItems,
-      sfxItems
+      sfxItems,
+      preserveVideoMemeDuration
     );
   }
 }
@@ -73,7 +75,8 @@ async function addBlockItems(
   imageItems: CompileItem[],
   overlayItems: CompileItem[],
   voiceItems: CompileItem[],
-  sfxItems: CompileItem[]
+  sfxItems: CompileItem[],
+  preserveVideoMemeDuration: boolean
 ): Promise<void> {
   imageItems.push({
     path: absoluteAsset(block.imageFile),
@@ -116,11 +119,21 @@ async function addBlockItems(
         : {}),
       ...(overlay.scale !== undefined
         ? { scale: overlay.scale }
+        : {}),
+      ...(block.commentIndex < 0 &&
+        (overlay.animation === "slide-up" ||
+          overlay.animationDuration)
+        ? {
+            flyUp: true,
+            animationDuration:
+              overlay.animationDuration ?? 0.2
+          }
         : {})
     };
     if (
       overlay.type === "meme" &&
-      item.type === "video"
+      item.type === "video" &&
+      !preserveVideoMemeDuration
     ) {
       item.duration = await safeVideoDuration(
         item.duration,
@@ -140,10 +153,15 @@ async function addBlockItems(
   }
 }
 
+export interface CompileSpecOptions {
+  preserveVideoMemeDuration?: boolean;
+}
+
 export async function buildCompileSpec(
   projectDirectory: string,
   timeline: VideoTimeline,
-  topicTitleCardFile?: string
+  topicTitleCardFile?: string,
+  options: CompileSpecOptions = {}
 ): Promise<CompileSpec> {
   const imageItems: CompileItem[] = [];
   const overlayItems: CompileItem[] = [];
@@ -158,12 +176,16 @@ export async function buildCompileSpec(
       imageItems,
       overlayItems,
       voiceItems,
-      sfxItems
+      sfxItems,
+      options.preserveVideoMemeDuration === true
     );
     sceneStart += getSceneDuration(scene) + SCENE_GAP_SECONDS;
   }
 
-  if (timeline.topicIntro?.case === "long") {
+  if (
+    timeline.topicIntro?.case === "long" &&
+    timeline.topicIntro.titleVoiceFile
+  ) {
     voiceItems.push({
       path: absoluteAsset(
         timeline.topicIntro.titleVoiceFile
@@ -237,7 +259,10 @@ export async function buildCompileSpec(
         opacity: 1,
         scale: TOPIC_TITLE_SCALE,
         x: 0,
-        y: TOPIC_TITLE_TRANSFORM_Y
+        y: TOPIC_TITLE_TRANSFORM_Y,
+        flyUp: true,
+        animationDuration:
+          timeline.topicIntro.animationDuration
       }]
     });
   }

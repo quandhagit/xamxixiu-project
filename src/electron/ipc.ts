@@ -9,18 +9,35 @@ import {
 import fs from "node:fs/promises";
 
 import type {
+  CaptureCommentPayload,
   DesktopApi,
+  ExportProgress,
   ImportAssetsPayload,
+  ReplaceTimelineAssetPayload,
   SaveAssetAssignmentsPayload,
   UpdateAssetPayload,
-  UpdateContentPayload
+  UpdateContentPayload,
+  UpdateVoicePayload
 } from "./ipc-types.js";
+import { applyTimelineAssetReplacement } from "../timeline/replace-asset.js";
 import {
   ProjectStore
 } from "../project/store.js";
 import {
+  loadSettings,
+  saveSettings
+} from "./settings.js";
+import {
+  captureComment,
   captureThread
 } from "../capture.js";
+import {
+  applyImageOrder,
+  inverseImageOrder
+} from "../comments/apply-image-order.js";
+import {
+  discardUnsavedCommentFiles
+} from "../comments/reset-content.js";
 import {
   processProjectImages
 } from "../process-image.js";
@@ -28,12 +45,20 @@ import {
   generateCapCutProjectWithCli,
   validateCapCutBaseProject
 } from "../capcut/cli-adapter.js";
+import { exportTimelineVideo } from "../export/video-exporter.js";
 import type {
   CapCutBaseProject
 } from "../project/store.js";
 import type {
-  AudioFailureTarget
+  AudioFailureTarget,
+  VideoTimeline
 } from "../types.js";
+import {
+  renderTopicTitleCard
+} from "../capcut/compile/title-card.js";
+import {
+  TOPIC_TITLE_CARD_FILE
+} from "../timeline/topic-constants.js";
 import path from "node:path";
 import {
   AssetLibrary,
@@ -53,6 +78,41 @@ const MIME_TYPES: Record<string, string> = {
   ".mov": "video/quicktime",
   ".webm": "video/webm"
 };
+
+function importExtensions(
+  type: ImportAssetsPayload["type"],
+  mediaKind?: ImportAssetsPayload["mediaKind"]
+): string[] {
+  if (mediaKind === "image") {
+    return ["png", "jpg", "jpeg", "webp", "gif"];
+  }
+  if (mediaKind === "video" || type === "background") {
+    return ["mp4", "mov", "webm"];
+  }
+  if (mediaKind === "audio" || type === "sfx" || type === "music") {
+    return ["mp3", "wav", "m4a"];
+  }
+  if (type === "meme") {
+    return ["png", "jpg", "jpeg", "webp", "gif", "mp4", "mov", "webm"];
+  }
+  return ["mp3", "wav", "m4a"];
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("code" in error)
+  ) {
+    return undefined;
+  }
+
+  const code = error.code;
+
+  return typeof code === "string"
+    ? code
+    : undefined;
+}
 
 function isInsideDirectory(
   root: string,
@@ -118,7 +178,10 @@ function runYarnCommand(
 
 export function registerIpc(
   store: ProjectStore,
-  library: AssetLibrary
+  library: AssetLibrary,
+  options?: {
+    restartWebhook?: () => Promise<void>;
+  }
 ): void {
   ipcMain.handle(
     "capture:thread",
@@ -185,6 +248,112 @@ export function registerIpc(
       }
 
       return project;
+    }
+  );
+
+  ipcMain.handle(
+    "capture:comment",
+    async (
+      _event,
+      payload: CaptureCommentPayload
+    ) => {
+      if (
+        !payload ||
+        typeof payload.projectId !== "string" ||
+        typeof payload.url !== "string" ||
+        !Array.isArray(payload.existing)
+      ) {
+        throw new Error(
+          "Invalid capture comment payload"
+        );
+      }
+
+      if (
+        !Number.isInteger(payload.imageIndex) ||
+        payload.imageIndex < 0
+      ) {
+        throw new Error(
+          "imageIndex must be an integer greater than or equal to 0"
+        );
+      }
+
+      for (const item of payload.existing) {
+        if (
+          !item ||
+          typeof item.author !== "string" ||
+          typeof item.text !== "string"
+        ) {
+          throw new Error(
+            "Existing comments are invalid"
+          );
+        }
+      }
+
+      if (!payload.url.trim()) {
+        throw new Error(
+          "Threads URL cannot be empty"
+        );
+      }
+
+      let parsedUrl: URL;
+
+      try {
+        parsedUrl = new URL(payload.url);
+      } catch {
+        throw new Error(
+          "Invalid Threads URL"
+        );
+      }
+
+      const allowedHosts = new Set([
+        "threads.net",
+        "www.threads.net",
+        "threads.com",
+        "www.threads.com"
+      ]);
+
+      if (!allowedHosts.has(
+        parsedUrl.hostname.toLowerCase()
+      )) {
+        throw new Error(
+          "URL must belong to Threads"
+        );
+      }
+
+      const directory =
+        store.getProjectDirectory(
+          payload.projectId
+        );
+
+      try {
+        const stat = await fs.stat(directory);
+
+        if (!stat.isDirectory()) {
+          throw new Error(
+            `Project could not be loaded: ${payload.projectId}`
+          );
+        }
+      } catch (error: unknown) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith(
+            "Project could not be loaded:"
+          )
+        ) {
+          throw error;
+        }
+
+        throw new Error(
+          `Project could not be loaded: ${payload.projectId}`
+        );
+      }
+
+      return captureComment({
+        projectDir: directory,
+        url: payload.url,
+        imageIndex: payload.imageIndex,
+        existing: payload.existing
+      });
     }
   );
 
@@ -296,14 +465,25 @@ export function registerIpc(
           path.resolve(process.cwd(), normalized)
         );
       }
-      const assetPath = candidates.find((candidate) =>
-        isInsideDirectory(projectDirectory, candidate) ||
-        isInsideDirectory(libraryRoot, candidate)
+      const insideCandidates = candidates.filter(
+        (candidate) =>
+          isInsideDirectory(projectDirectory, candidate) ||
+          isInsideDirectory(libraryRoot, candidate)
       );
-      if (!assetPath) {
+      if (insideCandidates.length === 0) {
         throw new Error(
           "Preview asset path is outside the project/assets directories"
         );
+      }
+      let assetPath = insideCandidates[0];
+      for (const candidate of insideCandidates) {
+        try {
+          await fs.access(candidate);
+          assetPath = candidate;
+          break;
+        } catch {
+          // Try the next resolved path.
+        }
       }
 
       const extension =
@@ -314,7 +494,49 @@ export function registerIpc(
           "Unsupported preview asset type"
         );
       }
-      const buffer = await fs.readFile(assetPath);
+      let buffer: Buffer;
+      try {
+        buffer = await fs.readFile(assetPath);
+      } catch {
+        let timeline: VideoTimeline | undefined;
+        try {
+          timeline = JSON.parse(
+            await fs.readFile(
+              path.join(
+                projectDirectory,
+                "timeline.json"
+              ),
+              "utf-8"
+            )
+          ) as VideoTimeline;
+        } catch {
+          timeline = undefined;
+        }
+        if (
+          path.basename(sourcePath) === "topic-title.mp3" &&
+          timeline?.topicIntro?.case !== "long"
+        ) {
+          return "";
+        }
+        if (
+          path.basename(assetPath) !==
+          path.basename(TOPIC_TITLE_CARD_FILE)
+        ) {
+          throw new Error(
+            `Preview asset not found: ${sourcePath}`
+          );
+        }
+        if (!timeline?.topicIntro?.title) {
+          throw new Error(
+            "Preview asset not found: topic title card"
+          );
+        }
+        const generated = await renderTopicTitleCard(
+          projectDirectory,
+          timeline.topicIntro.title
+        );
+        buffer = await fs.readFile(generated);
+      }
       return `data:${mimeType};base64,${buffer.toString("base64")}`;
     }
   );
@@ -342,11 +564,7 @@ export function registerIpc(
         properties: ["openFile", "multiSelections"],
         filters: [{
           name: "Supported media",
-          extensions: payload.type === "meme"
-            ? ["png", "jpg", "jpeg", "webp", "gif", "mp4", "mov", "webm"]
-            : payload.type === "background"
-              ? ["mp4", "mov", "webm"]
-              : ["mp3", "wav", "m4a"]
+          extensions: importExtensions(payload.type, payload.mediaKind)
         }]
       });
       if (result.canceled || result.filePaths.length === 0) {
@@ -429,9 +647,50 @@ export function registerIpc(
           backgroundAssetId:
             payload.backgroundAssetId,
           musicAssetId:
-            payload.musicAssetId
+            payload.musicAssetId,
+          ...("topicMemeId" in payload
+            ? { topicMemeId: payload.topicMemeId }
+            : {})
         }
       );
+    }
+  );
+
+  ipcMain.handle(
+    "project:replace-timeline-asset",
+    async (
+      _event,
+      payload: ReplaceTimelineAssetPayload
+    ) => {
+      if (
+        !payload ||
+        typeof payload.projectId !== "string" ||
+        (payload.assetId !== null && typeof payload.assetId !== "string") ||
+        !payload.target
+      ) {
+        throw new Error("Invalid timeline asset payload");
+      }
+      const project = await store.getProject(payload.projectId);
+      if (!project) {
+        throw new Error(
+          `Project could not be loaded: ${payload.projectId}`
+        );
+      }
+      const assets = await library.list();
+      const replacement = applyTimelineAssetReplacement(
+        project.reactions ?? [],
+        project.analysis,
+        assets,
+        payload.target,
+        payload.assetId
+      );
+      await store.saveReactions(
+        payload.projectId,
+        replacement.reactions,
+        assets,
+        replacement.selections
+      );
+      return store.rebuildTimeline(payload.projectId);
     }
   );
 
@@ -445,17 +704,70 @@ export function registerIpc(
         store.getProjectDirectory(
           payload.projectId
         );
+      const imageOrder = payload.imageOrder;
+      const commentCount =
+        payload.content.comments.length;
+      const applyingOrder =
+        !!imageOrder &&
+        imageOrder.some(
+          (value, index) => value !== index
+        );
+      const timelinePath = path.join(
+        directory,
+        "timeline.json"
+      );
+      let timelineBackup: Buffer | undefined;
+
+      if (applyingOrder) {
+        try {
+          timelineBackup = await fs.readFile(
+            timelinePath
+          );
+        } catch (error: unknown) {
+          if (errorCode(error) !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+
+      await applyImageOrder(
+        directory,
+        imageOrder,
+        commentCount
+      );
+
       const target =
         path.join(directory, "content.json");
       const temporary =
         `${target}.tmp`;
 
-      await fs.writeFile(
-        temporary,
-        JSON.stringify(payload.content, null, 2),
-        "utf-8"
-      );
-      await fs.rename(temporary, target);
+      try {
+        await fs.writeFile(
+          temporary,
+          JSON.stringify(payload.content, null, 2),
+          "utf-8"
+        );
+        await fs.rename(temporary, target);
+      } catch (error: unknown) {
+        await fs.rm(temporary, { force: true });
+
+        if (applyingOrder && imageOrder) {
+          await applyImageOrder(
+            directory,
+            inverseImageOrder(imageOrder),
+            commentCount
+          );
+
+          if (timelineBackup) {
+            await fs.writeFile(
+              timelinePath,
+              timelineBackup
+            );
+          }
+        }
+
+        throw error;
+      }
 
       const project =
         await store.getProject(payload.projectId);
@@ -467,6 +779,51 @@ export function registerIpc(
       }
 
       return project;
+    }
+  );
+
+  ipcMain.handle(
+    "project:reset-content",
+    async (_event, projectId: string) => {
+      const directory =
+        store.getProjectDirectory(projectId);
+
+      await discardUnsavedCommentFiles(directory);
+
+      const project =
+        await store.getProject(projectId);
+
+      if (!project) {
+        throw new Error(
+          `Project could not be loaded: ${projectId}`
+        );
+      }
+
+      return project;
+    }
+  );
+
+  ipcMain.handle(
+    "project:update-voice",
+    async (_event, payload: UpdateVoicePayload) => {
+      if (
+        !payload ||
+        typeof payload.projectId !== "string" ||
+        typeof payload.voiceId !== "string" ||
+        (
+          payload.target !== "topic" &&
+          payload.target !== "topic-title" &&
+          !/^comment-\d+$/.test(payload.target)
+        )
+      ) {
+        throw new Error("Invalid voice payload");
+      }
+
+      return store.saveVoiceAssignment(
+        payload.projectId,
+        payload.target,
+        payload.voiceId
+      );
     }
   );
 
@@ -551,22 +908,7 @@ export function registerIpc(
   ipcMain.handle(
     "project:create-timeline",
     async (_event, projectId: string) => {
-      const directory =
-        store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        ["create-timeline", directory],
-        process.cwd()
-      );
-      const project =
-        await store.getProject(projectId);
-
-      if (!project) {
-        throw new Error(
-          `Project could not be loaded: ${projectId}`
-        );
-      }
-
-      return project;
+      return store.rebuildTimeline(projectId);
     }
   );
 
@@ -578,6 +920,97 @@ export function registerIpc(
       return generateCapCutProjectWithCli(
         directory
       );
+    }
+  );
+
+  ipcMain.handle(
+    "project:export-video",
+    async (event, projectId: string) => {
+      if (
+        typeof projectId !== "string" ||
+        !projectId
+      ) {
+        throw new Error("Invalid project id");
+      }
+      const directory =
+        store.getProjectDirectory(projectId);
+      const defaultName = `${projectId.replace(
+        /-thread$/,
+        ""
+      )}.mp4`;
+      const result = await dialog.showSaveDialog({
+        title: "Xuất video",
+        defaultPath: path.join(
+          directory,
+          defaultName
+        ),
+        filters: [
+          {
+            name: "MP4 video",
+            extensions: ["mp4"]
+          }
+        ]
+      });
+      if (
+        result.canceled ||
+        !result.filePath
+      ) {
+        return null;
+      }
+      const outputPath =
+        result.filePath.toLowerCase().endsWith(
+          ".mp4"
+        )
+          ? result.filePath
+          : `${result.filePath}.mp4`;
+      const sendProgress = (
+        progress: ExportProgress
+      ): void => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(
+            "export:progress",
+            progress
+          );
+        }
+      };
+      return exportTimelineVideo(
+        directory,
+        outputPath,
+        sendProgress
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "shell:show-item",
+    async (_event, targetPath: string) => {
+      if (
+        typeof targetPath !== "string" ||
+        !targetPath
+      ) {
+        throw new Error("Invalid path");
+      }
+      shell.showItemInFolder(
+        path.resolve(targetPath)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "shell:open-path",
+    async (_event, targetPath: string) => {
+      if (
+        typeof targetPath !== "string" ||
+        !targetPath
+      ) {
+        throw new Error("Invalid path");
+      }
+      const error = await shell.openPath(
+        path.resolve(targetPath)
+      );
+      if (error) {
+        throw new Error(error);
+      }
     }
   );
 
@@ -658,6 +1091,20 @@ export function registerIpc(
   );
 
   ipcMain.handle(
+    "projects:delete",
+    async (_event, projectId: string) => {
+      if (
+        typeof projectId !== "string" ||
+        !projectId
+      ) {
+        throw new Error("Invalid project id");
+      }
+
+      await store.deleteProject(projectId);
+    }
+  );
+
+  ipcMain.handle(
     "projects:create-state",
     (_event, projectId: string) =>
       store.createProjectState(projectId)
@@ -673,6 +1120,65 @@ export function registerIpc(
 
       if (error) {
         throw new Error(error);
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "settings:get",
+    () => loadSettings()
+  );
+
+  ipcMain.handle(
+    "settings:choose-directory",
+    async () => {
+      const result = await dialog.showOpenDialog({
+        title: "Chọn thư mục drafts của CapCut",
+        properties: ["openDirectory", "createDirectory"]
+      });
+      if (
+        result.canceled ||
+        result.filePaths.length === 0
+      ) {
+        return null;
+      }
+      return result.filePaths[0];
+    }
+  );
+
+  ipcMain.handle(
+    "settings:save",
+    async (_event, input: unknown) => {
+      const previousPort =
+        process.env.VBEE_WEBHOOK_PORT ?? "";
+      const settings = await saveSettings(input);
+      const nextPort =
+        process.env.VBEE_WEBHOOK_PORT ?? "";
+      if (
+        previousPort === nextPort ||
+        !options?.restartWebhook
+      ) {
+        return {
+          settings,
+          tunnelRestarted: false
+        };
+      }
+
+      try {
+        await options.restartWebhook();
+        return {
+          settings,
+          tunnelRestarted: true
+        };
+      } catch (error) {
+        return {
+          settings,
+          tunnelRestarted: false,
+          tunnelError:
+            error instanceof Error
+              ? error.message
+              : "Không khởi động lại được webhook."
+        };
       }
     }
   );

@@ -39,7 +39,7 @@ export async function processProjectImages(
   }
 }
 
-async function processImage(
+export async function processImage(
   inputPath: string,
   outputPath: string
 ): Promise<void> {

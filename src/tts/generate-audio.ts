@@ -20,6 +20,9 @@ import type {
 import type {
   ThreadAnalysis
 } from "../types.js";
+import {
+  shouldGenerateTopicTitleVoice
+} from "../timeline/topic-constants.js";
 
 function pickVoice(index: number): Voice {
   if (VOICE_POOL.length === 0) {
@@ -234,9 +237,12 @@ async function generateAudio(
 
   if (
     analysis?.topicTitle &&
-    thread.text.length > 200 &&
+    shouldGenerateTopicTitleVoice(thread.text) &&
     (!onlyTarget || onlyTarget === "topic-title")
   ) {
+    const titleText = analysis.topicTitle;
+    const titleVoiceId =
+      analysis.topicTitleVoiceId ?? "ngoc-huyen";
     const titleJob = async (): Promise<void> => {
       const target = "topic-title" as const;
       const outputFile = path.join(
@@ -246,8 +252,8 @@ async function generateAudio(
       console.log("Generating topic-title.mp3...");
       try {
         await tts.synthesize({
-          text: analysis.topicTitle!,
-          voice: findVoice("ngoc-huyen", 0),
+          text: titleText,
+          voice: findVoice(titleVoiceId, 0),
           outputFile
         });
         clearFailure(target);

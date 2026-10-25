@@ -9,6 +9,9 @@ export interface CompileItem {
   scale?: number;
   x?: number;
   y?: number;
+  fadeIn?: number;
+  flyUp?: boolean;
+  animationDuration?: number;
   text?: string;
   fontSize?: number;
   color?: string;

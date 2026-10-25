@@ -21,7 +21,8 @@
     "electron:dev": "yarn electron:build && wait-on http://localhost:3000 && electron dist-electron/electron/main.js",
     "dev": "concurrently -k \"yarn renderer:dev\" \"yarn electron:dev\"",
     "build": "yarn renderer:build && yarn electron:build",
-    "package:win": "yarn build && electron-builder --win"
+    "fetch:cloudflared": "node scripts/fetch-cloudflared.mjs",
+    "package:win": "yarn fetch:cloudflared && yarn build && electron-builder --win"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
@@ -69,6 +70,14 @@
           "**/*_sample*",
           "**/_sample/**"
         ]
+      },
+      {
+        "from": "vendor/cloudflared.exe",
+        "to": "cloudflared.exe"
+      },
+      {
+        "from": "vendor/cloudflared.LICENSE",
+        "to": "cloudflared.LICENSE"
       }
     ],
     "win": {

@@ -19,7 +19,7 @@ export interface VbeeServices {
 }
 
 function getPort(): number {
-  const value = process.env.VBEE_WEBHOOK_PORT ?? "3000";
+  const value = process.env.VBEE_WEBHOOK_PORT ?? "3001";
   const port = Number(value);
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -29,8 +29,10 @@ function getPort(): number {
   return port;
 }
 
-function getCloudflaredCommand(): string {
-  return process.env.CLOUDFLARED_PATH ?? "cloudflared";
+function getCloudflaredCommand(
+  cloudflaredPath?: string
+): string {
+  return cloudflaredPath?.trim() || "cloudflared";
 }
 
 function stopProcess(child: TunnelProcess): void {
@@ -40,13 +42,14 @@ function stopProcess(child: TunnelProcess): void {
 }
 
 async function startQuickTunnel(
-  port: number
+  port: number,
+  cloudflaredPath?: string
 ): Promise<{
   child: TunnelProcess;
   publicUrl: string;
 }> {
   const child = spawn(
-    getCloudflaredCommand(),
+    getCloudflaredCommand(cloudflaredPath),
     ["tunnel", "--url", `http://localhost:${port}`],
     {
       stdio: ["ignore", "pipe", "pipe"],
@@ -96,7 +99,7 @@ async function startQuickTunnel(
         clearTimeout(timeout);
         reject(
           new Error(
-            `Could not start cloudflared (${getCloudflaredCommand()}): ${error.message}`
+            `Could not start cloudflared (${getCloudflaredCommand(cloudflaredPath)}): ${error.message}`
           )
         );
       }
@@ -116,14 +119,19 @@ async function startQuickTunnel(
   });
 }
 
-export async function startVbeeServices(): Promise<VbeeServices> {
+export async function startVbeeServices(options?: {
+  cloudflaredPath?: string;
+}): Promise<VbeeServices> {
   const port = getPort();
   let webhookServer: Server | undefined;
   let tunnel: TunnelProcess | undefined;
 
   try {
     webhookServer = await startWebhookServer(String(port));
-    const startedTunnel = await startQuickTunnel(port);
+    const startedTunnel = await startQuickTunnel(
+      port,
+      options?.cloudflaredPath
+    );
     tunnel = startedTunnel.child;
 
     const webhookUrl =

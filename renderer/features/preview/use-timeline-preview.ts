@@ -11,7 +11,8 @@ import type {
 } from "./preview-types";
 import {
   getPreviewAudioTracks,
-  getPreviewScene
+  getPreviewScene,
+  previewSeekThreshold
 } from "./preview-timeline";
 import type { VideoTimeline } from "../../../src/types";
 
@@ -20,7 +21,7 @@ interface UseTimelinePreviewOptions {
   assets: Record<string, string>;
 }
 
-interface UseTimelinePreviewResult {
+export interface UseTimelinePreviewResult {
   previewTime: number;
   previewPlaying: boolean;
   previewScene: PreviewSceneState | undefined;
@@ -57,19 +58,42 @@ export function useTimelinePreview({
   );
 
   useEffect(() => {
+    if (!timeline) {
+      setPreviewTime(0);
+      setPreviewPlaying(false);
+      return;
+    }
+    if (previewTime > timeline.totalDuration) {
+      setPreviewTime(0);
+      setPreviewPlaying(false);
+    }
+  }, [previewTime, timeline]);
+
+  useEffect(() => {
     if (!previewPlaying || !timeline) {
       return;
     }
-    const timer = window.setInterval(() => {
+    let frame = 0;
+    let last = performance.now();
+    const tick = (now: number): void => {
+      const delta = (now - last) / 1000;
+      last = now;
       setPreviewTime((time) => {
         if (time >= timeline.totalDuration) {
           setPreviewPlaying(false);
           return 0;
         }
-        return Math.min(time + 0.05, timeline.totalDuration);
+        const next = time + delta;
+        if (next >= timeline.totalDuration) {
+          setPreviewPlaying(false);
+          return 0;
+        }
+        return next;
       });
-    }, 50);
-    return () => window.clearInterval(timer);
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
   }, [previewPlaying, timeline]);
 
   useEffect(() => {
@@ -79,7 +103,10 @@ export function useTimelinePreview({
     }
     if (video.readyState >= 1 && video.duration > 0) {
       const target = previewTime % video.duration;
-      if (Math.abs(video.currentTime - target) > 0.15) {
+      if (
+        Math.abs(video.currentTime - target) >
+        previewSeekThreshold(previewPlaying)
+      ) {
         video.currentTime = target;
       }
     }
@@ -108,7 +135,14 @@ export function useTimelinePreview({
 
       const syncAudio = (): void => {
         const target = previewTime - track.start;
-        if (Math.abs(audio.currentTime - target) > 0.15) {
+        if (audio.duration > 0 && target >= audio.duration) {
+          audio.pause();
+          return;
+        }
+        if (
+          Math.abs(audio.currentTime - target) >
+          previewSeekThreshold(previewPlaying)
+        ) {
           audio.currentTime = target;
         }
         audio.volume = track.volume;

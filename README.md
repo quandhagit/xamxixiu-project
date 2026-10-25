@@ -2,16 +2,17 @@
 
 Ứng dụng desktop Windows tự động tạo video ngắn từ bài đăng Threads:
 
-`INPUT → CAPTURE → ANALYZE → VOICE → ASSETS → TIMELINE → CAPCUT`
+`INPUT → CAPTURE → ANALYZE → VOICE → TIMELINE`
 
 ## Yêu cầu
 
 - Windows 10/11
 - Node.js 20 trở lên
 - Yarn Classic 1.x
+- FFmpeg trên PATH (cần cho **Xuất video** MP4)
 - Tài khoản và API key DeepSeek
 - Tài khoản Vbee TTS
-- Cloudflared nếu muốn Vbee gửi webhook về máy local
+- Cloudflared chỉ khi không dùng binary đi kèm app (`vendor/cloudflared.exe` hoặc bản cài)
 
 Kiểm tra môi trường:
 
@@ -54,11 +55,15 @@ VBEE_WEBHOOK_PORT=3001
 
 Không commit `.env` vì file này chứa secret.
 
+Trong app desktop, bấm **Settings** trên header để điền DeepSeek API key, model, Vbee access token, app id và webhook port. Giá trị đã lưu nằm trong thư mục dữ liệu của app và được ưu tiên hơn `.env`.
+
+App tự chạy `cloudflared` đi kèm và tự tạo URL webhook. Không cần cài Cloudflared hay điền `VBEE_WEBHOOK_URL` khi dùng giao diện. `CLOUDFLARED_PATH` chỉ cần khi muốn dùng một binary khác.
+
 ## Chạy app local
 
 ### 1. Chạy desktop app và Vbee Quick Tunnel
 
-Đảm bảo `cloudflared` đã được cài đặt và có trong `PATH`, sau đó chạy:
+App dùng `vendor/cloudflared.exe` nếu file đó có sẵn (tải bằng `yarn fetch:cloudflared`). Nếu không, app tìm `cloudflared` trên `PATH`. Sau đó chạy:
 
 ```powershell
 yarn dev
@@ -84,22 +89,24 @@ Lệnh này cũng chạy:
 4. Bấm **Next** để sang **Analyze**. DeepSeek sẽ phân tích tone, chủ đề, emotion và chọn voice.
 5. Bấm **Next** để tạo audio bằng Vbee.
 6. Nếu voice lỗi, các comment khác vẫn tiếp tục chạy. Item lỗi sẽ có nút **Retry**.
-7. Bấm **Next** tại **Assets** để match meme, SFX và animation, rồi chỉnh thư viện hoặc assignment nếu cần.
-8. Tại **Timeline**, bấm **Create timeline** rồi dùng **Draft preview** để
-   kiểm tra vị trí, timing và audio từng scene.
-9. Tiếp tục sang **CapCut** và Generate sau khi preview đạt yêu cầu.
+7. Bấm **Next** tại **Voice** để match meme/SFX rồi tạo timeline. Chọn lại
+   meme, video, SFX, background và music ngay trên các track; timeline tự
+   tính lại thời lượng sau mỗi lần đổi.
+8. Dùng preview 9:16 và playhead trên track để kiểm tra trước khi xuất.
+9. Ở bước **Timeline**, bấm **Xuất video** để render MP4 hoặc **Generate CapCut**
+   để tạo project chỉnh sửa trong CapCut.
 
 Project được lưu trong thư mục `projects/`. Thư mục này là dữ liệu runtime và được Git ignore.
 
 ## Local asset library
 
-Media đầy đủ không nằm trong Git. App Electron lưu thư viện writable tại:
+Media đầy đủ không nằm trong Git. Khi chạy `yarn dev`, app đọc thư viện từ thư mục `assets/` trong project và index file đã có. Bản cài Windows dùng:
 
 ```text
 %APPDATA%\xamxixiu-project\assets
 ```
 
-Lần chạy đầu, app tạo category mặc định và seed các file `_sample` từ assets bundled. User tự import, sửa metadata/usage/`spec`, preview và xóa trong bước **Assets**.
+Lần chạy đầu của bản cài, app seed các file `_sample`. User tự import, sửa metadata/`spec`, preview và xóa ở trang **Library**, chia theo tab Meme ảnh, Meme video, SFX, Music và Background.
 
 - Format hỗ trợ: meme ảnh/video (`png`, `jpg`, `webp`, `gif`, `mp4`, `mov`, `webm`), SFX/music (`mp3`, `wav`, `m4a`), background (`mp4`, `mov`, `webm`).
 - Mỗi category trong Git chỉ giữ một media mẫu `_sample.*`.
@@ -108,12 +115,13 @@ Lần chạy đầu, app tạo category mặc định và seed các file `_sampl
 - Xóa asset đang được project dùng sẽ bị chặn và app liệt kê project tham chiếu.
 - CLI dùng `assets/` trong repo trừ khi set `XAMXIXIU_ASSET_ROOT`.
 
-Trong bước **Assets** có thể:
+Trang **Library** quản lý thư viện meme, SFX, music và background.
 
-- Quản lý thư viện meme, SFX, music và background.
-- Đổi meme/SFX, animation, duration cho từng comment, rồi **Save**.
-- Chọn background/music dùng khi tạo timeline, thay vì random ngoài catalog.
-- **Rematch** để chạy lại matching tự động.
+Trong bước **Timeline** của project gán lại asset trên track:
+
+- Click clip meme / video / SFX / background / music để chọn asset khác.
+- Timeline rebuild theo duration file mới và rule timing hiện có.
+- **Rematch** để chạy lại matching tự động rồi tạo lại timeline.
 
 Installer Windows chỉ bundle sample, không đóng gói thư viện user.
 
@@ -166,7 +174,12 @@ yarn build
 yarn package:win
 ```
 
-## Generate project CapCut
+## Xuất video và Generate CapCut
+
+Trong bước **Timeline**, mục **Xuất video** có hai nút:
+
+- **Xuất video**: render file MP4 9:16 bằng FFmpeg từ timeline hiện tại.
+- **Generate CapCut**: tạo project CapCut editable để chỉnh tiếp.
 
 App dùng `capcut-cli` để tự tạo project rỗng và ghi timeline vào đó. CLI lấy
 template từ project mới nhất do chính CapCut tạo ra, nên giữ đúng
@@ -182,8 +195,8 @@ capcut version "<đường-dẫn-project>"
 Topic title dùng Vbee TTS với voice `ngoc-huyen`, không cần cài Python hoặc
 thư viện TTS riêng nào khác.
 
-Trong bước `CAPCUT`, chỉ cần bấm **Generate CapCut project**. App tự dùng thư
-mục drafts mặc định:
+Trong bước `TIMELINE`, bấm **Generate CapCut** để tạo project CapCut. App ghi vào thư
+mục drafts trong **Settings**. Mặc định là:
 
 ```text
 %LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft
@@ -196,7 +209,7 @@ App sẽ:
 - Căn ảnh comment ở scale 85%, vị trí dọc khoảng 1/3 màn hình (Y≈640) và giữ ảnh trên màn
   hình trong suốt thời gian meme/SFX đang chạy.
 - Tắt tiếng track background.
-- Đặt meme ở giữa khung hình và fade-in trong 0.5 giây.
+- Đặt meme full width giữa khung hình và fade-in trong 0.5 giây.
 - Meme và SFX có thời lượng xuất hiện tối thiểu 1 giây.
 - Chuyển sang comment tiếp theo sau khi SFX/meme dài nhất của comment hiện tại
   kết thúc; SFX được giữ đủ thời lượng thật của file.
@@ -222,7 +235,7 @@ yarn create-capcut-project `
 
 - Kiểm tra `yarn vbee-webhook` đang chạy.
 - Kiểm tra `VBEE_WEBHOOK_PORT` là `3001`.
-- Kiểm tra Cloudflared đang forward đến đúng port `3001`.
+- Kiểm tra Cloudflared đang forward đến đúng port. App dùng binary đi kèm; nếu muốn bản khác thì set `CLOUDFLARED_PATH`.
 - Kiểm tra `VBEE_WEBHOOK_URL` có đuôi `/webhooks/vbee`.
 
 ### DeepSeek không chạy

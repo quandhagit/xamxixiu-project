@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import {
+  TOPIC_TITLE_CARD_FILE,
   TOPIC_TITLE_LINE_HEIGHT,
   TOPIC_TITLE_MIN_HEIGHT,
   TOPIC_TITLE_PADDING,
@@ -45,8 +46,7 @@ export async function renderTopicTitleCard(
 ): Promise<string> {
   const output = path.join(
     projectDirectory,
-    "processed",
-    "topic-title-card.png"
+    ...TOPIC_TITLE_CARD_FILE.split("/")
   );
   await fs.mkdir(path.dirname(output), { recursive: true });
 

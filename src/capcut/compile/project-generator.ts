@@ -46,7 +46,7 @@ async function assertCapCutProject(
   );
 }
 
-function getCapCutDraftsDirectory(): string {
+export function defaultCapCutDraftsDirectory(): string {
   const localAppData =
     process.env.LOCALAPPDATA ??
     path.join(os.homedir(), "AppData", "Local");
@@ -57,6 +57,11 @@ function getCapCutDraftsDirectory(): string {
     "Projects",
     "com.lveditor.draft"
   );
+}
+
+function getCapCutDraftsDirectory(): string {
+  return process.env.CAPCUT_DRAFTS_DIR?.trim() ||
+    defaultCapCutDraftsDirectory();
 }
 
 function projectName(projectDirectory: string): string {

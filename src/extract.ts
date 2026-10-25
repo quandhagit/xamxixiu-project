@@ -40,39 +40,13 @@ export async function extractThread(
   for (let i = 0; i < count; i++) {
     const container =
       containers.nth(i);
+    const content =
+      await readPressableComment(container);
 
-    const profileLink =
-      container
-        .locator(
-          'a[role="link"][href^="/@"]'
-        )
-        .first();
-
-    if (!(await profileLink.count())) {
+    if (!content) {
       continue;
     }
 
-    const author =
-      (
-        await profileLink.innerText()
-      ).trim();
-
-    if (!author) {
-      continue;
-    }
-
-    const text =
-      await extractContentText(
-        container,
-        author
-      );
-
-    if (!text) {
-      continue;
-    }
-
-    const likes =
-      await extractLikes(container);
     const groupContainerIndexes =
       await extractCommentGroupIndexes(
         container,
@@ -81,9 +55,9 @@ export async function extractThread(
 
     results.push({
       index: i,
-      author,
-      text,
-      likes,
+      author: content.author,
+      text: content.text,
+      likes: content.likes,
       ...(groupContainerIndexes
         ? { groupContainerIndexes }
         : {})
@@ -180,6 +154,78 @@ export async function extractThread(
     likes: post.likes,
     postContainerIndex: post.index,
     comments
+  };
+}
+
+export async function extractPressableComment(
+  page: Page,
+  containerIndex: number
+): Promise<{
+  author: string;
+  text: string;
+  likes: number;
+} | undefined> {
+  const containers =
+    page.locator(PRESSABLE_SELECTOR);
+  const count =
+    await containers.count();
+
+  if (
+    containerIndex < 0 ||
+    containerIndex >= count
+  ) {
+    return undefined;
+  }
+
+  return readPressableComment(
+    containers.nth(containerIndex)
+  );
+}
+
+async function readPressableComment(
+  container: ReturnType<Page["locator"]>
+): Promise<{
+  author: string;
+  text: string;
+  likes: number;
+} | undefined> {
+  const profileLink =
+    container
+      .locator(
+        'a[role="link"][href^="/@"]'
+      )
+      .first();
+
+  if (!(await profileLink.count())) {
+    return undefined;
+  }
+
+  const author =
+    (
+      await profileLink.innerText()
+    ).trim();
+
+  if (!author) {
+    return undefined;
+  }
+
+  const text =
+    await extractContentText(
+      container,
+      author
+    );
+
+  if (!text) {
+    return undefined;
+  }
+
+  const likes =
+    await extractLikes(container);
+
+  return {
+    author,
+    text,
+    likes
   };
 }
 

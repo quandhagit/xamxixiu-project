@@ -74,3 +74,11 @@ export const VOICE_POOL: Voice[] = [
       "sg_male_chidat_ebook_48k-phg"
   }
 ];
+
+export function isKnownVoiceId(
+  voiceId: string
+): boolean {
+  return VOICE_POOL.some(
+    (voice) => voice.id === voiceId
+  );
+}

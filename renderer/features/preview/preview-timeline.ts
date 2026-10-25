@@ -62,11 +62,17 @@ export function getPreviewScene(
   };
 }
 
+export function previewSeekThreshold(
+  playing: boolean
+): number {
+  return playing ? 0.08 : 1 / 30;
+}
+
 export function getOverlayStyle(
   overlay: TimelineOverlay
 ): React.CSSProperties {
   return {
-    width: `${(overlay.scale ?? 0.48) * 100}%`,
+    width: `${(overlay.scale ?? 1) * 100}%`,
     left: `${50 + (overlay.x ?? 0) * 50}%`,
     top: `${50 - (overlay.y ?? 0) * 50}%`,
     transform: "translate(-50%, -50%)"
@@ -98,7 +104,10 @@ export function getPreviewAudioTracks(
       volume: 0.35
     });
   }
-  if (timeline.topicIntro?.case === "long") {
+  if (
+    timeline.topicIntro?.case === "long" &&
+    timeline.topicIntro.titleVoiceFile
+  ) {
     tracks.push({
       key: "topic-title-voice",
       file: timeline.topicIntro.titleVoiceFile,

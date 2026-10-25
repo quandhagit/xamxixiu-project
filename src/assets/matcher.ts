@@ -114,10 +114,8 @@ export function matchReactions(
       emotion: reaction.emotion,
       meme,
       sfx,
-      animation: meme?.mediaKind === "image"
-        ? reaction.animation
-        : "none",
-      duration: reaction.duration
+      animation: "none",
+      duration: 1
     };
   });
 }
