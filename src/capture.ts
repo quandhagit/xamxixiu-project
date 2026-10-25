@@ -26,10 +26,64 @@ import type {
   ThreadComment
 } from "./types.js";
 
+import {
+  expandComment
+} from "./comments/speech-abbreviations.js";
+
+import {
+  CAPTURE_COMMENT_TARGET
+} from "./comments/comment-constants.js";
+
 export interface CaptureResult {
   projectDir: string;
   threadPath: string;
   rawDir: string;
+}
+
+const PRESSABLE_SELECTOR =
+  '[data-pressable-container="true"]';
+const MAX_SCROLL_ROUNDS = 15;
+const MAX_STALLED_ROUNDS = 3;
+
+/**
+ * Scrolls the page until enough comment containers are rendered (the post
+ * itself counts as one) or no new containers appear. Returns to the top so
+ * container indexes stay stable for extraction and screenshots.
+ */
+async function loadMoreComments(
+  page: Page
+): Promise<void> {
+  const containers = page.locator(PRESSABLE_SELECTOR);
+  const wanted = CAPTURE_COMMENT_TARGET + 1;
+  let count = await containers.count();
+  let stalled = 0;
+
+  for (
+    let round = 0;
+    round < MAX_SCROLL_ROUNDS &&
+      count < wanted &&
+      stalled < MAX_STALLED_ROUNDS;
+    round++
+  ) {
+    await page.evaluate(() => {
+      window.scrollBy(0, window.innerHeight * 0.9);
+    });
+    await page.waitForTimeout(1200);
+
+    const next = await containers.count();
+
+    stalled = next > count ? 0 : stalled + 1;
+    count = next;
+  }
+
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+  });
+  await page.waitForTimeout(800);
+
+  console.log(
+    `Loaded ${count} containers (target ${wanted}).\n`
+  );
 }
 
 export async function captureThread(
@@ -47,9 +101,33 @@ export async function captureThread(
 
     await page.waitForTimeout(3000);
 
+    console.log("Loading comments...\n");
+
+    await loadMoreComments(page);
+
     console.log("Extracting thread...\n");
 
     const thread = await extractThread(page);
+
+    if (thread.comments.length > CAPTURE_COMMENT_TARGET) {
+      thread.comments = thread.comments
+        .slice(0, CAPTURE_COMMENT_TARGET)
+        .map((comment) => {
+          if (!comment.replies) {
+            return comment;
+          }
+
+          const replies = comment.replies.filter(
+            (reply) =>
+              (reply.commentIndex ?? 0) <
+              CAPTURE_COMMENT_TARGET
+          );
+
+          return replies.length > 0
+            ? { ...comment, replies }
+            : { ...comment, replies: undefined };
+        });
+    }
 
     const timestamp = new Date()
       .toISOString()
@@ -132,6 +210,8 @@ export interface CaptureCommentInput {
     author: string;
     text: string;
   }>;
+  /** Abbreviation table (lowercased keys); defaults to the starter list. */
+  abbreviations?: Record<string, string>;
 }
 
 function replyCodesFromUrl(url: string): string[] {
@@ -308,13 +388,16 @@ export async function captureComment(
       });
     }
 
-    return {
-      author: extracted.author,
-      text: extracted.text,
-      likes: extracted.likes,
-      containerIndex,
-      commentIndex: input.imageIndex
-    };
+    return expandComment(
+      {
+        author: extracted.author,
+        text: extracted.text,
+        likes: extracted.likes,
+        containerIndex,
+        commentIndex: input.imageIndex
+      },
+      input.abbreviations
+    );
   } finally {
     await context.close();
   }

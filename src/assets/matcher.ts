@@ -1,8 +1,11 @@
 import type { Asset } from "./scanner.js";
+import {
+  findAsset,
+  isSampleAsset
+} from "./library.js";
 import type {
   ReactionAnimation,
   ReactionEmotion,
-  ReactionEvent,
   ThreadAnalysis
 } from "../types.js";
 
@@ -15,96 +18,129 @@ export interface MatchedReaction {
   duration: number;
 }
 
+function selectableOfType(
+  assets: Asset[],
+  type: Asset["type"]
+): Asset[] {
+  return assets.filter(
+    (asset) => asset.type === type && !isSampleAsset(asset)
+  );
+}
+
+function tagOverlap(left: Asset, right: Asset): number {
+  const tags = new Set(left.tags);
+  return right.tags.filter((tag) => tags.has(tag)).length;
+}
+
 function pickUnusedAsset(
   candidates: Asset[],
-  usedIds: Set<string>
+  usedIds: Set<string>,
+  allowReuse: boolean
 ): Asset | null {
   if (candidates.length === 0) {
     return null;
   }
 
   const unused = candidates.filter(
-    asset => !usedIds.has(asset.id)
+    (asset) => !usedIds.has(asset.id)
   );
 
-  const pool = unused.length > 0 ? unused : candidates;
+  if (unused.length > 0) {
+    const asset =
+      unused[Math.floor(Math.random() * unused.length)];
+    usedIds.add(asset.id);
+    return asset;
+  }
+
+  if (!allowReuse) {
+    return null;
+  }
 
   const asset =
-    pool[Math.floor(Math.random() * pool.length)];
-
+    candidates[Math.floor(Math.random() * candidates.length)];
   usedIds.add(asset.id);
-
   return asset;
 }
 
-function pickRequestedAsset(
-  requestedId: string | null | undefined,
-  candidates: Asset[],
-  allAssets: Asset[],
-  usedIds: Set<string>
-): Asset | null {
-  if (requestedId) {
-    const requested = allAssets.find(
-      asset => asset.id === requestedId
-    );
+function pickRequestedAsset(options: {
+  requestedId: string | null | undefined;
+  category: string | null | undefined;
+  type: Asset["type"];
+  assets: Asset[];
+  usedIds: Set<string>;
+  allowReuse: boolean;
+}): Asset | null {
+  const pool = selectableOfType(options.assets, options.type);
+  const requested = options.requestedId
+    ? findAsset(pool, {
+      id: options.requestedId,
+      type: options.type
+    })
+    : undefined;
 
-    if (requested && !usedIds.has(requested.id)) {
-      usedIds.add(requested.id);
-      return requested;
-    }
+  if (requested && !options.usedIds.has(requested.id)) {
+    options.usedIds.add(requested.id);
+    return requested;
   }
 
-  return pickUnusedAsset(candidates, usedIds);
+  if (requested && options.usedIds.has(requested.id)) {
+    const sameKind = pool.filter(
+      (asset) => asset.mediaKind === requested.mediaKind
+    );
+    const tagged = sameKind.filter(
+      (asset) => tagOverlap(requested, asset) > 0
+    );
+    const sameCategory = sameKind.filter(
+      (asset) => asset.category === requested.category
+    );
+    return pickUnusedAsset(tagged, options.usedIds, false) ??
+      pickUnusedAsset(sameCategory, options.usedIds, false) ??
+      pickUnusedAsset(sameKind, options.usedIds, false);
+  }
+
+  if (options.requestedId) {
+    return null;
+  }
+
+  if (!options.category) {
+    return null;
+  }
+
+  return pickUnusedAsset(
+    pool.filter((asset) => asset.category === options.category),
+    options.usedIds,
+    options.allowReuse
+  );
 }
 
 export function matchReactions(
   analysis: ThreadAnalysis,
   assets: Asset[]
 ): MatchedReaction[] {
-  const memeAssets = assets.filter(
-    asset => asset.type === "meme"
-  );
-
-  const sfxAssets = assets.filter(
-    asset => asset.type === "sfx"
-  );
-
   const usedMemeIds = new Set<string>();
   const usedSfxIds = new Set<string>();
 
-  return analysis.reactions.map(reaction => {
-    const memeCandidates = reaction.memeCategory
-      ? memeAssets.filter(
-        asset =>
-          asset.category === reaction.memeCategory
-      )
-      : [];
-
-    const sfxCandidates = reaction.sfxCategory
-      ? sfxAssets.filter(
-        asset =>
-          asset.category === reaction.sfxCategory
-      )
-      : [];
-
-    let meme = pickRequestedAsset(
-      reaction.memeAssetId,
-      memeCandidates,
-      memeAssets,
-      usedMemeIds
-    );
+  return analysis.reactions.map((reaction) => {
+    let meme = pickRequestedAsset({
+      requestedId: reaction.memeAssetId,
+      category: reaction.memeCategory,
+      type: "meme",
+      assets,
+      usedIds: usedMemeIds,
+      allowReuse: false
+    });
 
     const sfx = meme?.mediaKind === "video"
       ? null
-      : pickRequestedAsset(
-        reaction.sfxAssetId,
-        sfxCandidates,
-        sfxAssets,
-        usedSfxIds
-      );
+      : pickRequestedAsset({
+        requestedId: reaction.sfxAssetId,
+        category: reaction.sfxCategory,
+        type: "sfx",
+        assets,
+        usedIds: usedSfxIds,
+        allowReuse: true
+      });
 
-    // Image memes must have an accompanying SFX. If the requested SFX is
-    // missing, drop the image instead of producing an invalid reaction.
     if (meme?.mediaKind === "image" && !sfx) {
       meme = null;
     }

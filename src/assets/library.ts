@@ -134,6 +134,12 @@ function isSamplePath(relativePath: string): boolean {
     .some((part) => part.toLowerCase().includes("_sample"));
 }
 
+export function isSampleAsset(
+  asset: Pick<Asset, "id" | "file">
+): boolean {
+  return isSamplePath(asset.id) || isSamplePath(asset.file);
+}
+
 export function getAssetRoot(): string {
   return path.resolve(
     process.env.XAMXIXIU_ASSET_ROOT ??
@@ -488,7 +494,9 @@ export class AssetLibrary {
           tags: defaultTags(type, category),
           intensity: 0.5,
           mediaKind: getMediaKind(path.extname(file)),
-          ...(type === "meme" ? { spec: await this.readNearbySpec(file, base) } : {}),
+          ...((type === "meme" || type === "sfx")
+            ? { spec: await this.readNearbySpec(file, base) }
+            : {}),
           createdAt: now,
           updatedAt: now
         });
@@ -559,6 +567,19 @@ export class AssetLibrary {
   }
 
   private async readNearbySpec(file: string, root: string): Promise<string | undefined> {
+    const siblingSpec = await fs.readFile(
+      path.join(
+        path.dirname(file),
+        `${path.basename(file, path.extname(file))}.spec.md`
+      ),
+      "utf-8"
+    )
+      .then((value) => value.trim())
+      .catch(() => undefined);
+    if (siblingSpec) {
+      return siblingSpec;
+    }
+
     let directory = path.dirname(file);
     while (directory.startsWith(root)) {
       const spec = await fs.readFile(path.join(directory, "spec.md"), "utf-8")

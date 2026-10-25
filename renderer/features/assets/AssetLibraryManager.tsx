@@ -257,7 +257,7 @@ export function AssetLibraryManager(): React.ReactElement {
                     ))} className={fieldClassName} />
                 </FieldLabel>
               </div>
-              {asset.type === "meme" && (
+              {(asset.type === "meme" || asset.type === "sfx") && (
                 <div className="mt-3">
                   <FieldLabel label="Spec">
                     <textarea value={asset.spec ?? ""}

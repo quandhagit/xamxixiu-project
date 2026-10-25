@@ -51,8 +51,17 @@ import type {
 } from "../project/store.js";
 import type {
   AudioFailureTarget,
+  ThreadData,
   VideoTimeline
 } from "../types.js";
+import {
+  entriesToTable,
+  expandThread
+} from "../comments/speech-abbreviations.js";
+import {
+  loadAbbreviationEntries,
+  saveAbbreviationEntries
+} from "./abbreviations.js";
 import {
   renderTopicTitleCard
 } from "../capcut/compile/title-card.js";
@@ -236,6 +245,24 @@ export function registerIpc(
         }
       );
 
+      // thread.json stays as the raw capture. content.json holds the text
+      // rewritten for speech (abbreviations expanded) so the user can review it.
+      const capturedThread = JSON.parse(
+        await fs.readFile(result.threadPath, "utf-8")
+      ) as ThreadData;
+      await fs.writeFile(
+        path.join(result.projectDir, "content.json"),
+        JSON.stringify(
+          expandThread(
+            capturedThread,
+            entriesToTable(await loadAbbreviationEntries())
+          ),
+          null,
+          2
+        ),
+        "utf-8"
+      );
+
       const projectId =
         path.basename(result.projectDir);
       const project =
@@ -352,8 +379,33 @@ export function registerIpc(
         projectDir: directory,
         url: payload.url,
         imageIndex: payload.imageIndex,
-        existing: payload.existing
+        existing: payload.existing,
+        abbreviations: entriesToTable(
+          await loadAbbreviationEntries()
+        )
       });
+    }
+  );
+
+  ipcMain.handle(
+    "project:curate",
+    async (_event, projectId: string) => {
+      const directory =
+        store.getProjectDirectory(projectId);
+      await runYarnCommand(
+        ["curate", directory],
+        process.cwd()
+      );
+      const project =
+        await store.getProject(projectId);
+
+      if (!project) {
+        throw new Error(
+          `Project could not be loaded: ${projectId}`
+        );
+      }
+
+      return project;
     }
   );
 
@@ -1127,6 +1179,17 @@ export function registerIpc(
   ipcMain.handle(
     "settings:get",
     () => loadSettings()
+  );
+
+  ipcMain.handle(
+    "settings:get-abbreviations",
+    () => loadAbbreviationEntries()
+  );
+
+  ipcMain.handle(
+    "settings:save-abbreviations",
+    (_event, input: unknown) =>
+      saveAbbreviationEntries(input)
   );
 
   ipcMain.handle(

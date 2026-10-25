@@ -86,6 +86,23 @@ Lệnh này cũng chạy:
 1. Nhập URL bài đăng Threads.
 2. Bấm **Capture** để lấy bài viết, comment và screenshot.
 3. Chỉnh sửa nội dung tại bước **Capture**, sau đó bấm **Save** nếu cần.
+   - App tự cuộn trang để chụp tối đa `CAPTURE_COMMENT_TARGET` comment (mặc
+     định 20).
+   - Chữ viết tắt (`ko`, `đc`, `vs`...) được viết rõ sẵn trong ô nội dung
+     (đó là chữ Vbee sẽ đọc); đối chiếu với screenshot bên trái. Sửa bảng
+     viết tắt tại **Settings > Từ viết tắt**: thêm, sửa, xóa từ, tìm kiếm,
+     thử nhanh kết quả và khôi phục danh sách mặc định. Danh sách lưu theo
+     máy (`speech-abbreviations.json` trong thư mục dữ liệu của app) và chỉ
+     áp dụng cho lần capture sau; danh sách khởi đầu nằm ở
+     `src/comments/speech-abbreviations.ts`.
+   - Bấm **AI chọn comment** để DeepSeek giữ khoảng `CURATE_KEEP_MIN`-
+     `CURATE_KEEP_MAX` comment (mặc định 8-12) và **sắp xếp lại thứ tự**
+     cho video mượt. Reply luôn đi liền sau comment cha; comment bị loại
+     được dồn xuống cuối. Comment bị loại hiện lý do và lọc được bằng
+     **Được dùng / Bị loại**; đổi checkbox **Exclude khỏi Analyze** để chỉnh
+     tay, hoặc kéo thả để đổi lại thứ tự. Quyết định giữ/loại của bạn không
+     bị AI ghi đè khi chạy lại. Chỉnh các giới hạn ở
+     `src/comments/comment-constants.ts`.
 4. Bấm **Next** để sang **Analyze**. DeepSeek sẽ phân tích tone, chủ đề, emotion và chọn voice.
 5. Bấm **Next** để tạo audio bằng Vbee.
 6. Nếu voice lỗi, các comment khác vẫn tiếp tục chạy. Item lỗi sẽ có nút **Retry**.
@@ -139,19 +156,24 @@ assets/memes/
 ```
 
 `spec.md` cần mô tả thời điểm nên dùng, sắc thái/cường độ, kiểu câu thoại phù
-hợp, trường hợp không nên dùng, SFX đề xuất và animation đề xuất. Có thể copy
-`assets/memes/_template/spec.md` để bắt đầu.
+hợp, trường hợp không nên dùng, SFX đề xuất và animation đề xuất. Mỗi asset
+phải khác nhau — không dùng chung câu “short visual punchline”. Có thể copy
+`assets/memes/_template/spec.md` để bắt đầu. SFX cũng nên có spec/tag trong
+Library.
 
-Khi chạy `analyze`, AI đọc spec và chọn `memeAssetId` cụ thể. Với nội dung
-reaction-friendly, mục tiêu là khoảng 65% tổng thời lượng reaction dùng meme
-video; phần còn lại có thể là meme ảnh đi kèm SFX hoặc transition chỉ-SFX.
-Meme video không cần SFX hoặc animation. Meme ảnh không được dùng nếu không có
-SFX đi kèm. Nội dung nghiêm túc vẫn được phép có ít hoặc không có reaction.
+Khi chạy `analyze`, AI nhận catalog gọn (`use` / `when` / `avoid`) chứ không
+nhận nguyên `spec.md`. File `_sample` không được chọn. AI chọn `memeAssetId`
+và `sfxAssetId` cụ thể. Với nội dung reaction-friendly, mục tiêu khoảng 65%
+số comment dùng meme video; phần còn lại có thể là meme ảnh đi kèm SFX hoặc
+transition chỉ-SFX. Meme video không cần SFX. Meme ảnh không được dùng nếu
+không có SFX đi kèm. Nội dung nghiêm túc vẫn được phép có ít hoặc không có
+reaction.
 
 ## Các lệnh CLI hữu ích
 
 ```powershell
 yarn capture "https://www.threads.net/..."
+yarn curate "projects/<project-id>"
 yarn analyze "projects/<project-id>"
 yarn generate-audio "projects/<project-id>"
 yarn generate-audio "projects/<project-id>" comment-0

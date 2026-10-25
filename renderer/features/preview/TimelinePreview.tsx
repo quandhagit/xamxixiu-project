@@ -18,6 +18,7 @@ import { isVideoAsset } from "./timeline-tracks";
 import type { UseTimelinePreviewResult } from "./use-timeline-preview";
 import {
   TOPIC_MEME_SCALE,
+  TOPIC_TITLE_ANIMATION_DURATION,
   TOPIC_TITLE_CARD_FILE,
   TOPIC_TITLE_CENTER_FRACTION,
   TOPIC_TITLE_WIDTH_FRACTION
@@ -173,7 +174,7 @@ export function TimelinePreview({
         1,
         previewTime /
           Math.max(
-            0.2,
+            TOPIC_TITLE_ANIMATION_DURATION,
             timeline.topicIntro.animationDuration
           )
       )
@@ -263,8 +264,9 @@ export function TimelinePreview({
                         previewScene.elapsed - overlay.start
                       ) /
                         Math.max(
-                          0.2,
-                          overlay.animationDuration ?? 0.2
+                          TOPIC_TITLE_ANIMATION_DURATION,
+                          overlay.animationDuration ??
+                            TOPIC_TITLE_ANIMATION_DURATION
                         )
                     )}
                   />

@@ -102,7 +102,8 @@ export function useTimelinePreview({
       return;
     }
     if (video.readyState >= 1 && video.duration > 0) {
-      const target = previewTime % video.duration;
+      const origin = timeline?.backgroundStart ?? 0;
+      const target = (origin + previewTime) % video.duration;
       if (
         Math.abs(video.currentTime - target) >
         previewSeekThreshold(previewPlaying)
@@ -115,7 +116,7 @@ export function useTimelinePreview({
     } else {
       video.pause();
     }
-  }, [previewPlaying, previewTime]);
+  }, [previewPlaying, previewTime, timeline]);
 
   useEffect(() => {
     const cleanups: Array<() => void> = [];

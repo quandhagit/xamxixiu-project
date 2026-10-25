@@ -16,8 +16,25 @@ import {
   reorderComments
 } from "../../../src/comments/order";
 import type {
+  CommentCurationKind,
   ThreadComment
 } from "../../../src/types";
+
+type CommentFilter = "all" | "used" | "excluded";
+
+const FILTER_LABELS: Record<CommentFilter, string> = {
+  all: "Tất cả",
+  used: "Được dùng",
+  excluded: "Bị loại"
+};
+
+const KIND_LABELS: Record<CommentCurationKind, string> = {
+  duplicate: "Trùng ý",
+  "off-topic": "Lạc đề",
+  "low-energy": "Nhạt",
+  "too-long": "Quá dài",
+  spam: "Spam"
+};
 
 const SCROLL_EDGE_PX = 88;
 const SCROLL_MAX_PX = 28;
@@ -164,6 +181,8 @@ export function CaptureComments({
     top: number;
   } | null>(null);
   const [replyUrl, setReplyUrl] = useState("");
+  const [filter, setFilter] =
+    useState<CommentFilter>("all");
   const [draggingIndex, setDraggingIndex] =
     useState<number | null>(null);
   const [overIndex, setOverIndex] =
@@ -502,7 +521,10 @@ export function CaptureComments({
                           ? {
                               ...item,
                               excluded:
-                                event.target.checked
+                                event.target.checked,
+                              curation: {
+                                source: "user"
+                              }
                             }
                           : item
                     ),
@@ -517,6 +539,31 @@ export function CaptureComments({
           <p className="mt-2 text-xs text-zinc-500">
             {comment.likes} likes
           </p>
+          {comment.curation && (
+            <p
+              className={[
+                "mt-2 inline-flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 text-xs",
+                comment.excluded
+                  ? "bg-amber-400/10 text-amber-200"
+                  : "bg-emerald-400/10 text-emerald-200"
+              ].join(" ")}
+            >
+              <span className="font-semibold">
+                {comment.curation.source === "ai"
+                  ? "AI"
+                  : "Bạn"}
+                {comment.excluded ? " loại" : " giữ"}
+              </span>
+              {comment.curation.kind && (
+                <span>
+                  {KIND_LABELS[comment.curation.kind]}
+                </span>
+              )}
+              {comment.curation.reason && (
+                <span>{comment.curation.reason}</span>
+              )}
+            </p>
+          )}
           <textarea
             value={comment.text}
             onChange={(event) => {
@@ -540,6 +587,44 @@ export function CaptureComments({
     );
   }
 
+  function matchesFilter(index: number): boolean {
+    if (filter === "all") {
+      return true;
+    }
+
+    const excluded = comments[index]?.excluded === true;
+
+    return filter === "excluded" ? excluded : !excluded;
+  }
+
+  function subtreeMatchesFilter(
+    node: CommentNode,
+    trail: Set<number>
+  ): boolean {
+    if (matchesFilter(node.index)) {
+      return true;
+    }
+
+    const nextTrail = new Set(trail);
+    nextTrail.add(node.index);
+
+    return node.children.some(
+      (child) =>
+        !nextTrail.has(child.index) &&
+        subtreeMatchesFilter(child, nextTrail)
+    );
+  }
+
+  const usedCount = comments.filter(
+    (comment) => !comment.excluded
+  ).length;
+  const excludedCount = comments.length - usedCount;
+  const filterCounts: Record<CommentFilter, number> = {
+    all: comments.length,
+    used: usedCount,
+    excluded: excludedCount
+  };
+
   function renderForest(
     nodes: CommentNode[],
     depth: number,
@@ -549,6 +634,10 @@ export function CaptureComments({
 
     for (const node of nodes) {
       if (trail.has(node.index)) {
+        continue;
+      }
+
+      if (!subtreeMatchesFilter(node, new Set(trail))) {
         continue;
       }
 
@@ -580,9 +669,33 @@ export function CaptureComments({
 
   return (
     <div ref={listRef} className="space-y-4">
-      <h3 className="text-sm font-medium text-zinc-300">
-        Comments ({comments.length})
-      </h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-zinc-300">
+          Comments ({comments.length}) · Dùng {usedCount} ·
+          Loại {excludedCount}
+        </h3>
+        <div className="flex gap-1">
+          {(
+            Object.keys(
+              FILTER_LABELS
+            ) as CommentFilter[]
+          ).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={[
+                "rounded-lg border px-3 py-1 text-xs",
+                filter === key
+                  ? "border-fuchsia-400/60 bg-fuchsia-400/10 text-fuchsia-100"
+                  : "border-white/10 text-zinc-400 hover:bg-white/5"
+              ].join(" ")}
+            >
+              {FILTER_LABELS[key]} ({filterCounts[key]})
+            </button>
+          ))}
+        </div>
+      </div>
       <form
         className="flex gap-3"
         onSubmit={handleAdd}

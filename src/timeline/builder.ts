@@ -21,9 +21,13 @@ import {
   getSceneDuration
 } from "./timing.js";
 import { getTopicMemeLayout } from "./topic-layout.js";
-import { shouldGenerateTopicTitleVoice } from "./topic-constants.js";
+import {
+  TOPIC_TITLE_ANIMATION_DURATION,
+  shouldGenerateTopicTitleVoice
+} from "./topic-constants.js";
 import { readMediaDuration } from "../media-duration.js";
 import { renderTopicTitleCard } from "../capcut/compile/title-card.js";
+import { randomBackgroundStart } from "./background-start.js";
 
 const CANVAS = {
   width: 1080,
@@ -248,17 +252,27 @@ async function combineCommentScenes(
   };
 }
 
+function isExcludedComment(
+  thread: ThreadData,
+  index: number
+): boolean {
+  return thread.comments[index]?.excluded === true;
+}
+
 function getCommentGroups(
   thread: ThreadData
 ): number[][] {
   const children = new Map<number, number[]>();
   for (let index = 0; index < thread.comments.length; index++) {
+    if (isExcludedComment(thread, index)) {
+      continue;
+    }
     const parent = thread.comments[index].parentCommentIndex;
     if (
       parent !== undefined &&
       parent >= 0 &&
       parent < thread.comments.length &&
-      !thread.comments[parent].excluded
+      !isExcludedComment(thread, parent)
     ) {
       children.set(parent, [
         ...(children.get(parent) ?? []),
@@ -270,13 +284,15 @@ function getCommentGroups(
   const groups: number[][] = [];
   const visited = new Set<number>();
   const addGroup = (root: number): void => {
-    if (visited.has(root) || thread.comments[root].excluded) {
+    if (visited.has(root) || isExcludedComment(thread, root)) {
       return;
     }
     const group = [root];
     visited.add(root);
     for (const child of children.get(root) ?? []) {
-      group.push(...getDescendantIndexes(child, children, visited));
+      group.push(
+        ...getDescendantIndexes(child, children, visited, thread)
+      );
     }
     groups.push(group);
   };
@@ -296,15 +312,18 @@ function getCommentGroups(
 function getDescendantIndexes(
   root: number,
   children: Map<number, number[]>,
-  visited: Set<number>
+  visited: Set<number>,
+  thread: ThreadData
 ): number[] {
-  if (visited.has(root)) {
+  if (visited.has(root) || isExcludedComment(thread, root)) {
     return [];
   }
   visited.add(root);
   const result = [root];
   for (const child of children.get(root) ?? []) {
-    result.push(...getDescendantIndexes(child, children, visited));
+    result.push(
+      ...getDescendantIndexes(child, children, visited, thread)
+    );
   }
   return result;
 }
@@ -538,7 +557,7 @@ export async function buildTimeline(
       : 0;
   const blocksDuration =
     introCase === "long"
-      ? 0.2 + titleAudioDuration
+      ? TOPIC_TITLE_ANIMATION_DURATION + titleAudioDuration
       : Math.min(3, topicDuration);
 
   if (hasTopicIntro) {
@@ -567,7 +586,7 @@ export async function buildTimeline(
         "slide-up",
         0,
         undefined,
-        0.2
+        TOPIC_TITLE_ANIMATION_DURATION
       )
     );
     const topicOverlay = topicOverlays.at(-1);
@@ -590,10 +609,10 @@ export async function buildTimeline(
       title: topicTitle,
       ...(introCase === "long" && hasTitleAudio
         ? {
-            titleVoiceFile: timelineFile(
-              titleAudioAbsolute
-            )
-          }
+          titleVoiceFile: timelineFile(
+            titleAudioAbsolute
+          )
+        }
         : {}),
       titleVoiceDuration: titleAudioDuration,
       openSfxFile: timelineFile(openTopicSfx),
@@ -604,7 +623,7 @@ export async function buildTimeline(
       ...(topicMeme
         ? { memeFile: projectPath(topicMeme.file) }
         : {}),
-      animationDuration: 0.2,
+      animationDuration: TOPIC_TITLE_ANIMATION_DURATION,
       blocksDuration,
       captureStart: topicCaptureStart
     };
@@ -638,6 +657,9 @@ export async function buildTimeline(
   for (const group of getCommentGroups(inputs.thread)) {
     const commentScenes: TimelineScene[] = [];
     for (const commentIndex of group) {
+      if (isExcludedComment(inputs.thread, commentIndex)) {
+        continue;
+      }
       const reaction = inputs.reactions.find(
         (item) => item.commentIndex === commentIndex
       );
@@ -648,6 +670,9 @@ export async function buildTimeline(
           reaction
         )
       );
+    }
+    if (commentScenes.length === 0) {
+      continue;
     }
     scenes.push(
       commentScenes.length === 1
@@ -661,17 +686,28 @@ export async function buildTimeline(
       total + getSceneDuration(scene) + SCENE_GAP_SECONDS,
     0
   );
-  const backgroundFile = (
-    inputs.analysis.backgroundAssetId
-      ? inputs.assets.find(
-        (asset) =>
-          asset.type === "background" &&
-          asset.id === inputs.analysis.backgroundAssetId
-      )
-      : inputs.assets.find(
-        (asset) => asset.type === "background"
-      )
-  )?.file;
+  const backgroundAsset = inputs.analysis.backgroundAssetId
+    ? inputs.assets.find(
+      (asset) =>
+        asset.type === "background" &&
+        asset.id === inputs.analysis.backgroundAssetId
+    )
+    : inputs.assets.find(
+      (asset) => asset.type === "background"
+    );
+  const backgroundFile = backgroundAsset?.file;
+  let backgroundStart = 0;
+  if (backgroundAsset?.mediaKind === "video" && backgroundFile) {
+    try {
+      const sourceDuration = await readMediaDuration(backgroundFile);
+      backgroundStart = randomBackgroundStart(
+        sourceDuration,
+        totalDuration
+      );
+    } catch {
+      backgroundStart = 0;
+    }
+  }
   const musicFile = (
     inputs.analysis.musicAssetId
       ? inputs.assets.find(
@@ -699,7 +735,10 @@ export async function buildTimeline(
       ? {
         backgroundFile: projectPath(
           backgroundFile
-        )
+        ),
+        ...(backgroundStart > 0
+          ? { backgroundStart }
+          : {})
       }
       : {}),
     ...(musicFile

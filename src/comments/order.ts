@@ -134,25 +134,6 @@ function flattenForest(
   return order;
 }
 
-function findNode(
-  forest: CommentNode[],
-  index: number
-): CommentNode | undefined {
-  for (const node of forest) {
-    if (node.index === index) {
-      return node;
-    }
-
-    const nested = findNode(node.children, index);
-
-    if (nested) {
-      return nested;
-    }
-  }
-
-  return undefined;
-}
-
 function siblingList(
   forest: CommentNode[],
   index: number
@@ -208,6 +189,14 @@ function cloneComment(
 
   if (source.excluded !== undefined) {
     next.excluded = source.excluded;
+  }
+
+  if (source.originalText !== undefined) {
+    next.originalText = source.originalText;
+  }
+
+  if (source.curation !== undefined) {
+    next.curation = source.curation;
   }
 
   return next;
@@ -284,6 +273,22 @@ export function reorderComments(
     );
   }
 
+  return {
+    comments: remapByOrder(comments, order),
+    imageSlots: order.map(
+      (oldIndex) => imageSlots[oldIndex]
+    )
+  };
+}
+
+/**
+ * Rebuilds the comment list in a new order. `order[newIndex]` is the old
+ * index of the comment that moves to `newIndex`. Parent links are remapped.
+ */
+function remapByOrder(
+  comments: ThreadComment[],
+  order: number[]
+): ThreadComment[] {
   const oldToNew = new Map(
     order.map((oldIndex, newIndex) => [
       oldIndex,
@@ -292,8 +297,10 @@ export function reorderComments(
   );
   const nextComments = order.map((oldIndex, newIndex) => {
     const source = comments[oldIndex];
-    const node = findNode(forest, oldIndex);
-    const parentOld = node?.parentIndex;
+    const parentOld = effectiveParentIndex(
+      comments,
+      oldIndex
+    );
     const parentNew =
       parentOld === undefined
         ? undefined
@@ -328,10 +335,81 @@ export function reorderComments(
     ];
   }
 
-  return {
-    comments: nextComments,
-    imageSlots: order.map(
-      (oldIndex) => imageSlots[oldIndex]
+  return nextComments;
+}
+
+/** Index of the top-level comment that `index` belongs to. */
+export function rootIndexOf(
+  comments: ThreadComment[],
+  index: number
+): number {
+  let current = index;
+
+  for (let guard = 0; guard <= comments.length; guard++) {
+    const parent = effectiveParentIndex(comments, current);
+
+    if (parent === undefined) {
+      return current;
+    }
+
+    current = parent;
+  }
+
+  return current;
+}
+
+/**
+ * Returns a permutation (new index -> old index) that orders whole threads
+ * (a top-level comment plus its replies) by `rootOrder`. Replies always
+ * follow their parent. Roots missing from `rootOrder` keep their relative
+ * order and go last.
+ */
+export function orderByRoots(
+  comments: ThreadComment[],
+  rootOrder: number[]
+): number[] {
+  const forest = buildCommentForest(comments);
+  const byIndex = new Map(
+    forest.map((node) => [node.index, node])
+  );
+  const sorted: CommentNode[] = [];
+  const used = new Set<number>();
+
+  for (const index of rootOrder) {
+    const node = byIndex.get(index);
+
+    if (node && !used.has(index)) {
+      used.add(index);
+      sorted.push(node);
+    }
+  }
+
+  for (const node of forest) {
+    if (!used.has(node.index)) {
+      sorted.push(node);
+    }
+  }
+
+  return flattenForest(sorted, comments.length);
+}
+
+/** Applies a permutation from `orderByRoots` (new index -> old index). */
+export function reorderCommentsByOrder(
+  comments: ThreadComment[],
+  order: number[]
+): ThreadComment[] {
+  if (
+    order.length !== comments.length ||
+    new Set(order).size !== comments.length ||
+    order.some(
+      (value) =>
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value >= comments.length
     )
-  };
+  ) {
+    throw new Error("Invalid comment order");
+  }
+
+  return remapByOrder(comments, order);
 }

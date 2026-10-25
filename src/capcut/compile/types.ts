@@ -2,6 +2,7 @@ export interface CompileItem {
   path?: string;
   start: number;
   duration: number;
+  sourceStart?: number;
   type?: "video" | "photo";
   ref?: string;
   volume?: number;

@@ -31,6 +31,9 @@ import {
 import {
   VoiceSelect
 } from "../features/voice/VoiceSelect";
+import {
+  isAnalysisStale
+} from "../../src/comments/analysis-stale";
 
 const steps = [
   "INPUT",
@@ -559,7 +562,7 @@ export default function Home(): React.ReactElement {
     const existing = draftContent.comments.map(
       (item) => ({
         author: item.author,
-        text: item.text
+        text: item.originalText ?? item.text
       })
     );
 
@@ -652,6 +655,49 @@ export default function Home(): React.ReactElement {
         reason instanceof Error
           ? reason.message
           : "Không thể chạy bước tiếp theo."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function curateProject(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+
+    setError(undefined);
+    setOperationLoading(true);
+
+    try {
+      if (draftContent) {
+        await persistDraft();
+      }
+
+      const curated =
+        await window.xamxixiu.curateComments(
+          selectedProject.id
+        );
+      const content =
+        curated.content ?? curated.thread;
+
+      setSelectedProject(curated);
+
+      if (content) {
+        setDraftContent(cloneContent(content));
+        setImageSlots(
+          identityImageSlots(content.comments.length)
+        );
+      }
+
+      // Curate may reorder comments, which renames their image/audio files.
+      await loadCaptureAssets(curated);
+      await loadAudioAssets(curated);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "AI chọn comment thất bại."
       );
     } finally {
       setOperationLoading(false);
@@ -910,6 +956,18 @@ export default function Home(): React.ReactElement {
   const skipTopicTitleVoice =
     Boolean(topicText) &&
     !shouldGenerateTopicTitleVoice(topicText);
+  const commentsForAnalysis =
+    draftContent ??
+    selectedProject?.content ??
+    selectedProject?.thread;
+  const analysisStale = Boolean(
+    commentsForAnalysis &&
+      selectedProject?.analysis &&
+      isAnalysisStale(
+        commentsForAnalysis,
+        selectedProject.analysis
+      )
+  );
 
   return (
     <AppChrome active="workflow" projectLabel={projectLabel}>
@@ -1102,6 +1160,18 @@ export default function Home(): React.ReactElement {
                       </button>
                       <button
                         type="button"
+                        onClick={() => void curateProject()}
+                        disabled={
+                          !selectedProject ||
+                          !draftContent ||
+                          operationLoading
+                        }
+                        className="rounded-xl border border-fuchsia-400/40 px-4 py-2 text-sm text-fuchsia-100 hover:bg-fuchsia-400/10 disabled:opacity-40"
+                      >
+                        AI chọn comment
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void saveContent()}
                         disabled={
                           !draftContent ||
@@ -1205,6 +1275,14 @@ export default function Home(): React.ReactElement {
                       </div>
                     )}
                   </div>
+
+                  {analysisStale && (
+                    <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
+                      Danh sách comment đã đổi sau lần Analyze
+                      gần nhất. Hãy Analyze lại để meme/SFX khớp
+                      với các comment đang được dùng.
+                    </div>
+                  )}
 
                   {selectedProject?.analysis && !operationLoading && (
                     <>

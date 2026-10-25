@@ -11,6 +11,7 @@ import type {
   CompileSpec
 } from "../capcut/compile/types.js";
 import type { VideoTimeline } from "../types.js";
+import { TOPIC_TITLE_ANIMATION_DURATION } from "../timeline/topic-constants.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -316,7 +317,8 @@ function overlayYExpression(
   }
   const animation = Math.max(
     0.001,
-    layer.item.animationDuration ?? 0.2
+    layer.item.animationDuration ??
+    TOPIC_TITLE_ANIMATION_DURATION
   );
   const restY = layer.y;
   const startY =
@@ -423,6 +425,8 @@ async function buildGraph(
                 seconds(item.duration)
               ]
             : [
+                "-ss",
+                seconds(item.sourceStart ?? 0),
                 "-stream_loop",
                 "-1",
                 "-t",

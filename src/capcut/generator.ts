@@ -15,6 +15,7 @@ import {
   getSceneBlocks,
   getSceneDuration
 } from "../timeline/timing.js";
+import { readMediaDuration } from "../media-duration.js";
 
 type JsonPrimitive =
   | boolean
@@ -153,10 +154,11 @@ function cloneObject(
 function setTimerange(
   segment: JsonObject,
   start: number,
-  duration: number
+  duration: number,
+  sourceStart = 0
 ): void {
   segment.source_timerange = {
-    start: 0,
+    start: sourceStart,
     duration
   };
   segment.target_timerange = {
@@ -268,7 +270,8 @@ function createSegment(
   template: JsonObject,
   materialId: string,
   start: number,
-  duration: number
+  duration: number,
+  sourceStart = 0
 ): JsonObject {
   const segment = cloneObject(template);
   segment.material_id = materialId;
@@ -276,7 +279,8 @@ function createSegment(
   setTimerange(
     segment,
     start,
-    duration
+    duration,
+    sourceStart
   );
   return segment;
 }
@@ -1102,14 +1106,44 @@ export async function generateCapCutProject(
         fileName,
         totalDuration
       );
+    const sourceStartUs = Math.max(
+      0,
+      Math.round(
+        (projectTimeline.backgroundStart ?? 0) * 1_000_000
+      )
+    );
+    let sourceDurationUs = totalDuration;
+    let loopBackground = false;
+    try {
+      const fileDurationUs = Math.round(
+        (await readMediaDuration(
+          projectTimeline.backgroundFile
+        )) * 1_000_000
+      );
+      const remainingUs = Math.max(
+        1,
+        fileDurationUs - sourceStartUs
+      );
+      if (remainingUs < totalDuration) {
+        sourceDurationUs = remainingUs;
+        loopBackground = true;
+      }
+    } catch {
+      loopBackground = true;
+    }
     const segment =
       createSegment(
         backgroundTemplate,
         materialId,
         0,
-        totalDuration
+        totalDuration,
+        sourceStartUs
       );
-    segment.is_loop = false;
+    segment.source_timerange = {
+      start: sourceStartUs,
+      duration: sourceDurationUs
+    };
+    segment.is_loop = loopBackground;
     backgroundTrack.segments = [segment];
   }
 

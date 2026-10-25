@@ -31,6 +31,12 @@ const api: DesktopApi = {
       payload
     ),
 
+  curateComments: (projectId) =>
+    ipcRenderer.invoke(
+      "project:curate",
+      projectId
+    ),
+
   analyzeProject: (projectId) =>
     ipcRenderer.invoke(
       "project:analyze",
@@ -207,6 +213,15 @@ const api: DesktopApi = {
     ipcRenderer.invoke(
       "settings:save",
       settings
+    ),
+
+  getSpeechAbbreviations: () =>
+    ipcRenderer.invoke("settings:get-abbreviations"),
+
+  saveSpeechAbbreviations: (entries) =>
+    ipcRenderer.invoke(
+      "settings:save-abbreviations",
+      entries
     ),
 
   chooseSettingsDirectory: () =>

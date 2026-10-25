@@ -1,18 +1,36 @@
+export type CommentCurationKind =
+  | "duplicate"
+  | "off-topic"
+  | "low-energy"
+  | "too-long"
+  | "spam";
+
+export interface CommentCuration {
+  source: "ai" | "user";
+  reason?: string;
+  kind?: CommentCurationKind;
+}
+
 export interface ThreadComment {
   author: string;
   text: string;
+  /** Raw captured text, only set when `text` was rewritten (abbreviations expanded). */
+  originalText?: string;
   likes: number;
   containerIndex: number;
   commentIndex?: number;
   parentCommentIndex?: number;
   replies?: ThreadComment[];
   excluded?: boolean;
+  curation?: CommentCuration;
 }
 
 export interface ThreadData {
   url: string;
   author: string;
   text: string;
+  /** Raw captured text, only set when `text` was rewritten (abbreviations expanded). */
+  originalText?: string;
   likes: number;
   postContainerIndex: number;
   comments: ThreadComment[];
@@ -218,6 +236,7 @@ export interface VideoTimeline {
   };
   totalDuration: number;
   backgroundFile?: string;
+  backgroundStart?: number;
   musicFile?: string;
   topicIntro?: TimelineTopicIntro;
   scenes: TimelineScene[];

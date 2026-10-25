@@ -10,7 +10,10 @@ import {
   getSceneBlocks,
   getSceneDuration
 } from "../../timeline/timing.js";
-import { TOPIC_TITLE_SCALE } from "../../timeline/topic-constants.js";
+import {
+  TOPIC_TITLE_ANIMATION_DURATION,
+  TOPIC_TITLE_SCALE
+} from "../../timeline/topic-constants.js";
 import { TOPIC_TITLE_TRANSFORM_Y } from "../../timeline/topic-layout.js";
 import { readMediaDuration } from "../../media-duration.js";
 
@@ -126,7 +129,8 @@ async function addBlockItems(
         ? {
             flyUp: true,
             animationDuration:
-              overlay.animationDuration ?? 0.2
+              overlay.animationDuration ??
+              TOPIC_TITLE_ANIMATION_DURATION
           }
         : {})
     };
@@ -226,6 +230,7 @@ export async function buildCompileSpec(
         path: absoluteAsset(timeline.backgroundFile),
         start: 0,
         duration: timeline.totalDuration,
+        sourceStart: timeline.backgroundStart ?? 0,
         type: mediaType(timeline.backgroundFile),
         ref: "background",
         volume: 0

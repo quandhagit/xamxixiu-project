@@ -3,6 +3,9 @@ import type {
   ThreadComment
 } from "../types.js";
 import type {
+  SpeechAbbreviationEntry
+} from "../comments/speech-abbreviations.js";
+import type {
   AudioFailureTarget
 } from "../types.js";
 import type {
@@ -109,6 +112,9 @@ export interface DesktopApi {
   captureComment(
     payload: CaptureCommentPayload
   ): Promise<ThreadComment>;
+  curateComments(
+    projectId: string
+  ): Promise<ProjectState>;
   analyzeProject(
     projectId: string
   ): Promise<ProjectState>;
@@ -197,5 +203,11 @@ export interface DesktopApi {
   saveSettings(
     settings: AppSettings
   ): Promise<SaveSettingsResult>;
+  getSpeechAbbreviations(): Promise<
+    SpeechAbbreviationEntry[]
+  >;
+  saveSpeechAbbreviations(
+    entries: SpeechAbbreviationEntry[]
+  ): Promise<SpeechAbbreviationEntry[]>;
   chooseSettingsDirectory(): Promise<string | null>;
 }

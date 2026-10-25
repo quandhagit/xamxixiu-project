@@ -7,12 +7,21 @@ import {
 import type {
   ThreadAnalysis,
   ReactionEmotion,
+  ReactionEvent,
   ThreadData
 } from "./types.js";
 import {
   VOICE_POOL
 } from "./tts/voice-pool.js";
 import { scanAssets } from "./assets/scanner.js";
+import { ANALYZE_TARGET_COMMENT_COUNT } from "./comments/comment-constants.js";
+import {
+  reactionMemeAssets,
+  reactionSfxAssets,
+  sanitizeAnalysis,
+  toPromptAsset,
+  topicMemeAssets
+} from "./assets/prompt-catalog.js";
 
 const EMOTIONS: ReactionEmotion[] = [
   "happy",
@@ -36,6 +45,86 @@ const VOICE_OPTIONS = VOICE_POOL.map(
     style: voice.style
   })
 );
+
+function hasMemeOrVideo(
+  reaction: Pick<
+    ReactionEvent,
+    "memeAssetId" | "memeCategory"
+  >
+): boolean {
+  return Boolean(
+    reaction.memeAssetId || reaction.memeCategory
+  );
+}
+
+function applyMiddleCommentTransitionSfx(
+  analysis: ThreadAnalysis,
+  includedIndexes: number[],
+  transitionSfxIds: string[]
+): void {
+  if (includedIndexes.length < 3) {
+    return;
+  }
+
+  const first = includedIndexes[0];
+  const last =
+    includedIndexes[includedIndexes.length - 1];
+  const reactionsByIndex = new Map(
+    analysis.reactions.map((reaction) => [
+      reaction.commentIndex,
+      reaction
+    ])
+  );
+  let transitionCursor = 0;
+
+  function nextTransitionSfxId(): string | null {
+    if (transitionSfxIds.length === 0) {
+      return null;
+    }
+    const id = transitionSfxIds[
+      transitionCursor % transitionSfxIds.length
+    ];
+    transitionCursor += 1;
+    return id;
+  }
+
+  for (const commentIndex of includedIndexes) {
+    if (
+      commentIndex === first ||
+      commentIndex === last
+    ) {
+      continue;
+    }
+
+    const existing =
+      reactionsByIndex.get(commentIndex);
+
+    if (!existing) {
+      analysis.reactions.push({
+        commentIndex,
+        emotion: "neutral",
+        memeAssetId: null,
+        memeCategory: null,
+        sfxAssetId: nextTransitionSfxId(),
+        sfxCategory: "transition",
+        animation: "none",
+        duration: 1
+      });
+      continue;
+    }
+
+    if (!hasMemeOrVideo(existing)) {
+      existing.memeAssetId = null;
+      existing.memeCategory = null;
+      existing.sfxCategory = "transition";
+      existing.sfxAssetId =
+        existing.sfxAssetId &&
+        transitionSfxIds.includes(existing.sfxAssetId)
+          ? existing.sfxAssetId
+          : nextTransitionSfxId();
+    }
+  }
+}
 
 const SYSTEM_PROMPT = `
 You are a short-form video editor analyzing a Threads post and its comments.
@@ -96,18 +185,21 @@ Use meme reactions mainly when the content is:
 
 For humorous or entertainment-oriented content, use memes frequently.
 
-For approximately 10 comments:
-- When the content is reaction-friendly, target roughly 65% of total reaction
-  overlay duration as video meme content.
+For approximately ${ANALYZE_TARGET_COMMENT_COUNT} comments:
+- When the content is reaction-friendly, target roughly 65% of those comments
+  as video memes (count of comments, not overlay duration).
 - The remaining roughly 35% may use an image meme paired with an SFX, or an
   SFX-only transition.
-- These are editing targets, not hard rules. Do not force a meme or SFX when
+- These are editing targets, not hard rules. Do not force a meme when
   it does not fit the content.
-- SFX should be used more selectively.
-- Approximately 4–7 comments may have SFX.
+- Reaction SFX (boom, slap, record-scratch, etc.) should be used more
+  selectively. Approximately 4–7 comments may have reaction SFX.
 - Video memes do not need SFX. When selecting a video meme, set
-  sfxCategory to null.
-- Image memes MUST always be paired with an SFX.
+  sfxAssetId and sfxCategory to null.
+- Image memes MUST always be paired with a specific sfxAssetId.
+- Middle comments with no meme and no video MUST use sfxCategory
+  "transition" and a transition sfxAssetId. This is a cut/bridge SFX,
+  not a reaction SFX.
 
 IMPORTANT: MEME CATEGORY IS AN EDITING CHOICE, NOT A DIRECT EMOTION LABEL.
 
@@ -141,7 +233,8 @@ A comment that reveals something unexpected:
 
 A serious/sad comment in a serious story:
 → memeCategory = null
-→ sfxCategory = null
+→ sfxCategory = "transition" if it is a middle comment
+→ sfxCategory = null if it is the first or last included comment
 
 Prioritize the editing effect and entertainment value over
 literal emotion matching.
@@ -165,9 +258,10 @@ DO NOT force meme reactions when the content is:
 - topics where memes would make the content feel disrespectful or inappropriate
 
 For these topics:
-- reactions can be completely empty
 - memeCategory should usually be null
-- sfxCategory should usually be null
+- first and last comments may have sfxCategory null
+- middle comments with no meme/video still need sfxCategory "transition"
+- do not leave long stretches of middle comments with no audio treatment
 
 Do NOT add memes simply to satisfy a reaction count.
 
@@ -222,25 +316,26 @@ A reaction can contain:
 - emotion
 - memeAssetId
 - memeCategory
+- sfxAssetId
 - sfxCategory
 
-Video meme reactions do not use SFX. Image memes require SFX.
+Video meme reactions do not use SFX. Image memes require a specific SFX file.
 
 Examples:
 
 Funny comment:
-    video meme + no SFX
-
-Very funny comment:
-    video meme + no SFX
+    video meme + sfxAssetId null
 
 Awkward moment:
-    image meme + record-scratch
+    image meme + a record-scratch sfxAssetId
 
 Strong punchline:
-    image meme + impact/boom
+    image meme + an impact/boom sfxAssetId
 
-Serious comment:
+Middle comment with no meme or video:
+    no meme + a transition sfxAssetId
+
+First or last comment with no treatment:
     no meme + no SFX
 
 ==================================================
@@ -307,8 +402,12 @@ Available SFX categories:
 - slap
 - suspicious
 - wow
+- transition
 
 Only use categories from this list.
+
+Pick sfxAssetId from AVAILABLE SFX ASSETS. Do not invent an SFX id.
+sfxCategory must match the chosen asset's category.
 
 SFX should be selected based on the editing moment,
 not simply because the emotion has the same name.
@@ -321,6 +420,31 @@ For example:
 - suspicious statement → suspicious
 - impressive/surprising moment → wow
 - correct/agreement moment → ding
+- middle comment with no meme/video → transition
+
+==================================================
+MIDDLE COMMENTS WITHOUT MEME OR VIDEO
+==================================================
+
+A middle comment is any included comment that is not the first
+and not the last included comment.
+
+If a middle comment has no meme and no video
+(memeAssetId = null and memeCategory = null):
+- You MUST still emit a reaction event for that comment
+- Set sfxCategory = "transition"
+- Keep memeAssetId and memeCategory as null
+- This is an SFX-only cut that bridges to the next comment
+
+Do not use boom, slap, record-scratch, or other reaction SFX
+for this case. Use the transition category only.
+
+The first and last included comments may still be
+memeCategory = null and sfxCategory = null when no treatment fits.
+
+Video memes keep sfxCategory = null.
+Image memes keep their paired reaction SFX. Do not replace that
+paired SFX with transition.
 
 ==================================================
 REACTION DENSITY
@@ -328,7 +452,8 @@ REACTION DENSITY
 
 For HUMOROUS / SARCASTIC / ENTERTAINMENT content:
 
-Target roughly 65% of total reaction overlay duration as video memes.
+Target roughly 65% of reaction-friendly comments as video memes
+(comment count, not overlay duration).
 The remaining roughly 35% can use image meme + SFX or SFX-only.
 
 Examples:
@@ -345,6 +470,8 @@ Never add a meme merely to satisfy the percentage.
 
 If a comment genuinely has no good comedic or visual reaction,
 it is acceptable to leave it without a meme.
+If that comment is in the middle of the list, still assign
+sfxCategory = "transition".
 
 Avoid long sequences of comments without visual treatment
 when the content is clearly humorous.
@@ -356,24 +483,14 @@ There is NO minimum meme requirement.
 For serious, historical, educational, sad, emotional, or
 storytelling-focused content, do NOT force meme reactions.
 
-It is completely valid to return:
+It is valid to return only a small number of meme reactions,
+or none at all.
 
-reactions: []
-
-or only a small number of appropriate reactions.
+Middle comments with no meme/video still need
+sfxCategory = "transition".
 
 The subject matter and tone always take priority over
 meme density.
-
-For NON-HUMOROUS content:
-
-There is NO minimum meme requirement.
-
-It is completely valid to return:
-
-reactions: []
-
-or only a small number of appropriate reactions.
 
 ==================================================
 REACTION QUALITY
@@ -399,6 +516,7 @@ Comment:
 Possible:
 emotion = laughing
 memeCategory = cringe
+sfxAssetId = a slap SFX from AVAILABLE SFX ASSETS
 sfxCategory = slap
 
 Comment:
@@ -407,6 +525,7 @@ Comment:
 Possible:
 emotion = agree
 memeCategory = agree
+sfxAssetId = a ding SFX from AVAILABLE SFX ASSETS
 sfxCategory = ding
 
 Comment:
@@ -415,6 +534,7 @@ Comment:
 Possible:
 emotion = shocked
 memeCategory = shocked
+sfxAssetId = a record-scratch SFX from AVAILABLE SFX ASSETS
 sfxCategory = record-scratch
 
 ==================================================
@@ -423,23 +543,26 @@ DO NOT OVERUSE SFX
 
 Memes are the primary visual reaction layer.
 
-SFX are secondary.
+Reaction SFX (boom, slap, record-scratch, wow, etc.) are secondary.
 
-Do NOT attach an SFX to every meme.
+Do NOT attach a reaction SFX to every meme.
 
 A video with:
 
 10 meme reactions
-4 SFX
+4 reaction SFX
 
 is perfectly valid.
 
 A video with:
 
 10 meme reactions
-10 SFX
+10 reaction SFX
 
 is usually too much.
+
+Transition SFX on middle comments that have no meme/video is required.
+That does not count as overusing reaction SFX.
 
 ==================================================
 OUTPUT
@@ -466,7 +589,8 @@ The JSON must follow this exact structure:
       "emotion": "happy | laughing | sad | angry | shocked | surprised | confused | shy | cringe | scared | agree | neutral",
       "memeAssetId": "one id from the available meme assets or null",
       "memeCategory": "agree | angry | confused | cringe | happy | laughing | sad | scared | shocked | shy | null",
-      "sfxCategory": "boom | ding | fail | impact | record-scratch | sad | slap | suspicious | wow | null"
+      "sfxAssetId": "one id from the available sfx assets or null",
+      "sfxCategory": "boom | ding | fail | impact | record-scratch | sad | slap | suspicious | wow | transition | null"
     }
   ],
   "musicType": "funny | dramatic | chill | sad | neutral"
@@ -483,24 +607,30 @@ FINAL CHECK BEFORE OUTPUT
    sensitive, or storytelling-focused?
    → If YES, do NOT force memes.
 
-3. If memes are appropriate, target roughly 65% video memes and use image
-   memes only with SFX. Video memes must have no SFX.
+3. If memes are appropriate, target roughly 65% of comments as video memes
+   and use image memes only with a specific sfxAssetId. Video memes must
+   have no SFX.
 
-4. SFX should be more selective than memes, except that image memes require it.
+4. Reaction SFX should be more selective than memes, except that image
+   memes require a paired sfxAssetId.
 
-5. Video memes use sfxCategory null; image memes and SFX must appear together.
+5. Video memes use sfxAssetId and sfxCategory null. Image memes and SFX
+   must appear together. Copy sfxAssetId exactly from AVAILABLE SFX ASSETS.
 
 6. Only use the allowed categories listed above.
 
-7. commentIndex must refer to an actual comment.
+7. Every middle comment without meme/video must use sfxCategory "transition"
+   and a transition sfxAssetId.
 
-8. Use Parent comment metadata to understand reply context. A reply should
+8. commentIndex must refer to an actual comment.
+
+9. Use Parent comment metadata to understand reply context. A reply should
     be interpreted together with its parent, but still gets its own reaction
     event when a separate reaction is appropriate.
 
-9. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
+10. voiceId and topicVoiceId must be copied exactly from the configured voice pool.
 
-10. Return JSON only. Do not choose or return animation or duration.
+11. Return JSON only. Do not choose or return animation or duration.
 `;
 
 async function main(): Promise<void> {
@@ -553,21 +683,16 @@ async function main(): Promise<void> {
 
   const thread =
     JSON.parse(threadContent) as ThreadData;
-  const topicMemeIds = assets
-    .filter(
-      (asset) =>
-        asset.type === "meme" &&
-        asset.category === "topic"
-    )
+  const selectableMemes = reactionMemeAssets(assets);
+  const selectableSfx = reactionSfxAssets(assets);
+  const topicMemeIds = topicMemeAssets(assets).map(
+    (asset) => asset.id
+  );
+  const memeAssetOptions = selectableMemes.map(toPromptAsset);
+  const sfxAssetOptions = selectableSfx.map(toPromptAsset);
+  const transitionSfxIds = selectableSfx
+    .filter((asset) => asset.category === "transition")
     .map((asset) => asset.id);
-  const memeAssetOptions = assets
-    .filter((asset) => asset.type === "meme")
-    .map((asset) => ({
-      id: asset.id,
-      category: asset.category,
-      mediaKind: asset.mediaKind,
-      spec: asset.spec ?? ""
-    }));
   const includedComments =
     thread.comments
       .map((comment, index) => ({
@@ -587,6 +712,9 @@ ${JSON.stringify(VOICE_OPTIONS, null, 2)}
 AVAILABLE MEME ASSETS:
 ${JSON.stringify(memeAssetOptions, null, 2)}
 
+AVAILABLE SFX ASSETS:
+${JSON.stringify(sfxAssetOptions, null, 2)}
+
 AVAILABLE TOPIC MEMES:
 ${JSON.stringify(topicMemeIds, null, 2)}
 
@@ -600,19 +728,34 @@ VOICE SELECTION:
 - If AVAILABLE TOPIC MEMES is empty, return topicMemeId as null.
 
 MEME ASSET SELECTION:
-- Read the spec of each AVAILABLE MEME ASSET before choosing it.
+- Read use/when/avoid of each AVAILABLE MEME ASSET before choosing it.
 - For a meme reaction, select exactly one memeAssetId from AVAILABLE MEME ASSETS.
-- Choose the asset whose spec best matches the specific comment and intended
-  editing effect; do not choose only from the emotion or category label.
-- A video asset has mediaKind "video". Prefer video assets for approximately
-  65% of total reaction overlay duration when the content is reaction-friendly.
-- Video assets do not need SFX. If memeAssetId is a video, set sfxCategory to null.
-- An image asset has mediaKind "image" and MUST have a non-null sfxCategory.
+- Choose the asset whose use/when/avoid best matches the specific comment and
+  intended editing effect; do not choose only from the emotion or category label.
+- A video asset has kind "video". Prefer video assets for approximately
+  65% of reaction-friendly comments when the content is reaction-friendly.
+- Video assets do not need SFX. If memeAssetId is a video, set sfxAssetId
+  and sfxCategory to null.
+- An image asset has kind "image" and MUST have a non-null sfxAssetId from
+  AVAILABLE SFX ASSETS.
 - If no meme is appropriate, set memeAssetId and memeCategory to null.
-- If no listed asset fits, use an SFX-only reaction or no reaction rather than
-  inventing an asset ID.
+- If a middle comment has no meme and no video, set sfxCategory to
+  "transition" and sfxAssetId to a transition asset. Do not leave that
+  comment with sfxCategory null.
+- First and last included comments may use sfxAssetId and sfxCategory null
+  when they have no meme/video.
+- If no listed meme fits, use an SFX-only reaction rather than inventing
+  an asset ID. For a middle comment, that SFX-only reaction must use
+  sfxCategory "transition" and a transition sfxAssetId.
 - Do not choose or return animation or duration. Overlay length comes from the
   media files, not from analysis.
+
+SFX ASSET SELECTION:
+- Select sfxAssetId only from AVAILABLE SFX ASSETS.
+- Copy the id exactly. Never invent an SFX id.
+- sfxCategory must match the chosen SFX asset's category.
+- Two assets may share a filename in different folders; pick the id whose
+  category matches the editing moment.
 
 THREAD:
 
@@ -655,6 +798,7 @@ Return this exact JSON structure:
       "emotion": "laughing",
       "memeAssetId": "one id from AVAILABLE MEME ASSETS or null",
       "memeCategory": "laughing",
+      "sfxAssetId": "one id from AVAILABLE SFX ASSETS or null",
       "sfxCategory": null
     }
   ],
@@ -774,6 +918,12 @@ Rules for intensity:
     animation: "none",
     duration: 1
   }));
+  sanitizeAnalysis(analysis, assets);
+  applyMiddleCommentTransitionSfx(
+    analysis,
+    includedComments.map(({ index }) => index),
+    transitionSfxIds
+  );
 
   await fs.writeFile(
     outputPath,
