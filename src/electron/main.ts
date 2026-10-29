@@ -18,6 +18,9 @@ import {
   registerIpc
 } from "./ipc.js";
 import {
+  setupAutoUpdater
+} from "./updater.js";
+import {
   startVbeeServices,
   type VbeeServices
 } from "./vbee-tunnel.js";
@@ -248,7 +251,10 @@ app.whenReady().then(async () => {
   registerIpc(store, library, {
     restartWebhook: startWebhookTunnel
   });
-  createWindow();
+  const mainWindow = createWindow();
+  setupAutoUpdater(() =>
+    mainWindow.isDestroyed() ? undefined : mainWindow
+  );
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

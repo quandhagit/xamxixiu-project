@@ -10,7 +10,7 @@ export const TOPIC_TITLE_MAX_HEIGHT = 268;
 export const TOPIC_TITLE_MIN_HEIGHT = 180;
 export const TOPIC_TITLE_LINE_HEIGHT = 68;
 export const TOPIC_TITLE_PADDING = 64;
-export const TOPIC_TITLE_ANIMATION_DURATION = 0.3;
+export const TOPIC_TITLE_ANIMATION_DURATION = 0.35;
 export const TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH = 200;
 
 export function shouldGenerateTopicTitleVoice(

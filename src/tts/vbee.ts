@@ -57,6 +57,27 @@ interface VbeeRequestResponse {
   };
 }
 
+async function readJson<T>(
+  response: Response,
+  action: string
+): Promise<T> {
+  const body = await response.text();
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    const snippet = body
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+
+    throw new Error(
+      `Vbee ${action} returned a non-JSON response (${response.status}): ${snippet || "empty body"}`
+    );
+  }
+}
+
 export class VbeeTTS implements TTSProvider {
   async synthesize(
     request: TTSRequest
@@ -152,7 +173,10 @@ export class VbeeTTS implements TTSProvider {
       );
 
     const data =
-      await response.json() as VbeeCreateResponse;
+      await readJson<VbeeCreateResponse>(
+        response,
+        "create request"
+      );
 
     if (!response.ok) {
       throw new Error(
@@ -194,7 +218,10 @@ export class VbeeTTS implements TTSProvider {
       );
 
     const data =
-      await response.json() as VbeeRequestResponse;
+      await readJson<VbeeRequestResponse>(
+        response,
+        "get request"
+      );
 
     if (!response.ok) {
       throw new Error(
