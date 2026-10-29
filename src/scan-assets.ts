@@ -1,13 +1,14 @@
-import {
-  scanAssets
-} from "./assets/scanner.js";
+import { scanAssets } from "./assets/scanner.js";
+import { isDirectCli } from "./cli.js";
 
-const assets = await scanAssets();
+if (isDirectCli(import.meta.url)) {
+  const assets = await scanAssets();
 
-console.log(
-  `Scanned ${assets.length} assets.`
-);
+  console.log(
+    `Scanned ${assets.length} assets.`
+  );
 
-console.log(
-  "Catalog is stored atomically in the configured asset root."
-);
+  console.log(
+    "Catalog is stored atomically in the configured asset root."
+  );
+}

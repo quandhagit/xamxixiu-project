@@ -11,6 +11,7 @@ import type {
   AssetType
 } from "../../../src/assets/library";
 import { AssetPreview } from "./AssetPreview";
+import { useErrorToast } from "../app/ErrorToast";
 
 type LibraryTab =
   | "meme-image"
@@ -66,7 +67,7 @@ export function AssetLibraryManager(): React.ReactElement {
   const [query, setQuery] = useState("");
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>();
+  const setError = useErrorToast();
   const tab = TABS.find((item) => item.id === tabId) ?? TABS[0];
 
   async function refresh(): Promise<void> {
@@ -151,11 +152,6 @@ export function AssetLibraryManager(): React.ReactElement {
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-      {error && (
-        <div className="mb-4 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="font-medium">Local asset library</h3>

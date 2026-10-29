@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  deepseek,
-  deepseekModel
+  getDeepseek,
+  getDeepseekModel
 } from "./ai/deepseek.js";
+import { isDirectCli } from "./cli.js";
 import type {
   ThreadAnalysis,
   ReactionEmotion,
@@ -633,15 +634,9 @@ FINAL CHECK BEFORE OUTPUT
 11. Return JSON only. Do not choose or return animation or duration.
 `;
 
-async function main(): Promise<void> {
-  const projectDir = process.argv[2];
-
-  if (!projectDir) {
-    throw new Error(
-      "Usage: yarn analyze <project-directory>"
-    );
-  }
-
+export async function runAnalyze(
+  projectDir: string
+): Promise<void> {
   console.log("Scanning assets before analysis...");
   const assets = await scanAssets();
   console.log(`Scanned ${assets.length} assets.`);
@@ -824,8 +819,8 @@ Rules for intensity:
           `DeepSeek request ${attempt}/${maxAttempts}...`
         );
 
-        return await deepseek.chat.completions.create({
-          model: deepseekModel,
+        return await getDeepseek().chat.completions.create({
+          model: getDeepseekModel(),
           messages: [
             {
               role: "system",
@@ -944,4 +939,18 @@ Rules for intensity:
   );
 }
 
-await main();
+async function main(): Promise<void> {
+  const projectDir = process.argv[2];
+
+  if (!projectDir) {
+    throw new Error(
+      "Usage: yarn analyze <project-directory>"
+    );
+  }
+
+  await runAnalyze(projectDir);
+}
+
+if (isDirectCli(import.meta.url)) {
+  await main();
+}

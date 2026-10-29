@@ -2,8 +2,11 @@
  * Shared comment limits. Edit here to change capture and curate behaviour.
  */
 
-/** Max comments to capture from a thread (auto-scroll stops here). */
-export const CAPTURE_COMMENT_TARGET = 20;
+/**
+ * Comments to capture from a thread: at least 20 (or the whole thread if it
+ * has fewer). Auto-scroll stops once this many are loaded.
+ */
+export const CAPTURE_COMMENT_TARGET = 30;
 
 /** Curate keeps between these many comments. */
 export const CURATE_KEEP_MIN = 8;

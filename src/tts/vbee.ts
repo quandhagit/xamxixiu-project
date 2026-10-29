@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 
 import { requestManager } from "./request-manager.js";
+import { VOICE_SPEED } from "../timeline/audio-constants.js";
 
 const VBEE_API_URL =
   "https://api.vbee.vn/v1/tts";
@@ -25,14 +26,17 @@ function getEnv(name: string): string {
   return value;
 }
 
-const accessToken =
-  getEnv("VBEE_ACCESS_TOKEN");
-
-const appId =
-  getEnv("VBEE_APP_ID");
-
-const webhookUrl =
-  getEnv("VBEE_WEBHOOK_URL");
+function credentials(): {
+  accessToken: string;
+  appId: string;
+  webhookUrl: string;
+} {
+  return {
+    accessToken: getEnv("VBEE_ACCESS_TOKEN"),
+    appId: getEnv("VBEE_APP_ID"),
+    webhookUrl: getEnv("VBEE_WEBHOOK_URL")
+  };
+}
 
 interface VbeeCreateResponse {
   requestId?: string;
@@ -110,6 +114,8 @@ export class VbeeTTS implements TTSProvider {
   private async createRequest(
     request: TTSRequest
   ): Promise<string> {
+    const { accessToken, appId, webhookUrl } =
+      credentials();
     const response =
       await fetch(
         VBEE_API_URL,
@@ -140,7 +146,7 @@ export class VbeeTTS implements TTSProvider {
 
             bitrate: 128,
 
-            speed: 1
+            speed: VOICE_SPEED
           })
         }
       );
@@ -168,6 +174,7 @@ export class VbeeTTS implements TTSProvider {
   private async getRequest(
     requestId: string
   ): Promise<VbeeRequestResponse> {
+    const { accessToken, appId } = credentials();
     const response =
       await fetch(
         `${VBEE_API_URL}/requests/${requestId}`,

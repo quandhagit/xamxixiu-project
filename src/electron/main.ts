@@ -1,12 +1,14 @@
 import {
   app,
   BrowserWindow,
+  net,
   protocol
 } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  fileURLToPath
+  fileURLToPath,
+  pathToFileURL
 } from "node:url";
 import {
   handleAssetMediaRequest
@@ -29,6 +31,11 @@ import {
 import {
   AssetLibrary
 } from "../assets/library.js";
+import {
+  resolveChromiumExecutable,
+  resolveFfmpegPath,
+  resolveFfprobePath
+} from "../binaries.js";
 
 const rendererUrl =
   process.env.XAMXIXIU_RENDERER_URL ??
@@ -79,19 +86,68 @@ function getBundledAssetsRoot(): string {
   return path.join(getProjectRoot(), "assets");
 }
 
+const rendererPrivileges = {
+  standard: true,
+  secure: true,
+  supportFetchAPI: true,
+  stream: true,
+  corsEnabled: true,
+  bypassCSP: true
+} as const;
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "xammedia",
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      stream: true,
-      corsEnabled: true,
-      bypassCSP: true
-    }
+    privileges: rendererPrivileges
+  },
+  {
+    scheme: "xamui",
+    privileges: rendererPrivileges
   }
 ]);
+
+function rendererOutDirectory(): string {
+  return path.join(
+    app.getAppPath(),
+    "renderer",
+    "out"
+  );
+}
+
+function rendererFileFromPathname(
+  pathname: string
+): string | undefined {
+  const root = path.resolve(rendererOutDirectory());
+  let relative = decodeURIComponent(pathname).replace(/^\/+/, "");
+  if (!relative || relative.endsWith("/")) {
+    relative = path.join(relative, "index.html");
+  }
+  const target = path.resolve(root, relative);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    return undefined;
+  }
+  return target;
+}
+
+function registerRendererProtocol(): void {
+  protocol.handle("xamui", async (request) => {
+    let pathname = "/";
+    try {
+      pathname = new URL(request.url).pathname;
+    } catch {
+      return new Response("Bad request", { status: 400 });
+    }
+    const file = rendererFileFromPathname(pathname);
+    if (!file) {
+      return new Response("Not found", { status: 404 });
+    }
+    try {
+      return await net.fetch(pathToFileURL(file).href);
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -111,15 +167,17 @@ function createWindow(): BrowserWindow {
     }
   });
 
-  if (process.env.NODE_ENV === "production") {
-    void window.loadFile(
-      path.join(
-        app.getAppPath(),
-        "renderer",
-        "out",
-        "index.html"
-      )
-    );
+  window.webContents.on(
+    "did-fail-load",
+    (_event, code, description, validatedURL) => {
+      console.error(
+        `[Renderer] Failed to load (${code}) ${validatedURL}: ${description}`
+      );
+    }
+  );
+
+  if (app.isPackaged) {
+    void window.loadURL("xamui://app/");
   } else {
     void window.loadURL(rendererUrl);
   }
@@ -127,7 +185,32 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+function applyRuntimePaths(): void {
+  if (app.isPackaged) {
+    process.env.NODE_ENV ??= "production";
+    if (!process.env.XAMXIXIU_PROJECT_ROOT) {
+      process.env.XAMXIXIU_PROJECT_ROOT = app.getPath("userData");
+    }
+  }
+
+  const ffmpeg = resolveFfmpegPath();
+  const ffprobe = resolveFfprobePath();
+  const chromium = resolveChromiumExecutable();
+
+  if (ffmpeg !== "ffmpeg") {
+    process.env.FFMPEG_PATH = ffmpeg;
+  }
+  if (ffprobe !== "ffprobe") {
+    process.env.FFPROBE_PATH = ffprobe;
+  }
+  if (chromium) {
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE = chromium;
+  }
+}
+
 app.whenReady().then(async () => {
+  applyRuntimePaths();
+
   try {
     applySettings(await loadSettings());
     await startWebhookTunnel();
@@ -151,6 +234,8 @@ app.whenReady().then(async () => {
   await library.initialize(
     app.isPackaged ? getBundledAssetsRoot() : undefined
   );
+
+  registerRendererProtocol();
 
   protocol.handle("xammedia", async (request) => {
     try {

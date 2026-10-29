@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDirectCli } from "../cli.js";
 
 import {
   VbeeTTS
@@ -129,7 +130,7 @@ async function readAnalysis(
   }
 }
 
-async function generateAudio(
+export async function generateAudio(
   projectDir: string,
   onlyTarget?: AudioFailureTarget
 ): Promise<void> {
@@ -372,22 +373,24 @@ async function generateAudio(
 // CLI
 // ==========================================
 
-const projectDir =
-  process.argv[2];
-const targetArgument =
-  process.argv[3];
-const onlyTarget =
-  isAudioFailureTarget(targetArgument)
-    ? targetArgument
-    : undefined;
+if (isDirectCli(import.meta.url)) {
+  const projectDir =
+    process.argv[2];
+  const targetArgument =
+    process.argv[3];
+  const onlyTarget =
+    isAudioFailureTarget(targetArgument)
+      ? targetArgument
+      : undefined;
 
-if (!projectDir) {
-  throw new Error(
-    "Usage: yarn generate-audio <project-dir>"
+  if (!projectDir) {
+    throw new Error(
+      "Usage: yarn generate-audio <project-dir>"
+    );
+  }
+
+  await generateAudio(
+    projectDir,
+    onlyTarget
   );
 }
-
-await generateAudio(
-  projectDir,
-  onlyTarget
-);

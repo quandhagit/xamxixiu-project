@@ -17,6 +17,9 @@ import type {
 } from "./ipc-types.js";
 
 const api: DesktopApi = {
+  openLoginBrowser: () =>
+    ipcRenderer.invoke("browser:open-login"),
+
   captureThread: (url) =>
     ipcRenderer.invoke(
       "capture:thread",

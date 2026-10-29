@@ -1,3 +1,4 @@
+import { MUSIC_VOLUME } from "../../../src/timeline/audio-constants";
 import {
   getSceneBlocks,
   getSceneDuration,
@@ -101,7 +102,7 @@ export function getPreviewAudioTracks(
       file: timeline.musicFile,
       start: 0,
       duration: timeline.totalDuration,
-      volume: 0.35
+      volume: MUSIC_VOLUME
     });
   }
   if (

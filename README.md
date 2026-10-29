@@ -9,7 +9,7 @@
 - Windows 10/11
 - Node.js 20 trở lên
 - Yarn Classic 1.x
-- FFmpeg trên PATH (cần cho **Xuất video** MP4)
+- FFmpeg trên PATH, hoặc chạy `yarn fetch:binaries` để tải ffmpeg/ffprobe/Chromium vào `vendor/` (bản cài Windows đã nhúng sẵn)
 - Tài khoản và API key DeepSeek
 - Tài khoản Vbee TTS
 - Cloudflared chỉ khi không dùng binary đi kèm app (`vendor/cloudflared.exe` hoặc bản cài)
@@ -28,8 +28,10 @@ Mở PowerShell tại thư mục project:
 ```powershell
 cd "D:\congviec\Content Creator\Xàm Xí Xíu\xamxixiu-project"
 yarn install
-npx playwright install chromium
+yarn fetch:binaries
 ```
+
+`yarn fetch:binaries` tải Cloudflared, FFmpeg (ffmpeg + ffprobe) và Playwright Chromium vào `vendor/`. Bản đóng gói Windows nhúng sẵn các file này nên người dùng không cần cài Playwright hay FFmpeg. Khi chạy `yarn dev`, app cũng dùng binary trong `vendor/` nếu có; nếu chưa fetch thì vẫn tìm `ffmpeg`/`ffprobe` trên PATH và Chromium do Playwright tải.
 
 ## Cấu hình `.env`
 
@@ -195,6 +197,8 @@ yarn build
 ```powershell
 yarn package:win
 ```
+
+Installer nằm trong `dist/` (`Xam Xi Xiu Setup *.exe`). Lệnh này tự chạy `yarn fetch:binaries` nên lần đầu sẽ tải Chromium (~200 MB) và FFmpeg. Bản cài ghi project, profile browser và thư viện asset vào `%APPDATA%\xamxixiu-project\`, không ghi vào `Program Files`.
 
 ## Xuất video và Generate CapCut
 

@@ -8,6 +8,12 @@
   "include": [
     "src/electron/**/*.ts",
     "src/project/**/*.ts",
-    "src/export/**/*.ts"
+    "src/export/**/*.ts",
+    "src/analyze.ts",
+    "src/curate.ts",
+    "src/match-reactions.ts",
+    "src/cli.ts",
+    "src/ai/**/*.ts",
+    "src/tts/**/*.ts"
   ]
 }

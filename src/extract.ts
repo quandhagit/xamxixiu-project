@@ -182,7 +182,7 @@ export async function extractPressableComment(
   );
 }
 
-async function readPressableComment(
+export async function readPressableComment(
   container: ReturnType<Page["locator"]>
 ): Promise<{
   author: string;
@@ -229,7 +229,7 @@ async function readPressableComment(
   };
 }
 
-async function extractCommentGroupIndexes(
+export async function extractCommentGroupIndexes(
   container: ReturnType<Page["locator"]>,
   selector: string
 ): Promise<number[] | undefined> {

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  deepseek,
-  deepseekModel
+  getDeepseek,
+  getDeepseekModel
 } from "./ai/deepseek.js";
+import { isDirectCli } from "./cli.js";
 import type { ThreadData } from "./types.js";
 import {
   CURATE_KEEP_MAX,
@@ -101,8 +102,8 @@ async function requestWithRetry(
       );
 
       const response =
-        await deepseek.chat.completions.create({
-          model: deepseekModel,
+        await getDeepseek().chat.completions.create({
+          model: getDeepseekModel(),
           messages: [
             {
               role: "system",
@@ -149,13 +150,9 @@ async function requestWithRetry(
   throw new Error("DeepSeek request failed after retries.");
 }
 
-async function main(): Promise<void> {
-  const projectDir = process.argv[2];
-
-  if (!projectDir) {
-    throw new Error("Usage: yarn curate <project-directory>");
-  }
-
+export async function runCurate(
+  projectDir: string
+): Promise<void> {
   const contentPath = path.join(projectDir, "content.json");
   const threadPath = path.join(projectDir, "thread.json");
   const content =
@@ -282,4 +279,16 @@ ${JSON.stringify(
   );
 }
 
-await main();
+async function main(): Promise<void> {
+  const projectDir = process.argv[2];
+
+  if (!projectDir) {
+    throw new Error("Usage: yarn curate <project-directory>");
+  }
+
+  await runCurate(projectDir);
+}
+
+if (isDirectCli(import.meta.url)) {
+  await main();
+}

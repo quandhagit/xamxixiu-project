@@ -1,4 +1,5 @@
 import path from "node:path";
+import { MUSIC_VOLUME } from "../../timeline/audio-constants.js";
 import type {
   TimelineCommentBlock,
   TimelineScene,
@@ -296,7 +297,7 @@ export async function buildCompileSpec(
           timeline.totalDuration,
           absoluteAsset(timeline.musicFile)
         ),
-        volume: 0.35,
+        volume: MUSIC_VOLUME,
         ref: "music"
       }]
     });

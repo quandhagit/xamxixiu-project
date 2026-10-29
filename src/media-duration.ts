@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parseFile } from "music-metadata";
+import { resolveFfprobePath } from "./binaries.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,7 +19,7 @@ export async function readMediaDuration(
 ): Promise<number> {
   try {
     const { stdout } = await execFileAsync(
-      "ffprobe",
+      resolveFfprobePath(),
       [
         "-v",
         "quiet",

@@ -2,6 +2,7 @@ import type {
   Metadata
 } from "next";
 import "./globals.css";
+import { ErrorToastHost } from "../features/app/ErrorToast";
 
 export const metadata: Metadata = {
   title: "Xàm Xí Xíu",
@@ -15,7 +16,10 @@ export default function RootLayout({
 }>): React.ReactElement {
   return (
     <html lang="vi">
-      <body>{children}</body>
+      <body>
+        {children}
+        <ErrorToastHost />
+      </body>
     </html>
   );
 }

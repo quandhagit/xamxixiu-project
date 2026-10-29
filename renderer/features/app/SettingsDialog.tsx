@@ -20,6 +20,7 @@ import {
 import type {
   SpeechAbbreviationEntry
 } from "../../../src/comments/speech-abbreviations";
+import { useErrorToast } from "./ErrorToast";
 
 const EMPTY_SETTINGS: AppSettings = {
   deepseekApiKey: "",
@@ -31,7 +32,12 @@ const EMPTY_SETTINGS: AppSettings = {
   capcutDraftsDir: ""
 };
 
-type TabId = "deepseek" | "vbee" | "capcut" | "abbreviations";
+type TabId =
+  | "deepseek"
+  | "vbee"
+  | "capcut"
+  | "threads"
+  | "abbreviations";
 
 const TABS: Array<{
   id: TabId;
@@ -52,6 +58,11 @@ const TABS: Array<{
     id: "capcut",
     label: "CapCut",
     hint: "Thư mục drafts"
+  },
+  {
+    id: "threads",
+    label: "Threads",
+    hint: "Đăng nhập trình duyệt"
   },
   {
     id: "abbreviations",
@@ -139,7 +150,8 @@ export function SettingsDialog({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [choosingDirectory, setChoosingDirectory] = useState(false);
-  const [error, setError] = useState<string>();
+  const [loginOpen, setLoginOpen] = useState(false);
+  const setError = useErrorToast();
   const [status, setStatus] = useState<string>();
   const [rows, setRows] = useState<AbbreviationRow[]>([]);
   const [savedKey, setSavedKey] = useState(entriesKey([]));
@@ -292,6 +304,22 @@ export function SettingsDialog({
       );
     } finally {
       setChoosingDirectory(false);
+    }
+  }
+
+  async function openLogin(): Promise<void> {
+    setLoginOpen(true);
+    setError(undefined);
+    try {
+      await window.xamxixiu.openLoginBrowser();
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không mở được trình duyệt đăng nhập."
+      );
+    } finally {
+      setLoginOpen(false);
     }
   }
 
@@ -635,6 +663,30 @@ export function SettingsDialog({
               </section>
             ) : null}
 
+            {activeTab === "threads" ? (
+              <section className="mx-auto max-w-2xl space-y-4">
+                <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
+                  THREADS
+                </h4>
+                <p className="text-sm leading-6 text-zinc-400">
+                  Mở trình duyệt capture để đăng nhập Threads. Đăng nhập
+                  xong hãy đóng cửa sổ trình duyệt; phiên đăng nhập được
+                  lưu lại cho các lần capture sau. Không thể capture khi
+                  cửa sổ này đang mở.
+                </p>
+                <button
+                  type="button"
+                  disabled={loginOpen}
+                  onClick={() => void openLogin()}
+                  className="rounded-xl border border-white/15 px-4 py-3 text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-40"
+                >
+                  {loginOpen
+                    ? "Đang mở... đóng cửa sổ trình duyệt khi đăng nhập xong"
+                    : "Mở trình duyệt để đăng nhập"}
+                </button>
+              </section>
+            ) : null}
+
             {activeTab === "abbreviations" ? (
               <section className="flex h-full min-h-0 flex-col gap-5">
                 <div>
@@ -839,12 +891,7 @@ export function SettingsDialog({
 
         <div className="flex items-center justify-between gap-4 border-t border-white/10 px-6 py-4">
           <div className="min-w-0 flex-1 text-sm">
-            {error ? (
-              <p className="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-2 text-red-200">
-                {error}
-              </p>
-            ) : null}
-            {!error && status ? (
+            {status ? (
               <p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-emerald-200">
                 {status}
               </p>

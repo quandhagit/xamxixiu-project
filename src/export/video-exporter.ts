@@ -12,6 +12,10 @@ import type {
 } from "../capcut/compile/types.js";
 import type { VideoTimeline } from "../types.js";
 import { TOPIC_TITLE_ANIMATION_DURATION } from "../timeline/topic-constants.js";
+import {
+  resolveFfmpegPath,
+  resolveFfprobePath
+} from "../binaries.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -85,7 +89,7 @@ async function probeMedia(file: string): Promise<MediaProbe> {
   }
 
   const { stdout } = await execFileAsync(
-    "ffprobe",
+    resolveFfprobePath(),
     [
       "-v",
       "quiet",
@@ -213,7 +217,7 @@ function runFfmpeg(
   }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", args, {
+    const child = spawn(resolveFfmpegPath(), args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -258,7 +262,7 @@ function runFfmpeg(
     child.once("error", (error) => {
       reject(
         new Error(
-          `Không tìm thấy ffmpeg. Hãy cài FFmpeg và thêm vào PATH. ${error.message}`
+          `Không tìm thấy ffmpeg. Chạy yarn fetch:binaries hoặc cài FFmpeg vào PATH. ${error.message}`
         )
       );
     });

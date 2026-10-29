@@ -3,9 +3,6 @@ import {
   ipcMain,
   shell
 } from "electron";
-import {
-  spawn
-} from "node:child_process";
 import fs from "node:fs/promises";
 
 import type {
@@ -27,10 +24,16 @@ import {
   loadSettings,
   saveSettings
 } from "./settings.js";
+import { runAnalyze } from "../analyze.js";
+import { scanAssets } from "../assets/scanner.js";
 import {
   captureComment,
   captureThread
 } from "../capture.js";
+import { openLoginBrowser } from "../browser.js";
+import { runCurate } from "../curate.js";
+import { runMatchReactions } from "../match-reactions.js";
+import { generateAudio } from "../tts/generate-audio.js";
 import {
   applyImageOrder,
   inverseImageOrder
@@ -133,58 +136,6 @@ function isInsideDirectory(
     resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
 }
 
-function runYarnCommand(
-  args: string[],
-  cwd: string
-): Promise<void> {
-  const isWindows =
-    process.platform === "win32";
-  const yarnCommand =
-    isWindows ? "yarn.cmd" : "yarn";
-  const command =
-    isWindows
-      ? [
-          yarnCommand,
-          args[0],
-          ...args.slice(1).map(
-            (arg) =>
-              `"${arg.replaceAll(
-                "\"",
-                "\\\""
-              )}"`
-          )
-        ].join(" ")
-      : yarnCommand;
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      command,
-      isWindows ? [] : args,
-      {
-        cwd,
-        env: process.env,
-        shell: isWindows,
-        stdio: "inherit",
-        windowsHide: true
-      }
-    );
-
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(
-        new Error(
-          `${yarnCommand} ${args.join(" ")} exited with code ${code ?? "unknown"}`
-        )
-      );
-    });
-  });
-}
-
 export function registerIpc(
   store: ProjectStore,
   library: AssetLibrary,
@@ -192,6 +143,13 @@ export function registerIpc(
     restartWebhook?: () => Promise<void>;
   }
 ): void {
+  ipcMain.handle(
+    "browser:open-login",
+    async () => {
+      await openLoginBrowser();
+    }
+  );
+
   ipcMain.handle(
     "capture:thread",
     async (_event, url: string) => {
@@ -392,10 +350,7 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        ["curate", directory],
-        process.cwd()
-      );
+      await runCurate(directory);
       const project =
         await store.getProject(projectId);
 
@@ -414,10 +369,7 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        ["analyze", directory],
-        process.cwd()
-      );
+      await runAnalyze(directory);
       const project =
         await store.getProject(projectId);
 
@@ -884,10 +836,7 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        ["generate-audio", directory],
-        process.cwd()
-      );
+      await generateAudio(directory);
       const project =
         await store.getProject(projectId);
 
@@ -910,14 +859,7 @@ export function registerIpc(
     ) => {
       const directory =
         store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        [
-          "generate-audio",
-          directory,
-          target
-        ],
-        process.cwd()
-      );
+      await generateAudio(directory, target);
       const project =
         await store.getProject(projectId);
 
@@ -936,14 +878,8 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
-      await runYarnCommand(
-        ["scan-assets"],
-        process.cwd()
-      );
-      await runYarnCommand(
-        ["match-reactions", directory],
-        process.cwd()
-      );
+      await scanAssets();
+      await runMatchReactions(directory);
       const project =
         await store.getProject(projectId);
 

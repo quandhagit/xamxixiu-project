@@ -10,8 +10,9 @@ import {
 } from "./browser.js";
 
 import {
+  extractCommentGroupIndexes,
   extractPressableComment,
-  extractThread
+  readPressableComment
 } from "./extract.js";
 
 import {
@@ -23,7 +24,8 @@ import {
 } from "./screenshot.js";
 
 import type {
-  ThreadComment
+  ThreadComment,
+  ThreadData
 } from "./types.js";
 
 import {
@@ -33,6 +35,7 @@ import {
 import {
   CAPTURE_COMMENT_TARGET
 } from "./comments/comment-constants.js";
+import { getRuntimeRoot } from "./binaries.js";
 
 export interface CaptureResult {
   projectDir: string;
@@ -42,48 +45,342 @@ export interface CaptureResult {
 
 const PRESSABLE_SELECTOR =
   '[data-pressable-container="true"]';
-const MAX_SCROLL_ROUNDS = 15;
-const MAX_STALLED_ROUNDS = 3;
+const MAX_SCROLL_ROUNDS = 40;
+const MAX_STALLED_ROUNDS = 5;
+const SCROLL_WAIT_MS = 1500;
+
+interface HarvestedComment {
+  key: string;
+  author: string;
+  text: string;
+  likes: number;
+  parentKey?: string;
+}
 
 /**
- * Scrolls the page until enough comment containers are rendered (the post
- * itself counts as one) or no new containers appear. Returns to the top so
- * container indexes stay stable for extraction and screenshots.
+ * Finds where a comment currently sits in the container list. Checks the
+ * expected index first, then scans the rest (Threads virtualizes the list,
+ * so indexes shift while scrolling).
  */
-async function loadMoreComments(
-  page: Page
-): Promise<void> {
+async function findContainerIndexByContent(
+  page: Page,
+  matches: (author: string, text: string) => boolean,
+  expected: number
+): Promise<number | undefined> {
   const containers = page.locator(PRESSABLE_SELECTOR);
-  const wanted = CAPTURE_COMMENT_TARGET + 1;
-  let count = await containers.count();
-  let stalled = 0;
+  const count = await containers.count();
+  const order = [
+    expected,
+    ...Array.from({ length: count }, (_, i) => i).filter(
+      (i) => i !== expected
+    )
+  ];
 
-  for (
-    let round = 0;
-    round < MAX_SCROLL_ROUNDS &&
-      count < wanted &&
-      stalled < MAX_STALLED_ROUNDS;
-    round++
-  ) {
-    await page.evaluate(() => {
-      window.scrollBy(0, window.innerHeight * 0.9);
-    });
-    await page.waitForTimeout(1200);
+  for (const i of order) {
+    if (i < 0 || i >= count) {
+      continue;
+    }
 
-    const next = await containers.count();
+    const content = await readPressableComment(
+      containers.nth(i)
+    ).catch(() => undefined);
 
-    stalled = next > count ? 0 : stalled + 1;
-    count = next;
+    if (content && matches(content.author, content.text)) {
+      return i;
+    }
   }
+
+  return undefined;
+}
+
+/**
+ * When the shared comment is the focused post, its container also holds the
+ * sort bar and reply composer. Returns how many px to cut from the bottom so
+ * the image ends right under the like/reply/repost/share row (0 otherwise).
+ */
+async function actionBarCropPx(
+  page: Page,
+  containerIndex: number
+): Promise<number> {
+  return page
+    .locator(PRESSABLE_SELECTOR)
+    .nth(containerIndex)
+    .evaluate((element) => {
+      const composer = element.querySelector(
+        '[contenteditable="true"][role="textbox"]'
+      );
+
+      if (!composer) {
+        return 0;
+      }
+
+      const labels =
+        /^(thích|trả lời|đăng lại|chia sẻ|like|reply|repost|share)$/i;
+      const box = element.getBoundingClientRect();
+      const composerTop =
+        composer.getBoundingClientRect().top;
+      let actionsBottom = 0;
+
+      for (const svg of Array.from(
+        element.querySelectorAll("svg")
+      )) {
+        const label = (
+          svg.getAttribute("aria-label") ??
+          svg.querySelector("title")?.textContent ??
+          ""
+        ).trim();
+
+        if (!labels.test(label)) {
+          continue;
+        }
+
+        const rect = svg.getBoundingClientRect();
+
+        if (rect.bottom < composerTop) {
+          actionsBottom = Math.max(
+            actionsBottom,
+            rect.bottom
+          );
+        }
+      }
+
+      if (actionsBottom <= 0) {
+        return 0;
+      }
+
+      // Keep the action row's own padding below the icons.
+      const keepBelow = 12;
+
+      return Math.max(
+        0,
+        Math.floor(box.bottom - actionsBottom - keepBelow)
+      );
+    })
+    .catch(() => 0);
+}
+
+function commentKey(author: string, text: string): string {
+  return `${author}\u0000${text}`;
+}
+
+/**
+ * Threads unmounts off-screen containers while scrolling, so the whole
+ * thread is never in the DOM at once. Instead of scrolling first and
+ * capturing afterwards, harvest (extract + screenshot) every container that
+ * is rendered at each scroll step, de-duplicating by author + text.
+ */
+async function harvestThread(
+  page: Page,
+  rawDir: string
+): Promise<ThreadData> {
+  const containers = page.locator(PRESSABLE_SELECTOR);
 
   await page.evaluate(() => {
     window.scrollTo(0, 0);
   });
   await page.waitForTimeout(800);
 
-  console.log(
-    `Loaded ${count} containers (target ${wanted}).\n`
+  const post = await readPressableComment(containers.first());
+
+  if (!post) {
+    throw new Error("Could not extract any Threads content");
+  }
+
+  const postKey = commentKey(post.author, post.text);
+
+  await screenshotContainer(
+    page,
+    0,
+    path.join(rawDir, "topic.png"),
+    124
   );
+
+  const harvested: HarvestedComment[] = [];
+  const seen = new Set<string>([postKey]);
+  let stalled = 0;
+
+  for (
+    let round = 0;
+    round < MAX_SCROLL_ROUNDS &&
+      harvested.length < CAPTURE_COMMENT_TARGET &&
+      stalled < MAX_STALLED_ROUNDS;
+    round++
+  ) {
+    const before = harvested.length;
+    const count = await containers.count();
+    const keys: Array<string | undefined> = [];
+    const groups: Array<number[] | undefined> = [];
+    const contents: Array<
+      Awaited<ReturnType<typeof readPressableComment>>
+    > = [];
+
+    for (let i = 0; i < count; i++) {
+      const content = await readPressableComment(
+        containers.nth(i)
+      ).catch(() => undefined);
+
+      contents.push(content);
+      keys.push(
+        content
+          ? commentKey(content.author, content.text)
+          : undefined
+      );
+      groups.push(
+        content
+          ? await extractCommentGroupIndexes(
+            containers.nth(i),
+            PRESSABLE_SELECTOR
+          ).catch(() => undefined)
+          : undefined
+      );
+    }
+
+    for (
+      let i = 0;
+      i < count &&
+        harvested.length < CAPTURE_COMMENT_TARGET;
+      i++
+    ) {
+      const key = keys[i];
+      const content = contents[i];
+
+      if (!key || !content || seen.has(key)) {
+        continue;
+      }
+
+      const filename = `comment-${String(
+        harvested.length + 1
+      ).padStart(2, "0")}.png`;
+
+      try {
+        // Make sure the DOM did not shift since the read pass.
+        const check = await readPressableComment(
+          containers.nth(i)
+        );
+
+        if (
+          !check ||
+          commentKey(check.author, check.text) !== key
+        ) {
+          continue;
+        }
+
+        await screenshotContainer(
+          page,
+          i,
+          path.join(rawDir, filename),
+          0,
+          () =>
+            findContainerIndexByContent(
+              page,
+              (author, text) =>
+                commentKey(author, text) === key,
+              i
+            )
+        );
+      } catch {
+        continue;
+      }
+
+      const group = groups[i];
+      const parentKey =
+        group && group.length > 1 && group[0] !== i
+          ? keys[group[0]]
+          : undefined;
+
+      seen.add(key);
+      harvested.push({
+        key,
+        author: content.author,
+        text: content.text,
+        likes: content.likes,
+        ...(parentKey && parentKey !== postKey
+          ? { parentKey }
+          : {})
+      });
+    }
+
+    stalled =
+      harvested.length > before ? 0 : stalled + 1;
+
+    if (harvested.length >= CAPTURE_COMMENT_TARGET) {
+      break;
+    }
+
+    await page.evaluate(() => {
+      window.scrollBy(0, window.innerHeight * 0.9);
+    });
+    await page.waitForTimeout(SCROLL_WAIT_MS);
+
+    // Click "view more" style buttons if the thread lazy-loads via buttons.
+    const moreButton = page
+      .getByRole("button", {
+        name: /xem thêm|view more|show more|more replies/i
+      })
+      .first();
+
+    if (await moreButton.isVisible().catch(() => false)) {
+      await moreButton.click().catch(() => undefined);
+      await page.waitForTimeout(SCROLL_WAIT_MS);
+    }
+  }
+
+  console.log(
+    `Captured ${harvested.length} comments (target ${CAPTURE_COMMENT_TARGET}).\n`
+  );
+
+  const keyToIndex = new Map(
+    harvested.map((item, index) => [item.key, index])
+  );
+
+  const comments: ThreadComment[] = harvested.map(
+    (item, index) => {
+      const parentIndex = item.parentKey
+        ? keyToIndex.get(item.parentKey)
+        : undefined;
+
+      return {
+        author: item.author,
+        text: item.text,
+        likes: item.likes,
+        containerIndex: index + 1,
+        commentIndex: index,
+        ...(parentIndex !== undefined &&
+          parentIndex !== index
+          ? { parentCommentIndex: parentIndex }
+          : {})
+      };
+    }
+  );
+
+  for (const comment of comments) {
+    const parentIndex = comment.parentCommentIndex;
+
+    if (parentIndex === undefined) {
+      continue;
+    }
+
+    const parent = comments[parentIndex];
+
+    if (!parent) {
+      delete comment.parentCommentIndex;
+      continue;
+    }
+
+    parent.replies = [
+      ...(parent.replies ?? []),
+      { ...comment, replies: undefined }
+    ];
+  }
+
+  return {
+    url: page.url(),
+    author: post.author,
+    text: post.text,
+    likes: post.likes,
+    postContainerIndex: 0,
+    comments
+  };
 }
 
 export async function captureThread(
@@ -101,34 +398,6 @@ export async function captureThread(
 
     await page.waitForTimeout(3000);
 
-    console.log("Loading comments...\n");
-
-    await loadMoreComments(page);
-
-    console.log("Extracting thread...\n");
-
-    const thread = await extractThread(page);
-
-    if (thread.comments.length > CAPTURE_COMMENT_TARGET) {
-      thread.comments = thread.comments
-        .slice(0, CAPTURE_COMMENT_TARGET)
-        .map((comment) => {
-          if (!comment.replies) {
-            return comment;
-          }
-
-          const replies = comment.replies.filter(
-            (reply) =>
-              (reply.commentIndex ?? 0) <
-              CAPTURE_COMMENT_TARGET
-          );
-
-          return replies.length > 0
-            ? { ...comment, replies }
-            : { ...comment, replies: undefined };
-        });
-    }
-
     const timestamp = new Date()
       .toISOString()
       .replace(/[:.]/g, "-");
@@ -136,6 +405,7 @@ export async function captureThread(
     const projectId = `${timestamp}-thread`;
 
     const projectDir = path.join(
+      getRuntimeRoot(),
       "projects",
       projectId
     );
@@ -148,6 +418,10 @@ export async function captureThread(
     await fs.mkdir(rawDir, {
       recursive: true
     });
+
+    console.log("Loading and capturing comments...\n");
+
+    const thread = await harvestThread(page, rawDir);
 
     // Save thread.json
     const threadPath = path.join(
@@ -164,33 +438,6 @@ export async function captureThread(
     console.log(
       `Saved: ${threadPath}`
     );
-
-    // Screenshot main post
-    await screenshotContainer(
-      page,
-      thread.postContainerIndex,
-      path.join(rawDir, "topic.png"),
-      124
-    );
-
-    // Screenshot comments
-    for (
-      let i = 0;
-      i < thread.comments.length;
-      i++
-    ) {
-      const comment = thread.comments[i];
-
-      const filename = `comment-${String(
-        i + 1
-      ).padStart(2, "0")}.png`;
-
-      await screenshotContainer(
-        page,
-        comment.containerIndex,
-        path.join(rawDir, filename)
-      );
-    }
 
     return {
       projectDir,
@@ -224,7 +471,9 @@ function replyCodesFromUrl(url: string): string[] {
   }
 
   const match =
-    /\/reply\/([^/]+)/.exec(parsed.pathname);
+    /\/(?:reply|post|share)\/([^/]+)/.exec(
+      parsed.pathname
+    );
 
   if (!match?.[1]) {
     return [];
@@ -254,24 +503,32 @@ async function findReplyContainerIndex(
     const anchors = Array.from(
       document.querySelectorAll("a[href]")
     );
-    const anchor = anchors.find((element) => {
+    // Some matching anchors live outside any post container
+    // (e.g. a canonical link), so only accept ones inside one.
+    let container: Element | null = null;
+
+    for (const element of anchors) {
       const href =
         element.getAttribute("href") ?? "";
 
-      return needles.some(
-        (code) =>
-          code.length > 0 &&
-          href.includes(code)
+      if (
+        !needles.some(
+          (code) =>
+            code.length > 0 &&
+            href.includes(code)
+        )
+      ) {
+        continue;
+      }
+
+      container = element.closest(
+        '[data-pressable-container="true"]'
       );
-    });
 
-    if (!anchor) {
-      return -1;
+      if (container) {
+        break;
+      }
     }
-
-    const container = anchor.closest(
-      '[data-pressable-container="true"]'
-    );
 
     if (!container) {
       return -1;
@@ -290,12 +547,8 @@ export async function captureComment(
 ): Promise<ThreadComment> {
   const codes = replyCodesFromUrl(input.url);
 
-  if (codes.length === 0) {
-    throw new Error(
-      "URL must contain a /reply/{code} segment"
-    );
-  }
-
+  // Share links (e.g. /share/XXXX) have no /reply/{code};
+  // the code is resolved from the redirected page URL below.
   const filename = `comment-${String(
     input.imageIndex + 1
   ).padStart(2, "0")}.png`;
@@ -321,12 +574,46 @@ export async function captureComment(
       }
     }
 
-    const containerIndex =
-      await findReplyContainerIndex(page, codes);
+    if (/\/share\//.test(page.url())) {
+      await page
+        .waitForURL((u) => !/\/share\//.test(u.pathname), {
+          timeout: 10000
+        })
+        .catch(() => undefined);
+      await page.waitForTimeout(2000);
+
+      for (const code of replyCodesFromUrl(page.url())) {
+        if (!codes.includes(code)) {
+          codes.push(code);
+        }
+      }
+    }
+
+    let containerIndex = codes.length > 0
+      ? await findReplyContainerIndex(page, codes)
+      : -1;
+
+    for (
+      let attempt = 0;
+      containerIndex < 0 && attempt < 6;
+      attempt++
+    ) {
+      await page.waitForTimeout(1500);
+
+      for (const code of replyCodesFromUrl(page.url())) {
+        if (!codes.includes(code)) {
+          codes.push(code);
+        }
+      }
+
+      containerIndex = codes.length > 0
+        ? await findReplyContainerIndex(page, codes)
+        : -1;
+    }
 
     if (containerIndex < 0) {
       throw new Error(
-        "Could not find the reply comment"
+        "Không tìm thấy comment trong trang. Hãy kiểm tra lại link."
       );
     }
 
@@ -338,21 +625,21 @@ export async function captureComment(
 
     if (!extracted) {
       throw new Error(
-        "Could not extract the reply comment"
+        "Không đọc được nội dung comment."
       );
     }
 
     const author = extracted.author.trim();
     const text = extracted.text.trim();
-    const duplicate = input.existing.some(
+    const duplicateIndex = input.existing.findIndex(
       (item) =>
         item.author.trim() === author &&
         item.text.trim() === text
     );
 
-    if (duplicate) {
+    if (duplicateIndex >= 0) {
       throw new Error(
-        "This comment is already in the draft"
+        `Comment bạn vừa thêm đã có sẵn trong list comment. index: ${duplicateIndex}`
       );
     }
 
@@ -371,7 +658,16 @@ export async function captureComment(
       await screenshotContainer(
         page,
         containerIndex,
-        tempPath
+        tempPath,
+        await actionBarCropPx(page, containerIndex),
+        () =>
+          findContainerIndexByContent(
+            page,
+            (candidateAuthor, candidateText) =>
+              candidateAuthor.trim() === author &&
+              candidateText.trim() === text,
+            containerIndex
+          )
       );
       await processImage(
         tempPath,

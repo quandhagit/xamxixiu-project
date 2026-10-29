@@ -4,7 +4,10 @@ import type {
 
 const nextConfig: NextConfig = {
   output: "export",
-  trailingSlash: true
+  trailingSlash: true,
+  images: {
+    unoptimized: true
+  }
 };
 
 export default nextConfig;

@@ -25,6 +25,9 @@ import {
   AppChrome
 } from "../features/app/AppChrome";
 import {
+  useErrorToast
+} from "../features/app/ErrorToast";
+import {
   TOPIC_TITLE_CARD_FILE,
   shouldGenerateTopicTitleVoice
 } from "../../src/timeline/topic-constants";
@@ -130,8 +133,7 @@ export default function Home(): React.ReactElement {
     useState(false);
   const [operationLoading, setOperationLoading] =
     useState(false);
-  const [error, setError] =
-    useState<string>();
+  const setError = useErrorToast();
   const pendingVoiceSave = useRef(
     Promise.resolve()
   );
@@ -1731,11 +1733,6 @@ export default function Home(): React.ReactElement {
               {loading && (
                 <p className="mt-5 text-sm text-zinc-500">
                   Đang tải project...
-                </p>
-              )}
-              {error && (
-                <p className="mt-5 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200">
-                  {error}
                 </p>
               )}
             </div>

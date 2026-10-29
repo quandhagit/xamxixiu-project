@@ -12,6 +12,7 @@ import type {
 } from "../../../src/types";
 import type { ProjectState } from "../../../src/project/store";
 import { AssetPreview } from "./AssetPreview";
+import { useErrorToast } from "../app/ErrorToast";
 
 interface Props {
   projectId: string;
@@ -55,7 +56,7 @@ export function AssetWorkspace({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState<string>();
+  const setError = useErrorToast();
 
   async function refresh(): Promise<void> {
     setLoading(true);
@@ -147,11 +148,6 @@ export function AssetWorkspace({
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-      {error && (
-        <div className="mb-4 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="font-medium">Assets flow editor</h3>

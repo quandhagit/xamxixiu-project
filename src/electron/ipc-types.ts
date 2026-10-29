@@ -210,4 +210,6 @@ export interface DesktopApi {
     entries: SpeechAbbreviationEntry[]
   ): Promise<SpeechAbbreviationEntry[]>;
   chooseSettingsDirectory(): Promise<string | null>;
+  /** Opens Chromium on the Threads login page; resolves when the user closes it. */
+  openLoginBrowser(): Promise<void>;
 }

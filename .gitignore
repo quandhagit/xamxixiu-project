@@ -14,9 +14,11 @@ coverage/
 .vbee-requests.json
 .vbee-callbacks.json
 
-# Fetched cloudflared binary. Run `yarn fetch:cloudflared` before packaging.
+# Fetched binaries. Run `yarn fetch:binaries` before packaging.
 /vendor/cloudflared.exe
 /vendor/cloudflared.version
+/vendor/ffmpeg/
+/vendor/playwright-chromium/
 
 # Secrets and local environment files
 .env
