@@ -120,6 +120,7 @@ export interface ReactionEvent {
 
 export interface ThreadAnalysis {
   topicTitle?: string;
+  topicIntroEnabled?: boolean;
   topicVoiceId?: string;
   topicTitleVoiceId?: string;
   topicMemeId?: string | null;

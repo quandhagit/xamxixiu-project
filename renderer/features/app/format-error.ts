@@ -112,6 +112,14 @@ const TRANSLATIONS: Array<
     () => "Dữ liệu giọng đọc không hợp lệ."
   ],
   [
+    /^Invalid topic intro payload$/,
+    () => "Dữ liệu topic title không hợp lệ."
+  ],
+  [
+    /^Invalid topic title$/,
+    () => "Topic title không hợp lệ."
+  ],
+  [
     /^Invalid asset id$/,
     () => "ID asset không hợp lệ."
   ],

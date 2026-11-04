@@ -16,6 +16,7 @@ import {
 } from "./tts/voice-pool.js";
 import { scanAssets } from "./assets/scanner.js";
 import { ANALYZE_TARGET_COMMENT_COUNT } from "./comments/comment-constants.js";
+import { TOPIC_TITLE_MAX_LENGTH } from "./timeline/topic-constants.js";
 import {
   reactionMemeAssets,
   reactionSfxAssets,
@@ -903,8 +904,8 @@ Rules for intensity:
   const topicTitle = analysis.topicTitle?.trim();
   if (topicTitle) {
     analysis.topicTitle =
-      topicTitle.length > 80
-        ? `${topicTitle.slice(0, 77).trimEnd()}...`
+      topicTitle.length > TOPIC_TITLE_MAX_LENGTH
+        ? `${topicTitle.slice(0, TOPIC_TITLE_MAX_LENGTH - 3).trimEnd()}...`
         : topicTitle;
   }
 

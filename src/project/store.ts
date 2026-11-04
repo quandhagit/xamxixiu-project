@@ -17,6 +17,7 @@ import type {
 import type { Asset } from "../assets/scanner.js";
 import type { AssetAssignmentSelections } from "../timeline/replace-asset.js";
 import { buildTimeline } from "../timeline/builder.js";
+import { normalizeTopicTitle } from "../timeline/topic-constants.js";
 
 export interface ProjectSummary {
   id: string;
@@ -402,6 +403,10 @@ export class ProjectStore {
         }
         analysis.topicMemeId = id ?? null;
       }
+      if ("topicIntroEnabled" in selections) {
+        analysis.topicIntroEnabled =
+          selections.topicIntroEnabled !== false;
+      }
     }
     await atomicWriteJson(
       path.join(directory, "reactions.json"),
@@ -414,6 +419,49 @@ export class ProjectStore {
       path.join(directory, "timeline.json"),
       { force: true }
     );
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project could not be loaded: ${projectId}`);
+    }
+    return project;
+  }
+
+  async saveTopicIntro(
+    projectId: string,
+    update: {
+      topicTitle?: string;
+      enabled?: boolean;
+    }
+  ): Promise<ProjectState> {
+    if (
+      update.topicTitle === undefined &&
+      update.enabled === undefined
+    ) {
+      throw new Error("Invalid topic intro payload");
+    }
+
+    const directory = this.getProjectDirectory(projectId);
+    const analysisFile = path.join(directory, "analysis.json");
+    const analysis = await readJson<ThreadAnalysis>(analysisFile);
+    if (!analysis) {
+      throw new Error("Project analysis is missing");
+    }
+
+    if (update.topicTitle !== undefined) {
+      if (typeof update.topicTitle !== "string") {
+        throw new Error("Invalid topic title");
+      }
+      analysis.topicTitle = normalizeTopicTitle(update.topicTitle);
+    }
+    if (update.enabled !== undefined) {
+      analysis.topicIntroEnabled = update.enabled;
+    }
+
+    await atomicWriteJson(analysisFile, analysis);
+    if (await pathIsFile(path.join(directory, "timeline.json"))) {
+      return this.rebuildTimeline(projectId);
+    }
+
     const project = await this.getProject(projectId);
     if (!project) {
       throw new Error(`Project could not be loaded: ${projectId}`);

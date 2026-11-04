@@ -77,6 +77,12 @@ export interface ReplaceTimelineAssetPayload {
   assetId: string | null;
 }
 
+export interface UpdateTopicIntroPayload {
+  projectId: string;
+  topicTitle?: string;
+  enabled?: boolean;
+}
+
 export interface DeleteAssetResult {
   deleted: boolean;
   projectReferences: string[];
@@ -186,6 +192,9 @@ export interface DesktopApi {
   ): Promise<ProjectState>;
   replaceTimelineAsset(
     payload: ReplaceTimelineAssetPayload
+  ): Promise<ProjectState>;
+  updateTopicIntro(
+    payload: UpdateTopicIntroPayload
   ): Promise<ProjectState>;
   updateContent(
     payload: UpdateContentPayload

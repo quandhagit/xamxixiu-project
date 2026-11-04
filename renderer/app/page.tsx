@@ -29,6 +29,8 @@ import {
 } from "../features/app/ErrorToast";
 import {
   TOPIC_TITLE_CARD_FILE,
+  TOPIC_TITLE_MAX_LENGTH,
+  normalizeTopicTitle,
   shouldGenerateTopicTitleVoice
 } from "../../src/timeline/topic-constants";
 import {
@@ -133,10 +135,17 @@ export default function Home(): React.ReactElement {
     useState(false);
   const [operationLoading, setOperationLoading] =
     useState(false);
+  const [draftTopicTitle, setDraftTopicTitle] =
+    useState("");
   const setError = useErrorToast();
   const pendingVoiceSave = useRef(
     Promise.resolve()
   );
+  const pendingTopicTitleSave = useRef(
+    Promise.resolve()
+  );
+  const draftTopicTitleRef = useRef(draftTopicTitle);
+  draftTopicTitleRef.current = draftTopicTitle;
 
   const currentIndex = steps.indexOf(
     currentStep
@@ -144,6 +153,15 @@ export default function Home(): React.ReactElement {
   const canUseBridge =
     typeof window !== "undefined" &&
     Boolean(window.xamxixiu);
+
+  useEffect(() => {
+    setDraftTopicTitle(
+      selectedProject?.analysis?.topicTitle ?? ""
+    );
+  }, [
+    selectedProject?.id,
+    selectedProject?.analysis?.topicTitle
+  ]);
 
   useEffect(() => {
     if (!canUseBridge) {
@@ -440,6 +458,64 @@ export default function Home(): React.ReactElement {
     } finally {
       setCaptureLoading(false);
     }
+  }
+
+  async function persistTopicTitle(): Promise<
+    ProjectState | undefined
+  > {
+    if (!selectedProject?.analysis) {
+      return undefined;
+    }
+
+    const next = normalizeTopicTitle(
+      draftTopicTitleRef.current
+    );
+    const current =
+      selectedProject.analysis.topicTitle ?? "";
+    if (next === current) {
+      return selectedProject;
+    }
+
+    if (
+      typeof window.xamxixiu.updateTopicIntro !==
+      "function"
+    ) {
+      setError(
+        "Cần restart app để sửa topic title."
+      );
+      return undefined;
+    }
+
+    const project =
+      await window.xamxixiu.updateTopicIntro({
+        projectId: selectedProject.id,
+        topicTitle: next
+      });
+    setSelectedProject(project);
+    setDraftTopicTitle(
+      project.analysis?.topicTitle ?? next
+    );
+    if (project.timeline) {
+      await loadPreviewAssets(project);
+    }
+    return project;
+  }
+
+  function queueTopicTitleSave(): void {
+    pendingTopicTitleSave.current =
+      pendingTopicTitleSave.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await persistTopicTitle();
+          } catch (reason: unknown) {
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "Không lưu được topic title."
+            );
+          }
+        });
   }
 
   async function persistDraft(): Promise<
@@ -749,6 +825,7 @@ export default function Home(): React.ReactElement {
 
     try {
       await pendingVoiceSave.current;
+      await pendingTopicTitleSave.current;
       let project = selectedProject;
       if (draftContent) {
         const saved = await persistDraft();
@@ -756,6 +833,10 @@ export default function Home(): React.ReactElement {
         if (saved) {
           project = saved;
         }
+      }
+      const savedTitle = await persistTopicTitle();
+      if (savedTitle) {
+        project = savedTitle;
       }
       const generatedProject =
         await window.xamxixiu.generateAudio(
@@ -783,6 +864,8 @@ export default function Home(): React.ReactElement {
     setOperationLoading(true);
 
     try {
+      await pendingTopicTitleSave.current;
+      await persistTopicTitle();
       const project =
         await window.xamxixiu.createTimeline(
           selectedProject.id
@@ -839,6 +922,7 @@ export default function Home(): React.ReactElement {
 
     try {
       await pendingVoiceSave.current;
+      await pendingTopicTitleSave.current;
       let project = selectedProject;
       if (draftContent) {
         const saved = await persistDraft();
@@ -847,6 +931,10 @@ export default function Home(): React.ReactElement {
           project = saved;
           setSelectedProject(project);
         }
+      }
+      const savedTitle = await persistTopicTitle();
+      if (savedTitle) {
+        project = savedTitle;
       }
       const generatedProject =
         await window.xamxixiu.retryAudio(
@@ -938,6 +1026,7 @@ export default function Home(): React.ReactElement {
   }
 
   function nextStep(): void {
+    queueTopicTitleSave();
     const next = steps[currentIndex + 1];
     if (next) {
       setCurrentStep(next);
@@ -1313,13 +1402,25 @@ export default function Home(): React.ReactElement {
                       </div>
 
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-                        <p className="text-xs uppercase tracking-wider text-zinc-500">
-                          Topic title
-                        </p>
-                        <p className="mt-2 text-sm text-fuchsia-200">
-                          {selectedProject.analysis.topicTitle ??
-                            "Chưa có title — hãy Analyze lại"}
-                        </p>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase tracking-wider text-zinc-500">
+                            Topic title
+                          </p>
+                          <span className="text-xs text-zinc-500">
+                            {draftTopicTitle.length}/{TOPIC_TITLE_MAX_LENGTH}
+                          </span>
+                        </div>
+                        <textarea
+                          value={draftTopicTitle}
+                          maxLength={TOPIC_TITLE_MAX_LENGTH}
+                          disabled={operationLoading}
+                          placeholder="Nhập topic title..."
+                          onChange={(event) =>
+                            setDraftTopicTitle(event.target.value)
+                          }
+                          onBlur={queueTopicTitleSave}
+                          className="mt-2 min-h-[72px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-3 text-sm leading-6 text-fuchsia-200 outline-none focus:ring-2 focus:ring-fuchsia-400 disabled:opacity-50"
+                        />
                       </div>
 
                       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
@@ -1427,13 +1528,28 @@ export default function Home(): React.ReactElement {
                         : "border-fuchsia-400/20 bg-fuchsia-400/5"
                     }`}
                   >
-                    <p className="text-xs uppercase tracking-wider text-fuchsia-300">
-                      Topic title voice
-                    </p>
-                    <p className="mt-2 rounded-xl bg-black px-4 py-3 text-sm text-white">
-                      {selectedProject?.analysis?.topicTitle ??
-                        "Chưa có topic title"}
-                    </p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs uppercase tracking-wider text-fuchsia-300">
+                        Topic title voice
+                      </p>
+                      <span className="text-xs text-zinc-500">
+                        {draftTopicTitle.length}/{TOPIC_TITLE_MAX_LENGTH}
+                      </span>
+                    </div>
+                    <textarea
+                      value={draftTopicTitle}
+                      maxLength={TOPIC_TITLE_MAX_LENGTH}
+                      disabled={
+                        operationLoading ||
+                        !selectedProject?.analysis
+                      }
+                      placeholder="Nhập topic title..."
+                      onChange={(event) =>
+                        setDraftTopicTitle(event.target.value)
+                      }
+                      onBlur={queueTopicTitleSave}
+                      className="mt-2 min-h-[72px] w-full resize-y rounded-xl bg-black px-4 py-3 text-sm text-white outline-none focus:ring-2 focus:ring-fuchsia-400 disabled:opacity-50"
+                    />
                     {skipTopicTitleVoice ? (
                       <p className="mt-3 text-xs text-amber-200">
                         Topic text ngắn nên không generate topic title voice.
@@ -1481,7 +1597,7 @@ export default function Home(): React.ReactElement {
                       disabled={
                         operationLoading ||
                         skipTopicTitleVoice ||
-                        !selectedProject?.analysis?.topicTitle
+                        !normalizeTopicTitle(draftTopicTitle)
                       }
                       onClick={() =>
                         void retryAudio("topic-title")

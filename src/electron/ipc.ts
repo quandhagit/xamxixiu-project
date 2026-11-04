@@ -14,6 +14,7 @@ import type {
   SaveAssetAssignmentsPayload,
   UpdateAssetPayload,
   UpdateContentPayload,
+  UpdateTopicIntroPayload,
   UpdateVoicePayload
 } from "./ipc-types.js";
 import { applyTimelineAssetReplacement } from "../timeline/replace-asset.js";
@@ -828,6 +829,31 @@ export function registerIpc(
         payload.target,
         payload.voiceId
       );
+    }
+  );
+
+  ipcMain.handle(
+    "project:update-topic-intro",
+    async (_event, payload: UpdateTopicIntroPayload) => {
+      if (
+        !payload ||
+        typeof payload.projectId !== "string" ||
+        (
+          payload.topicTitle !== undefined &&
+          typeof payload.topicTitle !== "string"
+        ) ||
+        (
+          payload.enabled !== undefined &&
+          typeof payload.enabled !== "boolean"
+        )
+      ) {
+        throw new Error("Invalid topic intro payload");
+      }
+
+      return store.saveTopicIntro(payload.projectId, {
+        topicTitle: payload.topicTitle,
+        enabled: payload.enabled
+      });
     }
   );
 

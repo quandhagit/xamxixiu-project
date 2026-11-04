@@ -5,6 +5,7 @@ import type { ThreadAnalysis } from "../types.js";
 export type TimelineAssetTarget =
   | { kind: "background" }
   | { kind: "music" }
+  | { kind: "topic-title" }
   | { kind: "topic-meme" }
   | { kind: "meme"; commentIndex: number }
   | { kind: "video"; commentIndex: number }
@@ -14,6 +15,7 @@ export interface AssetAssignmentSelections {
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
   topicMemeId?: string | null;
+  topicIntroEnabled?: boolean;
 }
 
 export interface TimelineAssetReplacement {
@@ -121,7 +123,8 @@ export function canRemoveTimelineAsset(
     target.kind === "meme" ||
     target.kind === "video" ||
     target.kind === "sfx" ||
-    target.kind === "topic-meme"
+    target.kind === "topic-meme" ||
+    target.kind === "topic-title"
   );
 }
 
@@ -150,6 +153,12 @@ export function applyTimelineAssetReplacement(
     return {
       reactions,
       selections: { musicAssetId: assetId }
+    };
+  }
+  if (target.kind === "topic-title") {
+    return {
+      reactions,
+      selections: { topicIntroEnabled: assetId !== null }
     };
   }
   if (target.kind === "topic-meme") {

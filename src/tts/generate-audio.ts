@@ -22,6 +22,7 @@ import type {
   ThreadAnalysis
 } from "../types.js";
 import {
+  isTopicIntroEnabled,
   shouldGenerateTopicTitleVoice
 } from "../timeline/topic-constants.js";
 
@@ -239,7 +240,8 @@ export async function generateAudio(
   if (
     analysis?.topicTitle &&
     shouldGenerateTopicTitleVoice(thread.text) &&
-    (!onlyTarget || onlyTarget === "topic-title")
+    (!onlyTarget || onlyTarget === "topic-title") &&
+    (onlyTarget === "topic-title" || isTopicIntroEnabled(analysis))
   ) {
     const titleText = analysis.topicTitle;
     const titleVoiceId =

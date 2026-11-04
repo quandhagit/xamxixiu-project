@@ -12,6 +12,19 @@ export const TOPIC_TITLE_LINE_HEIGHT = 68;
 export const TOPIC_TITLE_PADDING = 64;
 export const TOPIC_TITLE_ANIMATION_DURATION = 0.35;
 export const TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH = 200;
+export const TOPIC_TITLE_MAX_LENGTH = 80;
+
+export function normalizeTopicTitle(
+  title: string | undefined
+): string {
+  return (title ?? "").trim().slice(0, TOPIC_TITLE_MAX_LENGTH);
+}
+
+export function isTopicIntroEnabled(
+  analysis: { topicIntroEnabled?: boolean } | undefined
+): boolean {
+  return analysis?.topicIntroEnabled !== false;
+}
 
 export function shouldGenerateTopicTitleVoice(
   text: string | undefined

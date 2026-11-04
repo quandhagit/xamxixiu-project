@@ -23,6 +23,7 @@ import {
 import { getTopicMemeLayout } from "./topic-layout.js";
 import {
   TOPIC_TITLE_ANIMATION_DURATION,
+  isTopicIntroEnabled,
   shouldGenerateTopicTitleVoice
 } from "./topic-constants.js";
 import { readMediaDuration } from "../media-duration.js";
@@ -548,6 +549,7 @@ export async function buildTimeline(
       .then(() => true)
       .catch(() => false);
   const hasTopicIntro =
+    isTopicIntroEnabled(inputs.analysis) &&
     Boolean(inputs.analysis.topicTitle?.trim()) &&
     Boolean(openTopicSfx) &&
     (introCase === "short" || hasTitleAudio);

@@ -133,10 +133,11 @@ export function getTimelineTracks(
         trackId: "title-card",
         start: 0,
         duration: timeline.topicIntro.blocksDuration,
-        label: "Title card",
+        label: timeline.topicIntro.title || "Title card",
         file: timeline.topicIntro.titleCardFile,
-        editable: false,
-        placeholder: false
+        editable: true,
+        placeholder: false,
+        target: { kind: "topic-title" }
       });
     }
     clips.push({
@@ -164,6 +165,17 @@ export function getTimelineTracks(
         placeholder: false
       });
     }
+  } else {
+    clips.push({
+      id: "title-card-add",
+      trackId: "title-card",
+      start: 0,
+      duration: PLACEHOLDER_DURATION,
+      label: "+",
+      editable: true,
+      placeholder: true,
+      target: { kind: "topic-title" }
+    });
   }
 
   let topicMeme = false;

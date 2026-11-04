@@ -9,6 +9,7 @@ import type {
   ImportAssetsPayload,
   ReplaceTimelineAssetPayload,
   SaveAssetAssignmentsPayload,
+  UpdateTopicIntroPayload,
   UpdateAssetPayload,
   UpdateContentPayload,
   UpdateVoicePayload,
@@ -180,6 +181,14 @@ const api: DesktopApi = {
   ) =>
     ipcRenderer.invoke(
       "project:replace-timeline-asset",
+      payload
+    ),
+
+  updateTopicIntro: (
+    payload: UpdateTopicIntroPayload
+  ) =>
+    ipcRenderer.invoke(
+      "project:update-topic-intro",
       payload
     ),
 

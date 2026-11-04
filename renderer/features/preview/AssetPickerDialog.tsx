@@ -23,6 +23,9 @@ export function assetsForTarget(
   assets: Asset[],
   target: TimelineAssetTarget
 ): Asset[] {
+  if (target.kind === "topic-title") {
+    return [];
+  }
   if (target.kind === "background") {
     return assets.filter((asset) => asset.type === "background");
   }
@@ -46,6 +49,9 @@ export function assetsForTarget(
 }
 
 export function pickerTitle(target: TimelineAssetTarget): string {
+  if (target.kind === "topic-title") {
+    return "Topic title";
+  }
   if (target.kind === "background") {
     return "Chọn background";
   }
