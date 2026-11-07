@@ -20,6 +20,8 @@ export interface ThreadComment {
   containerIndex: number;
   commentIndex?: number;
   parentCommentIndex?: number;
+  /** Set when a reply is shown as a root; used to restore parentCommentIndex. */
+  originalParentCommentIndex?: number;
   replies?: ThreadComment[];
   excluded?: boolean;
   curation?: CommentCuration;

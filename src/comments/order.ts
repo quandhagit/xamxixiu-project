@@ -8,28 +8,49 @@ interface CommentNode {
   children: CommentNode[];
 }
 
+function relatedIndex(
+  comments: ThreadComment[],
+  index: number,
+  related: unknown
+): number | undefined {
+  if (
+    typeof related !== "number" ||
+    !Number.isInteger(related)
+  ) {
+    return undefined;
+  }
+
+  if (
+    related < 0 ||
+    related >= comments.length ||
+    related === index
+  ) {
+    return undefined;
+  }
+
+  return related;
+}
+
 function rawParentIndex(
   comments: ThreadComment[],
   index: number
 ): number | undefined {
-  const parent = comments[index]?.parentCommentIndex;
+  return relatedIndex(
+    comments,
+    index,
+    comments[index]?.parentCommentIndex
+  );
+}
 
-  if (
-    typeof parent !== "number" ||
-    !Number.isInteger(parent)
-  ) {
-    return undefined;
-  }
-
-  if (
-    parent < 0 ||
-    parent >= comments.length ||
-    parent === index
-  ) {
-    return undefined;
-  }
-
-  return parent;
+function rawOriginalParentIndex(
+  comments: ThreadComment[],
+  index: number
+): number | undefined {
+  return relatedIndex(
+    comments,
+    index,
+    comments[index]?.originalParentCommentIndex
+  );
 }
 
 function parentCreatesCycle(
@@ -173,7 +194,8 @@ function unchanged(
 function cloneComment(
   source: ThreadComment,
   commentIndex: number,
-  parentCommentIndex: number | undefined
+  parentCommentIndex: number | undefined,
+  originalParentCommentIndex: number | undefined
 ): ThreadComment {
   const next: ThreadComment = {
     author: source.author,
@@ -185,6 +207,10 @@ function cloneComment(
 
   if (parentCommentIndex !== undefined) {
     next.parentCommentIndex = parentCommentIndex;
+  }
+
+  if (originalParentCommentIndex !== undefined) {
+    next.originalParentCommentIndex = originalParentCommentIndex;
   }
 
   if (source.excluded !== undefined) {
@@ -305,11 +331,20 @@ function remapByOrder(
       parentOld === undefined
         ? undefined
         : oldToNew.get(parentOld);
+    const originalOld = rawOriginalParentIndex(
+      comments,
+      oldIndex
+    );
+    const originalNew =
+      originalOld === undefined
+        ? undefined
+        : oldToNew.get(originalOld);
 
     return cloneComment(
       source,
       newIndex,
-      parentNew
+      parentNew,
+      originalNew
     );
   });
 
@@ -412,4 +447,73 @@ export function reorderCommentsByOrder(
   }
 
   return remapByOrder(comments, order);
+}
+
+export function setCommentShownAsRoot(
+  comments: ThreadComment[],
+  imageSlots: number[],
+  index: number,
+  shownAsRoot: boolean
+): {
+  comments: ThreadComment[];
+  imageSlots: number[];
+} {
+  if (imageSlots.length !== comments.length) {
+    throw new Error(
+      `imageSlots length ${imageSlots.length} does not match comments length ${comments.length}`
+    );
+  }
+
+  if (
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= comments.length
+  ) {
+    return unchanged(comments, imageSlots);
+  }
+
+  const comment = comments[index];
+  const nextComment: ThreadComment = { ...comment };
+
+  if (shownAsRoot) {
+    const parent = effectiveParentIndex(comments, index);
+
+    if (parent === undefined) {
+      return unchanged(comments, imageSlots);
+    }
+
+    nextComment.originalParentCommentIndex = parent;
+    delete nextComment.parentCommentIndex;
+  } else {
+    const original = rawOriginalParentIndex(
+      comments,
+      index
+    );
+
+    if (
+      original === undefined ||
+      parentCreatesCycle(comments, index, original)
+    ) {
+      return unchanged(comments, imageSlots);
+    }
+
+    nextComment.parentCommentIndex = original;
+    delete nextComment.originalParentCommentIndex;
+  }
+
+  const nextComments = comments.map(
+    (item, itemIndex) =>
+      itemIndex === index ? nextComment : item
+  );
+  const identity = nextComments.map(
+    (_item, itemIndex) => itemIndex
+  );
+
+  return {
+    comments: reorderCommentsByOrder(
+      nextComments,
+      identity
+    ),
+    imageSlots: imageSlots.slice()
+  };
 }

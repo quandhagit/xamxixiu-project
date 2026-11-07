@@ -13,7 +13,8 @@ import type {
 } from "react";
 import {
   buildCommentForest,
-  reorderComments
+  reorderComments,
+  setCommentShownAsRoot
 } from "../../../src/comments/order";
 import type {
   CommentCurationKind,
@@ -501,40 +502,76 @@ export function CaptureComments({
               <span className="truncate">
                 {comment.parentCommentIndex !== undefined
                   ? `Reply to comment #${comment.parentCommentIndex}`
-                  : comment.author}
+                  : comment.originalParentCommentIndex !==
+                      undefined
+                    ? `Tách từ comment #${comment.originalParentCommentIndex}`
+                    : comment.author}
               </span>
-              {comment.parentCommentIndex !== undefined && (
+              {(comment.parentCommentIndex !== undefined ||
+                comment.originalParentCommentIndex !==
+                  undefined) && (
                 <span className="truncate">
                   {comment.author}
                 </span>
               )}
             </div>
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={comment.excluded === true}
-                onChange={(event) => {
-                  onChange(
-                    comments.map(
-                      (item, itemIndex) =>
-                        itemIndex === index
-                          ? {
-                              ...item,
-                              excluded:
-                                event.target.checked,
-                              curation: {
-                                source: "user"
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+              {(comment.parentCommentIndex !== undefined ||
+                comment.originalParentCommentIndex !==
+                  undefined) && (
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={
+                      comment.parentCommentIndex ===
+                        undefined &&
+                      comment.originalParentCommentIndex !==
+                        undefined
+                    }
+                    onChange={(event) => {
+                      const next = setCommentShownAsRoot(
+                        comments,
+                        imageSlots,
+                        index,
+                        event.target.checked
+                      );
+                      onChange(
+                        next.comments,
+                        next.imageSlots
+                      );
+                    }}
+                    className="accent-cyan-400"
+                  />
+                  Hiện như comment cha
+                </label>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={comment.excluded === true}
+                  onChange={(event) => {
+                    onChange(
+                      comments.map(
+                        (item, itemIndex) =>
+                          itemIndex === index
+                            ? {
+                                ...item,
+                                excluded:
+                                  event.target.checked,
+                                curation: {
+                                  source: "user"
+                                }
                               }
-                            }
-                          : item
-                    ),
-                    imageSlots
-                  );
-                }}
-                className="accent-amber-400"
-              />
-              Exclude khỏi Analyze
-            </label>
+                            : item
+                      ),
+                      imageSlots
+                    );
+                  }}
+                  className="accent-amber-400"
+                />
+                Exclude khỏi Analyze
+              </label>
+            </div>
           </div>
           <p className="mt-2 text-xs text-zinc-500">
             {comment.likes} likes
