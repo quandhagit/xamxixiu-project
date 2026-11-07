@@ -1,46 +1,120 @@
 import {
   app,
-  dialog,
-  type BrowserWindow
+  BrowserWindow,
+  ipcMain
 } from "electron";
 import electronUpdater from "electron-updater";
 
+import type {
+  UpdaterStatus
+} from "./ipc-types.js";
+
 const { autoUpdater } = electronUpdater;
 
-export function setupAutoUpdater(
-  getWindow: () => BrowserWindow | undefined
-): void {
+let lastStatus: UpdaterStatus | null = null;
+let pendingVersion: string | undefined;
+let installWhenReady = false;
+let downloadInFlight = false;
+let ipcRegistered = false;
+
+function broadcast(status: UpdaterStatus): void {
+  lastStatus = status;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send("updater:status", status);
+    }
+  }
+}
+
+async function startUpdate(): Promise<void> {
+  installWhenReady = true;
+  if (lastStatus?.state === "ready") {
+    autoUpdater.quitAndInstall();
+    return;
+  }
+  if (downloadInFlight) {
+    return;
+  }
+  downloadInFlight = true;
+  try {
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    downloadInFlight = false;
+    broadcast({
+      state: "error",
+      message: error instanceof Error
+        ? error.message
+        : "Không tải được bản cập nhật."
+    });
+  }
+}
+
+function registerUpdaterIpc(): void {
+  if (ipcRegistered) {
+    return;
+  }
+  ipcRegistered = true;
+
+  ipcMain.handle("updater:get-status", () => lastStatus);
+  ipcMain.handle("updater:start", () => startUpdate());
+}
+
+export function setupAutoUpdater(): void {
+  registerUpdaterIpc();
+
   if (!app.isPackaged) {
     return;
   }
 
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("error", (error) => {
     console.error("[Updater]", error);
+    downloadInFlight = false;
+    if (
+      lastStatus === null &&
+      !installWhenReady
+    ) {
+      return;
+    }
+    broadcast({
+      state: "error",
+      message: error instanceof Error
+        ? error.message
+        : "Không tải được bản cập nhật."
+    });
   });
 
   autoUpdater.on("update-available", (info) => {
-    console.log(`[Updater] Có bản mới ${info.version}, đang tải...`);
+    pendingVersion = info.version;
+    console.log(`[Updater] Có bản mới ${info.version}`);
+    broadcast({
+      state: "available",
+      version: info.version
+    });
   });
 
-  autoUpdater.on("update-downloaded", async (info) => {
-    const window = getWindow();
-    const options = {
-      type: "info" as const,
-      buttons: ["Khởi động lại & cập nhật", "Để sau"],
-      defaultId: 0,
-      cancelId: 1,
-      title: "Có bản cập nhật",
-      message: `Đã tải xong phiên bản ${info.version}.`,
-      detail:
-        "Khởi động lại để cập nhật ngay, hoặc ứng dụng sẽ tự cập nhật khi bạn thoát."
-    };
-    const result = window
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options);
-    if (result.response === 0) {
+  autoUpdater.on("download-progress", (progress) => {
+    const percent = Math.max(
+      0,
+      Math.min(100, Math.round(progress.percent))
+    );
+    broadcast({
+      state: "downloading",
+      version: pendingVersion ?? "",
+      percent
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    downloadInFlight = false;
+    pendingVersion = info.version;
+    broadcast({
+      state: "ready",
+      version: info.version
+    });
+    if (installWhenReady) {
       autoUpdater.quitAndInstall();
     }
   });

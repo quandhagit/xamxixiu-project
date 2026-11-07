@@ -251,10 +251,8 @@ app.whenReady().then(async () => {
   registerIpc(store, library, {
     restartWebhook: startWebhookTunnel
   });
-  const mainWindow = createWindow();
-  setupAutoUpdater(() =>
-    mainWindow.isDestroyed() ? undefined : mainWindow
-  );
+  createWindow();
+  setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

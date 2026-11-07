@@ -3,6 +3,7 @@ import type {
 } from "next";
 import "./globals.css";
 import { ErrorToastHost } from "../features/app/ErrorToast";
+import { UpdateBanner } from "../features/app/UpdateBanner";
 
 export const metadata: Metadata = {
   title: "Xàm Xí Xíu",
@@ -19,6 +20,7 @@ export default function RootLayout({
       <body>
         {children}
         <ErrorToastHost />
+        <UpdateBanner />
       </body>
     </html>
   );

@@ -14,7 +14,8 @@ import type {
   UpdateContentPayload,
   UpdateVoicePayload,
   AppSettings,
-  ExportProgress
+  ExportProgress,
+  UpdaterStatus
 } from "./ipc-types.js";
 
 const api: DesktopApi = {
@@ -101,6 +102,28 @@ const api: DesktopApi = {
     return () => {
       ipcRenderer.removeListener(
         "export:progress",
+        listener
+      );
+    };
+  },
+
+  getUpdaterStatus: () =>
+    ipcRenderer.invoke("updater:get-status"),
+
+  startUpdate: () =>
+    ipcRenderer.invoke("updater:start"),
+
+  onUpdaterStatus: (callback) => {
+    const listener = (
+      _event: unknown,
+      status: UpdaterStatus
+    ): void => {
+      callback(status);
+    };
+    ipcRenderer.on("updater:status", listener);
+    return () => {
+      ipcRenderer.removeListener(
+        "updater:status",
         listener
       );
     };

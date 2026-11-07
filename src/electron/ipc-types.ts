@@ -111,6 +111,25 @@ export interface ExportProgress {
   duration?: number;
 }
 
+export type UpdaterStatus =
+  | {
+      state: "available";
+      version: string;
+    }
+  | {
+      state: "downloading";
+      version: string;
+      percent: number;
+    }
+  | {
+      state: "ready";
+      version: string;
+    }
+  | {
+      state: "error";
+      message: string;
+    };
+
 export interface DesktopApi {
   captureThread(
     url: string
@@ -148,6 +167,11 @@ export interface DesktopApi {
   ): Promise<string | null>;
   onExportProgress(
     callback: (progress: ExportProgress) => void
+  ): () => void;
+  getUpdaterStatus(): Promise<UpdaterStatus | null>;
+  startUpdate(): Promise<void>;
+  onUpdaterStatus(
+    callback: (status: UpdaterStatus) => void
   ): () => void;
   showItemInFolder(
     targetPath: string
