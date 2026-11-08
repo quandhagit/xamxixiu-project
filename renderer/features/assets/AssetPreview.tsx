@@ -55,7 +55,7 @@ function VideoPreview({
   return (
     <div
       ref={boxRef}
-      className="relative h-28 w-full overflow-hidden rounded bg-black/40"
+      className="relative h-28 w-full overflow-hidden rounded-md bg-app"
     >
       {visible ? (
         <video
@@ -68,7 +68,7 @@ function VideoPreview({
           className="h-full w-full object-contain"
         />
       ) : (
-        <div className="h-full w-full animate-pulse bg-white/5" />
+        <div className="h-full w-full animate-pulse bg-elevated" />
       )}
     </div>
   );
@@ -85,7 +85,7 @@ export function AssetPreview({
     return <VideoPreview asset={asset} />;
   }
   if (!source) {
-    return <div className="h-20 animate-pulse rounded bg-white/5" />;
+    return <div className="h-20 animate-pulse rounded-md bg-elevated" />;
   }
   if (asset.mediaKind === "audio") {
     return <audio controls preload="metadata" src={source} className="w-full" />;
@@ -94,7 +94,7 @@ export function AssetPreview({
     <img
       src={source}
       alt={asset.category}
-      className="h-28 w-full rounded object-contain"
+      className="h-28 w-full rounded-md object-contain"
     />
   );
 }

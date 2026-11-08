@@ -20,6 +20,10 @@ import {
 import type {
   SpeechAbbreviationEntry
 } from "../../../src/comments/speech-abbreviations";
+import { Button } from "../ui/Button";
+import { fieldClassName } from "../ui/Input";
+import { Textarea } from "../ui/Textarea";
+import { cn } from "../ui/cn";
 import { useErrorToast } from "./ErrorToast";
 
 const EMPTY_SETTINGS: AppSettings = {
@@ -75,11 +79,6 @@ interface AbbreviationRow extends SpeechAbbreviationEntry {
   id: number;
 }
 
-const fieldClassName = [
-  "w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3",
-  "text-sm text-zinc-100 outline-none ring-fuchsia-400 transition",
-  "placeholder:text-zinc-600 focus:ring-2"
-].join(" ");
 const inputClassName = `mt-2 ${fieldClassName}`;
 
 function entriesKey(
@@ -109,10 +108,10 @@ function Field({
 }): React.ReactElement {
   return (
     <label className="block">
-      <span className="text-sm text-zinc-200">{label}</span>
+      <span className="text-[13px] text-ink">{label}</span>
       {children}
       {hint ? (
-        <span className="mt-1 block text-xs text-zinc-500">{hint}</span>
+        <span className="mt-1 block text-[12px] text-ink-3">{hint}</span>
       ) : null}
     </label>
   );
@@ -129,7 +128,7 @@ function SecretToggle({
     <button
       type="button"
       onClick={onToggle}
-      className="text-xs text-zinc-400 underline-offset-2 hover:text-zinc-200 hover:underline"
+      className="text-[12px] text-ink-2 underline-offset-2 hover:text-ink hover:underline"
     >
       {shown ? "Ẩn secret" : "Hiện secret"}
     </button>
@@ -460,37 +459,37 @@ export function SettingsDialog({
   const disabled = loading || saving;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <form
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
         onSubmit={(event) => void onSubmit(event)}
-        className="flex h-[94vh] w-[96vw] flex-col overflow-hidden rounded-2xl border border-white/15 bg-zinc-950 shadow-2xl"
+        className="flex max-h-[min(720px,90vh)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-line bg-elevated"
       >
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-4 py-3">
           <div>
-            <h3 id="settings-title" className="font-medium">
+            <h3 id="settings-title" className="text-sm font-medium text-ink">
               Settings
             </h3>
-            <p className="mt-1 text-xs leading-5 text-zinc-500">
+            <p className="mt-0.5 text-[12px] leading-5 text-ink-3">
               Giá trị đã lưu nằm trên máy này và được dùng thay cho file .env.
             </p>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={requestClose}
             disabled={saving}
-            className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-40"
           >
             Đóng
-          </button>
+          </Button>
         </div>
 
         <div className="flex min-h-0 flex-1">
           <nav
             aria-label="Settings tabs"
-            className="w-60 shrink-0 space-y-1 overflow-y-auto border-r border-white/10 p-4"
+            className="w-48 shrink-0 space-y-0.5 overflow-y-auto border-r border-line p-2"
           >
             {TABS.map((tab) => {
               const active = tab.id === activeTab;
@@ -500,24 +499,24 @@ export function SettingsDialog({
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={[
-                    "block w-full rounded-xl px-4 py-3 text-left transition",
+                  className={cn(
+                    "block w-full rounded-md px-2.5 py-1.5 text-left transition",
                     active
-                      ? "bg-fuchsia-400/15 text-fuchsia-100 ring-1 ring-fuchsia-400/40"
-                      : "text-zinc-300 hover:bg-white/5"
-                  ].join(" ")}
+                      ? "bg-accent/15 text-ink"
+                      : "text-ink-2 hover:bg-panel hover:text-ink"
+                  )}
                 >
-                  <span className="flex items-center justify-between text-sm font-medium">
+                  <span className="flex items-center justify-between text-[13px] font-medium">
                     {tab.label}
                     {tab.id === "abbreviations" &&
                     abbreviationsDirty ? (
                       <span
                         title="Chưa lưu"
-                        className="h-2 w-2 rounded-full bg-amber-300"
+                        className="h-1.5 w-1.5 rounded-full bg-warning"
                       />
                     ) : null}
                   </span>
-                  <span className="mt-0.5 block text-xs text-zinc-500">
+                  <span className="mt-0.5 block text-[11px] font-normal text-ink-3">
                     {tab.hint}
                   </span>
                 </button>
@@ -525,11 +524,11 @@ export function SettingsDialog({
             })}
           </nav>
 
-          <div className="min-w-0 flex-1 overflow-y-auto p-8">
+          <div className="min-w-0 flex-1 overflow-y-auto p-4">
             {activeTab === "deepseek" ? (
               <section className="mx-auto max-w-2xl space-y-4">
-                <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
-                  DEEPSEEK
+                <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+                  DeepSeek
                 </h4>
                 <Field label="API key">
                   <input
@@ -579,8 +578,8 @@ export function SettingsDialog({
 
             {activeTab === "vbee" ? (
               <section className="mx-auto max-w-2xl space-y-4">
-                <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
-                  VBEE
+                <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+                  Vbee
                 </h4>
                 <Field label="Access token">
                   <input
@@ -633,8 +632,8 @@ export function SettingsDialog({
 
             {activeTab === "capcut" ? (
               <section className="mx-auto max-w-2xl space-y-4">
-                <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
-                  CAPCUT
+                <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+                  CapCut
                 </h4>
                 <Field
                   label="Thư mục drafts"
@@ -650,14 +649,13 @@ export function SettingsDialog({
                       }
                       className={fieldClassName}
                     />
-                    <button
-                      type="button"
+                    <Button
                       disabled={disabled || choosingDirectory}
                       onClick={() => void chooseDirectory()}
-                      className="shrink-0 rounded-xl border border-white/15 px-4 text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-40"
+                      className="shrink-0"
                     >
                       Chọn
-                    </button>
+                    </Button>
                   </div>
                 </Field>
               </section>
@@ -665,35 +663,33 @@ export function SettingsDialog({
 
             {activeTab === "threads" ? (
               <section className="mx-auto max-w-2xl space-y-4">
-                <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
-                  THREADS
+                <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+                  Threads
                 </h4>
-                <p className="text-sm leading-6 text-zinc-400">
+                <p className="text-[13px] leading-5 text-ink-2">
                   Mở trình duyệt capture để đăng nhập Threads. Đăng nhập
                   xong hãy đóng cửa sổ trình duyệt; phiên đăng nhập được
                   lưu lại cho các lần capture sau. Không thể capture khi
                   cửa sổ này đang mở.
                 </p>
-                <button
-                  type="button"
+                <Button
                   disabled={loginOpen}
                   onClick={() => void openLogin()}
-                  className="rounded-xl border border-white/15 px-4 py-3 text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-40"
                 >
                   {loginOpen
                     ? "Đang mở... đóng cửa sổ trình duyệt khi đăng nhập xong"
                     : "Mở trình duyệt để đăng nhập"}
-                </button>
+                </Button>
               </section>
             ) : null}
 
             {activeTab === "abbreviations" ? (
               <section className="flex h-full min-h-0 flex-col gap-5">
                 <div>
-                  <h4 className="text-xs font-semibold tracking-[0.2em] text-fuchsia-300">
-                    TỪ VIẾT TẮT
+                  <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+                    Từ viết tắt
                   </h4>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
+                  <p className="mt-2 max-w-3xl text-[13px] leading-5 text-ink-2">
                     Khi capture, các từ viết tắt trong comment được đổi
                     thành cách đọc bên dưới (đó là chữ Vbee sẽ đọc). Chỉ
                     đổi khi từ đứng riêng, không phân biệt hoa thường; các
@@ -740,17 +736,17 @@ export function SettingsDialog({
                         }}
                         className={`${fieldClassName} min-w-48 flex-1`}
                       />
-                      <button
-                        type="button"
+                      <Button
+                        variant="primary"
                         disabled={disabled}
                         onClick={addRow}
-                        className="shrink-0 rounded-xl bg-fuchsia-400 px-5 py-3 text-sm font-semibold text-fuchsia-950 hover:bg-fuchsia-300 disabled:opacity-40"
+                        className="shrink-0"
                       >
                         Thêm
-                      </button>
+                      </Button>
                     </div>
                     {addError ? (
-                      <p className="-mt-2 text-xs text-red-300">
+                      <p className="-mt-2 text-[12px] text-danger">
                         {addError}
                       </p>
                     ) : null}
@@ -765,30 +761,31 @@ export function SettingsDialog({
                         }
                         className={`${fieldClassName} max-w-xs`}
                       />
-                      <span className="text-xs text-zinc-500">
+                      <span className="text-[12px] text-ink-3">
                         {needle
                           ? `${visibleRows.length}/${rows.length} từ`
                           : `${rows.length} từ`}
                       </span>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         disabled={disabled}
                         onClick={resetToDefaults}
-                        className="ml-auto rounded-xl border border-white/15 px-4 py-2 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-40"
+                        className="ml-auto"
                       >
                         Khôi phục mặc định
-                      </button>
+                      </Button>
                     </div>
 
-                    <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-white/10">
+                    <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-line">
                       {visibleRows.length === 0 ? (
-                        <p className="px-4 py-10 text-center text-sm text-zinc-500">
+                        <p className="px-3 py-8 text-center text-[13px] text-ink-3">
                           {rows.length === 0
                             ? "Chưa có từ viết tắt nào. Thêm ở ô phía trên."
                             : "Không có từ nào khớp."}
                         </p>
                       ) : (
-                        <ul className="divide-y divide-white/5">
+                        <ul className="divide-y divide-line">
                           {visibleRows.map(({ row, index }) => {
                             const issue = issues[index];
 
@@ -812,13 +809,13 @@ export function SettingsDialog({
                                   }
                                   className={`${fieldClassName} w-44 shrink-0 ${
                                     issue
-                                      ? "border-red-400/60"
+                                      ? "border-danger"
                                       : ""
                                   }`}
                                 />
                                 <span
                                   aria-hidden
-                                  className="py-3 text-zinc-600"
+                                  className="py-2 text-ink-3"
                                 >
                                   →
                                 </span>
@@ -837,20 +834,21 @@ export function SettingsDialog({
                                   }
                                   className={`${fieldClassName} min-w-48 flex-1 ${
                                     issue
-                                      ? "border-red-400/60"
+                                      ? "border-danger"
                                       : ""
                                   }`}
                                 />
-                                <button
-                                  type="button"
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
                                   disabled={disabled}
                                   onClick={() => removeRow(row.id)}
-                                  className="shrink-0 rounded-xl border border-white/10 px-3 py-3 text-xs text-zinc-400 hover:bg-red-400/10 hover:text-red-200 disabled:opacity-40"
+                                  className="shrink-0 text-ink-3 hover:text-danger"
                                 >
                                   Xóa
-                                </button>
+                                </Button>
                                 {issue ? (
-                                  <p className="basis-full pl-1 text-xs text-red-300">
+                                  <p className="basis-full pl-1 text-[12px] text-danger">
                                     {issue}
                                   </p>
                                 ) : null}
@@ -862,24 +860,23 @@ export function SettingsDialog({
                     </div>
                   </div>
 
-                  <aside className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                    <h5 className="text-sm font-medium text-zinc-200">
+                  <aside className="space-y-2 rounded-lg border border-line bg-panel p-3">
+                    <h5 className="text-sm font-medium text-ink">
                       Thử nhanh
                     </h5>
-                    <p className="text-xs leading-5 text-zinc-500">
+                    <p className="text-[12px] leading-5 text-ink-3">
                       Dùng danh sách đang sửa (kể cả chưa lưu) để xem
                       kết quả.
                     </p>
-                    <textarea
+                    <Textarea
                       value={sample}
                       onChange={(event) =>
                         setSample(event.target.value)
                       }
                       rows={5}
-                      className={fieldClassName}
                     />
-                    <p className="text-xs text-zinc-500">Kết quả</p>
-                    <p className="min-h-[7rem] whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-zinc-100">
+                    <p className="text-[12px] text-ink-3">Kết quả</p>
+                    <p className="min-h-[7rem] whitespace-pre-wrap break-words rounded-md border border-line bg-app px-3 py-2 text-[13px] leading-5 text-ink">
                       {sampleResult}
                     </p>
                   </aside>
@@ -889,21 +886,22 @@ export function SettingsDialog({
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4 border-t border-white/10 px-6 py-4">
-          <div className="min-w-0 flex-1 text-sm">
+        <div className="flex items-center justify-between gap-4 border-t border-line px-4 py-3">
+          <div className="min-w-0 flex-1 text-[13px]">
             {status ? (
-              <p className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-emerald-200">
+              <p className="rounded-md border border-success/30 bg-success/10 px-3 py-1.5 text-success">
                 {status}
               </p>
             ) : null}
           </div>
-          <button
+          <Button
             type="submit"
+            variant="primary"
             disabled={disabled}
-            className="shrink-0 rounded-full bg-fuchsia-400 px-6 py-2 text-sm font-semibold text-fuchsia-950 hover:bg-fuchsia-300 disabled:opacity-40"
+            className="shrink-0"
           >
             {saving ? "Đang lưu..." : "Lưu"}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

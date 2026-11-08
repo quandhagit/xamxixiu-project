@@ -1,9 +1,17 @@
 import type {
   Metadata
 } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import { AppShell } from "../features/app/AppShell";
 import { ErrorToastHost } from "../features/app/ErrorToast";
 import { UpdateBanner } from "../features/app/UpdateBanner";
+
+const inter = Inter({
+  subsets: ["latin", "vietnamese"],
+  display: "swap",
+  variable: "--font-inter"
+});
 
 export const metadata: Metadata = {
   title: "Xàm Xí Xíu",
@@ -16,9 +24,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>): React.ReactElement {
   return (
-    <html lang="vi">
-      <body>
-        {children}
+    <html lang="vi" className={inter.variable}>
+      <body className={inter.className}>
+        <AppShell />
+        <div hidden>{children}</div>
         <ErrorToastHost />
         <UpdateBanner />
       </body>

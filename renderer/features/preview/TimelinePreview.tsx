@@ -202,8 +202,8 @@ export function TimelinePreview({
   );
 
   return (
-    <div className="grid gap-5 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 p-5 lg:grid-cols-[0.55fr_1fr]">
-      <div className="relative mx-auto aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-2xl border border-white/15 bg-black shadow-2xl">
+    <div className="flex h-full min-w-[180px] max-w-[240px] shrink-0 flex-col gap-2">
+      <div className="relative mx-auto aspect-[9/16] h-[min(38vh,320px)] w-auto overflow-hidden rounded-lg border border-line bg-black">
         {timeline.backgroundFile &&
         assets[timeline.backgroundFile] ? (
           isVideoAsset(timeline.backgroundFile) ? (
@@ -292,12 +292,12 @@ export function TimelinePreview({
         </div>
       </div>
       <div>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-cyan-300">
-              Draft preview
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-ink-3">
+              Preview
             </p>
-            <p className="mt-1 text-sm text-zinc-400">
+            <p className="mt-0.5 truncate text-[12px] text-ink-2">
               Scene{" "}
               {timeline.scenes.indexOf(
                 previewScene.scene
@@ -311,12 +311,12 @@ export function TimelinePreview({
           <button
             type="button"
             onClick={preview.togglePreview}
-            className="rounded-lg bg-cyan-400 px-4 py-2 text-xs font-semibold text-cyan-950"
+            className="inline-flex h-7 shrink-0 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hover"
           >
             {previewPlaying ? "Pause" : "Play"}
           </button>
         </div>
-        <div className="mt-6 flex justify-between text-xs text-zinc-500">
+        <div className="mt-1.5 flex justify-between text-[11px] text-ink-3">
           <span>{previewTime.toFixed(2)}s</span>
           <span>{timeline.totalDuration.toFixed(2)}s</span>
         </div>
@@ -333,10 +333,8 @@ export function TimelinePreview({
             src={assets[track.file]}
           />
         ))}
-        <p className="mt-4 text-xs leading-5 text-zinc-500">
-          Preview dùng cùng timing và vị trí với timeline. Hãy
-          kiểm tra comment, meme và khoảng chờ SFX trước khi
-          xuất video hoặc Generate CapCut.
+        <p className="mt-1 text-[11px] leading-4 text-ink-3">
+          Timing khớp timeline. Kiểm tra meme và SFX trước khi xuất.
         </p>
       </div>
     </div>

@@ -2,12 +2,21 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Asset } from "../../../src/assets/library";
-import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Input } from "../ui/Input";
+import { cn } from "../ui/cn";
 import { assetFileName, assetMediaSrc } from "./asset-media";
+import {
+  assetsForTarget,
+  pickerTitle
+} from "./asset-picker";
 import {
   getCachedVideoThumbnail,
   loadVideoThumbnail
 } from "./video-thumbnail";
+
+export { assetsForTarget, pickerTitle };
 
 interface AssetPickerDialogProps {
   open: boolean;
@@ -17,57 +26,6 @@ interface AssetPickerDialogProps {
   onClose: () => void;
   onSelect: (asset: Asset) => void;
   onRemove?: () => void;
-}
-
-export function assetsForTarget(
-  assets: Asset[],
-  target: TimelineAssetTarget
-): Asset[] {
-  if (target.kind === "topic-title") {
-    return [];
-  }
-  if (target.kind === "background") {
-    return assets.filter((asset) => asset.type === "background");
-  }
-  if (target.kind === "music") {
-    return assets.filter((asset) => asset.type === "music");
-  }
-  if (target.kind === "sfx") {
-    return assets.filter((asset) => asset.type === "sfx");
-  }
-  if (target.kind === "video") {
-    return assets.filter(
-      (asset) => asset.type === "meme" && asset.mediaKind === "video"
-    );
-  }
-  return assets.filter((asset) => {
-    if (asset.type !== "meme") {
-      return false;
-    }
-    return target.kind === "topic-meme" || asset.mediaKind === "image";
-  });
-}
-
-export function pickerTitle(target: TimelineAssetTarget): string {
-  if (target.kind === "topic-title") {
-    return "Topic title";
-  }
-  if (target.kind === "background") {
-    return "Chọn background";
-  }
-  if (target.kind === "music") {
-    return "Chọn music";
-  }
-  if (target.kind === "sfx") {
-    return "Chọn sound effect";
-  }
-  if (target.kind === "video") {
-    return `Chọn video meme${"commentIndex" in target ? ` · comment #${target.commentIndex}` : ""}`;
-  }
-  if (target.kind === "topic-meme") {
-    return "Chọn topic meme";
-  }
-  return `Chọn meme · comment #${target.commentIndex}`;
 }
 
 function assetSearchText(asset: Asset): string {
@@ -112,7 +70,7 @@ function PickerImage({
   return (
     <div
       ref={ref}
-      className="flex h-36 items-center justify-center overflow-hidden rounded bg-black/40"
+      className="flex h-36 items-center justify-center overflow-hidden rounded-md bg-app"
     >
       {visible ? (
         <img
@@ -121,7 +79,7 @@ function PickerImage({
           className="h-full w-full object-contain"
         />
       ) : (
-        <div className="h-full w-full animate-pulse bg-white/5" />
+        <div className="h-full w-full animate-pulse bg-elevated" />
       )}
     </div>
   );
@@ -204,7 +162,7 @@ function PickerVideo({
   return (
     <div
       ref={boxRef}
-      className="relative flex h-36 items-center justify-center overflow-hidden rounded bg-black/40"
+      className="relative flex h-36 items-center justify-center overflow-hidden rounded-md bg-app"
     >
       {playing ? (
         <video
@@ -233,12 +191,12 @@ function PickerVideo({
           className="h-full w-full object-contain"
         />
       ) : (
-        <div className="h-full w-full animate-pulse bg-white/5" />
+        <div className="h-full w-full animate-pulse bg-elevated" />
       )}
       <button
         type="button"
         onClick={onTogglePlay}
-        className="absolute bottom-2 right-2 rounded-full bg-cyan-400 px-3 py-1 text-[11px] font-semibold text-cyan-950"
+        className="absolute bottom-2 right-2 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-white"
       >
         {playing ? "Pause" : "Play"}
       </button>
@@ -274,7 +232,7 @@ function PickerAudio({
   }, [playing]);
 
   return (
-    <div className="relative flex h-24 items-center justify-center overflow-hidden rounded bg-black/40">
+    <div className="relative flex h-24 items-center justify-center overflow-hidden rounded-md bg-app">
       {playing && (
         <audio
           ref={audioRef}
@@ -283,13 +241,13 @@ function PickerAudio({
           onEnded={onTogglePlay}
         />
       )}
-      <p className="px-3 text-center text-[11px] leading-4 text-zinc-400">
+      <p className="px-3 text-center text-[11px] leading-4 text-ink-2">
         {assetFileName(asset.file)}
       </p>
       <button
         type="button"
         onClick={onTogglePlay}
-        className="absolute bottom-2 right-2 rounded-full bg-cyan-400 px-3 py-1 text-[11px] font-semibold text-cyan-950"
+        className="absolute bottom-2 right-2 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-white"
       >
         {playing ? "Pause" : "Play"}
       </button>
@@ -334,106 +292,96 @@ export function AssetPickerDialog({
     );
   }
 
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
-      <div className="flex max-h-[80vh] w-full max-w-4xl flex-col rounded-2xl border border-white/15 bg-zinc-950 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-          <div>
-            <h3 className="font-medium">{title}</h3>
-            <p className="mt-1 text-xs text-zinc-500">
-              Bấm Play để xem/nghe, sau đó bấm Chọn.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            {onRemove && (
-              <button
-                type="button"
-                onClick={onRemove}
-                className="rounded-lg border border-red-400/40 px-3 py-1.5 text-xs text-red-200 hover:bg-red-400/10"
-              >
-                Gỡ khỏi timeline
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5"
-            >
-              Đóng
-            </button>
-          </div>
-        </div>
-        <div className="border-b border-white/10 px-5 py-3">
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Tìm theo tên file, category, tag..."
-            className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-500 focus:border-cyan-400/50"
-          />
-          <p className="mt-2 text-xs text-zinc-500">
-            {visibleAssets.length}/{assets.length}
+    <Dialog
+      open={open}
+      onClose={onClose}
+      className="max-h-[80vh] max-w-4xl"
+    >
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <div>
+          <h3 className="text-sm font-medium text-ink">{title}</h3>
+          <p className="mt-0.5 text-[12px] text-ink-3">
+            Bấm Play để xem/nghe, sau đó bấm Chọn.
           </p>
         </div>
-        <div data-picker-scroll className="overflow-y-auto p-5">
-          {assets.length === 0 ? (
-            <p className="text-sm text-zinc-400">
-              Chưa có asset phù hợp. Import trong Library.
-            </p>
-          ) : visibleAssets.length === 0 ? (
-            <p className="text-sm text-zinc-400">
-              Không thấy asset khớp “{query.trim()}”.
-            </p>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {visibleAssets.map((asset) => {
-                const playing = playingId === asset.id;
-                return (
-                  <div
-                    key={asset.id}
-                    className={[
-                      "rounded-xl border p-3",
-                      selectedId === asset.id
-                        ? "border-cyan-400 bg-cyan-400/10"
-                        : "border-white/10 bg-white/[0.03]"
-                    ].join(" ")}
-                  >
-                    {asset.mediaKind === "video" ? (
-                      <PickerVideo
-                        asset={asset}
-                        playing={playing}
-                        onTogglePlay={() => togglePlay(asset.id)}
-                      />
-                    ) : asset.mediaKind === "audio" ? (
-                      <PickerAudio
-                        asset={asset}
-                        playing={playing}
-                        onTogglePlay={() => togglePlay(asset.id)}
-                      />
-                    ) : (
-                      <PickerImage asset={asset} />
-                    )}
-                    <p className="mt-2 truncate text-xs text-zinc-200">
-                      {asset.category} · {assetFileName(asset.file)}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => onSelect(asset)}
-                      className="mt-3 w-full rounded-lg bg-cyan-400 px-3 py-1.5 text-xs font-semibold text-cyan-950 hover:bg-cyan-300"
-                    >
-                      Chọn
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex gap-1.5">
+          {onRemove ? (
+            <Button variant="danger" size="sm" onClick={onRemove}>
+              Gỡ khỏi timeline
+            </Button>
+          ) : null}
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Đóng
+          </Button>
         </div>
       </div>
-    </div>
+      <div className="border-b border-line px-4 py-2.5">
+        <Input
+          ref={searchRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Tìm theo tên file, category, tag..."
+        />
+        <p className="mt-1.5 text-[11px] text-ink-3">
+          {visibleAssets.length}/{assets.length}
+        </p>
+      </div>
+      <div data-picker-scroll className="overflow-y-auto p-4">
+        {assets.length === 0 ? (
+          <p className="text-[13px] text-ink-2">
+            Chưa có asset phù hợp. Import trong Library.
+          </p>
+        ) : visibleAssets.length === 0 ? (
+          <p className="text-[13px] text-ink-2">
+            Không thấy asset khớp “{query.trim()}”.
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {visibleAssets.map((asset) => {
+              const playing = playingId === asset.id;
+              return (
+                <div
+                  key={asset.id}
+                  className={cn(
+                    "rounded-lg border p-2.5",
+                    selectedId === asset.id
+                      ? "border-accent bg-accent/10"
+                      : "border-line bg-panel"
+                  )}
+                >
+                  {asset.mediaKind === "video" ? (
+                    <PickerVideo
+                      asset={asset}
+                      playing={playing}
+                      onTogglePlay={() => togglePlay(asset.id)}
+                    />
+                  ) : asset.mediaKind === "audio" ? (
+                    <PickerAudio
+                      asset={asset}
+                      playing={playing}
+                      onTogglePlay={() => togglePlay(asset.id)}
+                    />
+                  ) : (
+                    <PickerImage asset={asset} />
+                  )}
+                  <p className="mt-2 truncate text-[12px] text-ink">
+                    {asset.category} · {assetFileName(asset.file)}
+                  </p>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="mt-2 w-full"
+                    onClick={() => onSelect(asset)}
+                  >
+                    Chọn
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Dialog>
   );
 }

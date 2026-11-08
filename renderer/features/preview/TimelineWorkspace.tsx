@@ -11,14 +11,20 @@ import type { ProjectState } from "../../../src/project/store";
 import type { VideoTimeline } from "../../../src/types";
 import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
 import {
-  AssetPickerDialog,
-  assetsForTarget,
-  pickerTitle
+  AssetPickerDialog
 } from "./AssetPickerDialog";
+import {
+  assetsForTarget,
+  pickerTitle,
+  selectedAssetId
+} from "./asset-picker";
 import { TimelinePreview } from "./TimelinePreview";
 import { TimelineTracks } from "./TimelineTracks";
 import { useTimelinePreview } from "./use-timeline-preview";
 import { useErrorToast } from "../app/ErrorToast";
+import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Textarea } from "../ui/Textarea";
 
 interface TimelineWorkspaceProps {
   projectId: string;
@@ -26,36 +32,11 @@ interface TimelineWorkspaceProps {
   previewAssets: Record<string, string>;
   analysis?: ProjectState["analysis"];
   reactions?: ProjectState["reactions"];
+  visible?: boolean;
   loading: boolean;
   onProjectUpdated: (project: ProjectState) => Promise<void> | void;
   onCreateTimeline: () => Promise<void>;
   onRematch: () => Promise<void>;
-}
-
-function selectedAssetId(
-  target: TimelineAssetTarget,
-  analysis: ProjectState["analysis"],
-  reactions: ProjectState["reactions"]
-): string | undefined {
-  if (target.kind === "topic-title") {
-    return undefined;
-  }
-  if (target.kind === "background") {
-    return analysis?.backgroundAssetId ?? undefined;
-  }
-  if (target.kind === "music") {
-    return analysis?.musicAssetId ?? undefined;
-  }
-  if (target.kind === "topic-meme") {
-    return analysis?.topicMemeId ?? undefined;
-  }
-  const reaction = reactions?.find(
-    (item) => item.commentIndex === target.commentIndex
-  );
-  if (target.kind === "sfx") {
-    return reaction?.sfx?.id;
-  }
-  return reaction?.meme?.id;
 }
 
 export function TimelineWorkspace({
@@ -64,6 +45,7 @@ export function TimelineWorkspace({
   previewAssets,
   analysis,
   reactions,
+  visible = true,
   loading,
   onProjectUpdated,
   onCreateTimeline,
@@ -71,7 +53,8 @@ export function TimelineWorkspace({
 }: TimelineWorkspaceProps): React.ReactElement {
   const preview = useTimelinePreview({
     timeline,
-    assets: previewAssets
+    assets: previewAssets,
+    active: visible
   });
   const [library, setLibrary] = useState<Asset[]>([]);
   const [target, setTarget] = useState<TimelineAssetTarget>();
@@ -91,10 +74,13 @@ export function TimelineWorkspace({
     loading || replacing || exporting || generatingCapCut;
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     void window.xamxixiu.listAssets().then(setLibrary).catch(() => {
       setLibrary([]);
     });
-  }, []);
+  }, [visible]);
 
   const pickerAssets = useMemo(
     () => (target ? assetsForTarget(library, target) : []),
@@ -208,46 +194,134 @@ export function TimelineWorkspace({
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-        <div>
-          <h3 className="font-medium">Timeline</h3>
-          <p className="mt-1 text-sm text-zinc-400">
-            Chọn hoặc gỡ meme, video, SFX và topic title ngay trên track.
-            Timeline tự tính lại thời lượng sau mỗi lần đổi.
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line bg-sidebar px-2 py-1.5">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-ink">Timeline</h3>
+          <p className="text-[11px] text-ink-3">
+            Click clip để đổi asset. Timeline tự tính lại thời lượng.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
             disabled={busy}
             onClick={() => void onRematch()}
-            className="rounded-lg border border-white/20 px-4 py-2 text-xs text-zinc-200 hover:bg-white/5 disabled:opacity-50"
           >
             Rematch
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={busy}
             onClick={() => void onCreateTimeline()}
-            className="rounded-lg bg-cyan-400 px-4 py-2 text-xs font-semibold text-cyan-950 transition hover:bg-cyan-300 disabled:opacity-50"
           >
             {loading
               ? "Đang tạo..."
               : timeline
                 ? "Tạo lại timeline"
                 : "Create timeline"}
-          </button>
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy || !timeline}
+            onClick={() => void exportVideo()}
+          >
+            {exporting ? "Đang xuất..." : "Xuất video"}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy || !timeline}
+            onClick={() => void generateCapCut()}
+          >
+            {generatingCapCut ? "Đang generate..." : "Generate CapCut"}
+          </Button>
         </div>
       </div>
 
+      {exporting && exportProgress ? (
+        <div className="shrink-0 border-b border-line px-2 py-1.5">
+          <div className="h-1 overflow-hidden rounded-sm bg-elevated">
+            <div
+              className="h-full bg-accent transition-[width] duration-200"
+              style={{
+                width: `${Math.max(2, exportProgress.percent)}%`
+              }}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-ink-3">
+            {exportProgress.phase === "preparing"
+              ? "Đang chuẩn bị media..."
+              : exportProgress.phase === "done"
+                ? "Hoàn tất xuất video."
+                : `Đang render ${exportProgress.percent}%${
+                    exportProgress.time !== undefined &&
+                    exportProgress.duration
+                      ? ` · ${exportProgress.time.toFixed(1)}s / ${exportProgress.duration.toFixed(1)}s`
+                      : ""
+                  }`}
+          </p>
+        </div>
+      ) : null}
+
       {timeline ? (
-        <>
-          <TimelinePreview
-            timeline={timeline}
-            assets={previewAssets}
-            preview={preview}
-          />
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+          <div className="flex min-h-0 shrink-0 gap-3">
+            <TimelinePreview
+              timeline={timeline}
+              assets={previewAssets}
+              preview={preview}
+            />
+            <div className="min-w-0 flex-1 space-y-2 overflow-y-auto">
+              {exportOutput ? (
+                <div className="rounded-lg border border-line bg-panel p-2.5">
+                  <p className="text-[11px] text-ink-3">Video đã xuất</p>
+                  <p className="mt-1 break-all text-[12px] text-ink">
+                    {exportOutput}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() =>
+                      void window.xamxixiu.showItemInFolder(exportOutput)
+                    }
+                  >
+                    Mở thư mục
+                  </Button>
+                </div>
+              ) : null}
+              {capCutOutput ? (
+                <div className="rounded-lg border border-success/30 bg-success/5 p-2.5">
+                  <p className="text-[11px] text-ink-3">CapCut project</p>
+                  <p className="mt-1 break-all text-[12px] text-success">
+                    {capCutOutput}
+                  </p>
+                  <p className="mt-1 text-[11px] text-ink-3">
+                    Đóng CapCut nếu đang mở, sau đó mở project folder này.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() =>
+                      void window.xamxixiu.openPath(capCutOutput)
+                    }
+                  >
+                    Mở thư mục CapCut
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-[12px] leading-5 text-ink-3">
+                  Render MP4 từ timeline hiện tại, hoặc generate project CapCut
+                  để chỉnh sửa tiếp.
+                </p>
+              )}
+            </div>
+          </div>
           <TimelineTracks
             timeline={timeline}
             previewTime={preview.previewTime}
@@ -281,168 +355,70 @@ export function TimelineWorkspace({
               void replaceAsset(clipTarget, null);
             }}
           />
-        </>
+        </div>
       ) : (
-        <p className="rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-8 text-sm text-zinc-500">
+        <p className="m-2 rounded-lg border border-dashed border-line bg-panel p-6 text-[13px] text-ink-3">
           Chưa có timeline. Bấm Create timeline sau khi voice đã sẵn sàng.
         </p>
       )}
 
-      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
-        <h3 className="font-medium">Xuất video</h3>
-        <p className="mt-1 text-sm leading-6 text-zinc-400">
-          Render file MP4 từ timeline hiện tại, hoặc generate
-          project CapCut để chỉnh sửa tiếp.
+      <Dialog
+        open={editingTitle !== undefined}
+        onClose={() => setEditingTitle(undefined)}
+        className="max-w-lg p-4"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium text-ink">Topic title</h3>
+          <span className="text-[11px] text-ink-3">
+            {editingTitle?.length ?? 0}/{TOPIC_TITLE_MAX_LENGTH}
+          </span>
+        </div>
+        <Textarea
+          value={editingTitle ?? ""}
+          maxLength={TOPIC_TITLE_MAX_LENGTH}
+          autoFocus
+          onChange={(event) => setEditingTitle(event.target.value)}
+          className="mt-3 min-h-[96px] leading-5"
+          placeholder="Nhập topic title..."
+        />
+        <p className="mt-2 text-[12px] text-ink-3">
+          Nếu đã generate title voice, hãy generate lại ở bước Voice.
         </p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy || !timeline}
-            onClick={() => void exportVideo()}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-200 disabled:opacity-50"
-          >
-            {exporting ? "Đang xuất video..." : "Xuất video"}
-          </button>
-          <button
-            type="button"
-            disabled={busy || !timeline}
-            onClick={() => void generateCapCut()}
-            className="rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-300 disabled:opacity-50"
-          >
-            {generatingCapCut
-              ? "Đang generate..."
-              : "Generate CapCut"}
-          </button>
-        </div>
-        {exporting && exportProgress ? (
-          <div className="mt-5">
-            <div className="h-2 overflow-hidden rounded-full bg-white/10">
-              <div
-                className="h-full rounded-full bg-white transition-[width] duration-200"
-                style={{
-                  width: `${Math.max(
-                    2,
-                    exportProgress.percent
-                  )}%`
-                }}
-              />
-            </div>
-            <p className="mt-2 text-xs text-zinc-400">
-              {exportProgress.phase === "preparing"
-                ? "Đang chuẩn bị media..."
-                : exportProgress.phase === "done"
-                  ? "Hoàn tất xuất video."
-                  : `Đang render ${exportProgress.percent}%${
-                      exportProgress.time !== undefined &&
-                      exportProgress.duration
-                        ? ` · ${exportProgress.time.toFixed(1)}s / ${exportProgress.duration.toFixed(1)}s`
-                        : ""
-                    }`}
-            </p>
-          </div>
-        ) : null}
-        {exportOutput ? (
-          <div className="mt-5 rounded-xl border border-white/10 bg-black/10 p-4">
-            <p className="text-xs text-zinc-500">
-              Video đã xuất
-            </p>
-            <p className="mt-2 break-all text-sm text-zinc-200">
-              {exportOutput}
-            </p>
-            <button
-              type="button"
-              onClick={() =>
-                void window.xamxixiu.showItemInFolder(
-                  exportOutput
-                )
-              }
-              className="mt-3 rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5"
+        <div className="mt-4 flex justify-end gap-1.5">
+          {timeline?.topicIntro ? (
+            <Button
+              variant="danger"
+              size="sm"
+              className="mr-auto"
+              disabled={busy}
+              onClick={() => void updateTopicIntro({ enabled: false })}
             >
-              Mở thư mục
-            </button>
-          </div>
-        ) : null}
-        {capCutOutput ? (
-          <div className="mt-5 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-            <p className="text-xs text-zinc-500">
-              CapCut project
-            </p>
-            <p className="mt-2 break-all text-sm text-emerald-200">
-              {capCutOutput}
-            </p>
-            <p className="mt-3 text-xs text-zinc-500">
-              Đóng CapCut nếu đang mở, sau đó mở project
-              folder này.
-            </p>
-            <button
-              type="button"
-              onClick={() =>
-                void window.xamxixiu.openPath(capCutOutput)
-              }
-              className="mt-3 rounded-lg border border-emerald-300/30 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-400/10"
-            >
-              Mở thư mục CapCut
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {editingTitle !== undefined && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
-          <div className="w-full max-w-lg rounded-2xl border border-white/15 bg-zinc-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="font-medium">Topic title</h3>
-              <span className="text-xs text-zinc-500">
-                {editingTitle.length}/{TOPIC_TITLE_MAX_LENGTH}
-              </span>
-            </div>
-            <textarea
-              value={editingTitle}
-              maxLength={TOPIC_TITLE_MAX_LENGTH}
-              autoFocus
-              onChange={(event) => setEditingTitle(event.target.value)}
-              className="mt-4 min-h-[96px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
-              placeholder="Nhập topic title..."
-            />
-            <p className="mt-3 text-xs text-zinc-500">
-              Nếu đã generate title voice, hãy generate lại ở bước Voice.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              {timeline?.topicIntro && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void updateTopicIntro({ enabled: false })}
-                  className="mr-auto rounded-lg border border-red-400/40 px-3 py-1.5 text-xs text-red-200 hover:bg-red-400/10 disabled:opacity-50"
-                >
-                  Gỡ khỏi timeline
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setEditingTitle(undefined)}
-                className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-50"
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                disabled={busy || !editingTitle.trim()}
-                onClick={() =>
-                  void updateTopicIntro({
-                    topicTitle: editingTitle,
-                    enabled: true
-                  })
-                }
-                className="rounded-lg bg-fuchsia-400 px-3 py-1.5 text-xs font-semibold text-fuchsia-950 hover:bg-fuchsia-300 disabled:opacity-50"
-              >
-                Lưu
-              </button>
-            </div>
-          </div>
+              Gỡ khỏi timeline
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => setEditingTitle(undefined)}
+          >
+            Hủy
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy || !editingTitle?.trim()}
+            onClick={() =>
+              void updateTopicIntro({
+                topicTitle: editingTitle ?? "",
+                enabled: true
+              })
+            }
+          >
+            Lưu
+          </Button>
         </div>
-      )}
+      </Dialog>
 
       <AssetPickerDialog
         open={Boolean(target)}

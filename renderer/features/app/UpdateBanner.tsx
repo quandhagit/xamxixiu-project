@@ -84,19 +84,19 @@ export function UpdateBanner(): React.ReactElement | null {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[90] flex justify-center p-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[90] flex justify-center p-3">
       <div
         role="status"
-        className="pointer-events-auto flex w-full max-w-3xl items-center gap-4 overflow-hidden rounded-2xl border border-fuchsia-400/30 bg-zinc-900/95 px-4 py-3 shadow-2xl backdrop-blur"
+        className="pointer-events-auto flex w-full max-w-3xl items-center gap-3 overflow-hidden rounded-lg border border-line bg-elevated px-3 py-2"
       >
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-zinc-100">
+          <p className="text-[13px] text-ink">
             {statusMessage(status)}
           </p>
           {status.state === "downloading" ? (
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+            <div className="mt-1.5 h-1 overflow-hidden rounded-sm bg-panel">
               <div
-                className="h-full rounded-full bg-fuchsia-400 transition-[width]"
+                className="h-full bg-accent transition-[width]"
                 style={{ width: `${percent}%` }}
               />
             </div>
@@ -109,7 +109,7 @@ export function UpdateBanner(): React.ReactElement | null {
             onClick={() => {
               void onStart();
             }}
-            className="shrink-0 rounded-full bg-fuchsia-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-fuchsia-400 disabled:cursor-wait disabled:bg-fuchsia-500/50"
+            className="inline-flex h-7 shrink-0 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-wait disabled:opacity-40"
           >
             {starting ? "Đang tải…" : label}
           </button>
@@ -119,7 +119,7 @@ export function UpdateBanner(): React.ReactElement | null {
             type="button"
             aria-label="Đóng"
             onClick={() => setHidden(true)}
-            className="shrink-0 text-lg leading-none text-zinc-500 hover:text-zinc-200"
+            className="shrink-0 text-ink-3 hover:text-ink"
           >
             ×
           </button>

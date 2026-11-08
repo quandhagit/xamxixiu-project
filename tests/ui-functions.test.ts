@@ -1,0 +1,640 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, it } from "node:test";
+import type { Asset } from "../src/assets/library";
+import type { MatchedReaction } from "../src/assets/matcher";
+import {
+  buildCommentForest,
+  reorderComments
+} from "../src/comments/order";
+import { isAnalysisStale } from "../src/comments/analysis-stale";
+import {
+  applyTimelineAssetReplacement,
+  canRemoveTimelineAsset
+} from "../src/timeline/replace-asset";
+import {
+  normalizeTopicTitle,
+  shouldGenerateTopicTitleVoice,
+  TOPIC_TITLE_MAX_LENGTH,
+  TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH
+} from "../src/timeline/topic-constants";
+import type { ThreadAnalysis, ThreadComment, VideoTimeline } from "../src/types";
+import { cn } from "../renderer/features/ui/cn";
+import {
+  assetsForTarget,
+  pickerTitle,
+  selectedAssetId
+} from "../renderer/features/preview/asset-picker";
+import { assetFileName, assetMediaSrc } from "../renderer/features/preview/asset-media";
+import {
+  formatClipLabel,
+  getTimelineTracks,
+  isVideoAsset,
+  TRACK_IDS,
+  TRACK_LABELS
+} from "../renderer/features/preview/timeline-tracks";
+import {
+  getPreviewAudioTracks,
+  getPreviewScene,
+  previewSeekThreshold
+} from "../renderer/features/preview/preview-timeline";
+import {
+  formatProjectId,
+  identityImageSlots,
+  withVoiceAssignment
+} from "../renderer/features/workflow/project-helpers";
+import { WORKFLOW_STEPS } from "../renderer/features/workflow/steps";
+import {
+  APP_VIEW_HREF,
+  APP_VIEWS,
+  appViewFromPathname,
+  appViewPanelClass,
+  isAppViewVisible,
+  keptAppViewPanels
+} from "../renderer/features/app/app-view";
+import { playingIfActive } from "../renderer/features/preview/use-timeline-preview";
+
+const rendererRoot = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../renderer/features/app"
+);
+
+function hasClass(
+  className: string,
+  token: string
+): boolean {
+  return className.split(/\s+/).includes(token);
+}
+
+function comment(
+  author: string,
+  extras: Partial<ThreadComment> = {}
+): ThreadComment {
+  return {
+    author,
+    text: extras.text ?? author,
+    likes: extras.likes ?? 0,
+    containerIndex: extras.containerIndex ?? 0,
+    ...extras
+  };
+}
+
+function analysis(
+  extras: Partial<ThreadAnalysis> = {}
+): ThreadAnalysis {
+  return {
+    tone: "casual",
+    topicType: "other",
+    intensity: 5,
+    musicType: "neutral",
+    reactions: [
+      {
+        commentIndex: 0,
+        emotion: "neutral",
+        memeCategory: null,
+        sfxCategory: null,
+        animation: "none",
+        duration: 1
+      }
+    ],
+    ...extras
+  };
+}
+
+function asset(partial: Partial<Asset> & Pick<Asset, "id" | "type" | "mediaKind">): Asset {
+  return {
+    file: partial.file ?? `${partial.id}.bin`,
+    category: partial.category ?? "test",
+    tags: partial.tags ?? [],
+    intensity: partial.intensity ?? 0.5,
+    createdAt: partial.createdAt ?? "2026-01-01",
+    updatedAt: partial.updatedAt ?? "2026-01-01",
+    spec: partial.spec,
+    id: partial.id,
+    type: partial.type,
+    mediaKind: partial.mediaKind
+  };
+}
+
+function timeline(partial: Partial<VideoTimeline> = {}): VideoTimeline {
+  return {
+    version: 1,
+    canvas: { width: 1080, height: 1920, fps: 30 },
+    totalDuration: 4,
+    backgroundFile: "bg.mp4",
+    musicFile: "music.mp3",
+    scenes: [
+      {
+        id: "topic",
+        commentIndex: null,
+        imageFile: "processed/topic.png",
+        imageStart: 0,
+        imageDuration: 2,
+        audioFile: "audio/topic.mp3",
+        audioStart: 0,
+        audioDuration: 2,
+        overlays: []
+      },
+      {
+        id: "comment-0",
+        commentIndex: 0,
+        imageFile: "processed/comment-01.png",
+        imageStart: 0,
+        imageDuration: 2,
+        audioFile: "audio/comment-0.mp3",
+        audioStart: 0,
+        audioDuration: 1.5,
+        overlays: [
+          {
+            type: "meme",
+            file: "meme.png",
+            start: 1.5,
+            duration: 0.5
+          },
+          {
+            type: "sfx",
+            file: "boom.mp3",
+            start: 1.5,
+            duration: 0.4
+          }
+        ]
+      }
+    ],
+    ...partial
+  };
+}
+
+describe("workflow chrome", () => {
+  it("keeps the five existing steps in pipeline order", () => {
+    assert.deepEqual([...WORKFLOW_STEPS], [
+      "INPUT",
+      "CAPTURE",
+      "ANALYZE",
+      "VOICE",
+      "TIMELINE"
+    ]);
+  });
+
+  it("formats project ids without the -thread suffix", () => {
+    assert.equal(
+      formatProjectId({
+        id: "2026-11-07T05-24-35-795Z-thread",
+        directory: "/tmp",
+        hasThread: true,
+        hasAnalysis: true,
+        hasTimeline: true,
+        hasReactions: true,
+        audioCount: 1
+      }),
+      "2026-11-07T05-24-35-795Z"
+    );
+  });
+
+  it("builds identity image slots for capture comments", () => {
+    assert.deepEqual(identityImageSlots(3), [0, 1, 2]);
+  });
+});
+
+describe("app tab keep-alive", () => {
+  it("maps renderer pathnames to chrome tabs", () => {
+    assert.equal(appViewFromPathname("/"), "workflow");
+    assert.equal(appViewFromPathname(""), "workflow");
+    assert.equal(appViewFromPathname("/library"), "library");
+    assert.equal(appViewFromPathname("/library/"), "library");
+  });
+
+  it("keeps both workspaces present when switching to library and back", () => {
+    const start = keptAppViewPanels("/");
+    const library = keptAppViewPanels("/library/");
+    const back = keptAppViewPanels("/");
+
+    assert.deepEqual(
+      start.map((panel) => panel.view),
+      [...APP_VIEWS]
+    );
+    assert.deepEqual(
+      library.map((panel) => panel.view),
+      [...APP_VIEWS]
+    );
+    assert.deepEqual(
+      back.map((panel) => panel.view),
+      [...APP_VIEWS]
+    );
+
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/"), "workflow"),
+      true
+    );
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/library/"), "workflow"),
+      false
+    );
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/library/"), "library"),
+      true
+    );
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/"), "library"),
+      false
+    );
+
+    const hiddenWorkflow = library.find(
+      (panel) => panel.view === "workflow"
+    );
+    const visibleLibrary = library.find(
+      (panel) => panel.view === "library"
+    );
+    const restoredWorkflow = back.find(
+      (panel) => panel.view === "workflow"
+    );
+
+    assert.equal(hiddenWorkflow?.visible, false);
+    assert.equal(hasClass(hiddenWorkflow?.className ?? "", "hidden"), true);
+    assert.equal(visibleLibrary?.visible, true);
+    assert.equal(hasClass(visibleLibrary?.className ?? "", "hidden"), false);
+    assert.equal(restoredWorkflow?.visible, true);
+    assert.equal(hasClass(restoredWorkflow?.className ?? "", "hidden"), false);
+    assert.equal(
+      appViewPanelClass("workflow", "library"),
+      hiddenWorkflow?.className
+    );
+  });
+
+  it("pauses timeline preview while the workflow tab is hidden", () => {
+    assert.equal(playingIfActive(true, true), true);
+    assert.equal(playingIfActive(true, false), false);
+    assert.equal(playingIfActive(false, true), false);
+  });
+
+  it("uses client-side tab links and always mounts both workspaces", () => {
+    const chrome = readFileSync(
+      path.join(rendererRoot, "AppChrome.tsx"),
+      "utf8"
+    );
+    const shell = readFileSync(
+      path.join(rendererRoot, "AppShell.tsx"),
+      "utf8"
+    );
+
+    assert.match(chrome, /import Link from "next\/link"/);
+    assert.match(chrome, /href=\{APP_VIEW_HREF\.workflow\}/);
+    assert.match(chrome, /href=\{APP_VIEW_HREF\.library\}/);
+    assert.doesNotMatch(chrome, /<a\b[^>]*href=/);
+    assert.equal(APP_VIEW_HREF.workflow, "/");
+    assert.equal(APP_VIEW_HREF.library, "/library/");
+
+    assert.match(shell, /<WorkflowWorkspace/);
+    assert.match(shell, /<AssetLibraryManager/);
+    assert.doesNotMatch(
+      shell,
+      /active === "workflow" \?\s*\(?\s*<WorkflowWorkspace/
+    );
+    assert.doesNotMatch(
+      shell,
+      /active === "library" \?\s*\(?\s*<AssetLibraryManager/
+    );
+  });
+});
+
+describe("voice assignment", () => {
+  it("updates topic, title, and comment voices without touching the others", () => {
+    const base = analysis({
+      topicVoiceId: "a",
+      topicTitleVoiceId: "b",
+      reactions: [
+        {
+          commentIndex: 0,
+          voiceId: "c",
+          emotion: "happy",
+          memeCategory: null,
+          sfxCategory: null,
+          animation: "none",
+          duration: 1
+        },
+        {
+          commentIndex: 1,
+          voiceId: "d",
+          emotion: "sad",
+          memeCategory: null,
+          sfxCategory: null,
+          animation: "none",
+          duration: 1
+        }
+      ]
+    });
+
+    assert.equal(
+      withVoiceAssignment(base, "topic", "ngoc-huyen").topicVoiceId,
+      "ngoc-huyen"
+    );
+    assert.equal(
+      withVoiceAssignment(base, "topic-title", "nam-khang").topicTitleVoiceId,
+      "nam-khang"
+    );
+    const commentVoice = withVoiceAssignment(base, "comment-1", "minh-hoang");
+    assert.equal(commentVoice.reactions[0].voiceId, "c");
+    assert.equal(commentVoice.reactions[1].voiceId, "minh-hoang");
+  });
+});
+
+describe("capture comment order", () => {
+  it("reorders sibling comments and keeps image slots aligned", () => {
+    const comments = [
+      comment("one"),
+      comment("two"),
+      comment("three")
+    ];
+    const next = reorderComments(comments, [0, 1, 2], 0, 2);
+    assert.deepEqual(
+      next.comments.map((item) => item.author),
+      ["two", "three", "one"]
+    );
+    assert.deepEqual(next.imageSlots, [1, 2, 0]);
+  });
+
+  it("does not move a reply onto a different parent", () => {
+    const comments = [
+      comment("root"),
+      comment("reply", { parentCommentIndex: 0 })
+    ];
+    const next = reorderComments(comments, [0, 1], 1, 0);
+    assert.equal(next.comments[0].author, "root");
+    assert.equal(next.comments[1].author, "reply");
+  });
+
+  it("builds a forest with replies under their parent", () => {
+    const forest = buildCommentForest([
+      comment("root"),
+      comment("reply", { parentCommentIndex: 0 })
+    ]);
+    assert.equal(forest.length, 1);
+    assert.equal(forest[0].children.length, 1);
+    assert.equal(forest[0].children[0].index, 1);
+  });
+});
+
+describe("analyze freshness", () => {
+  it("is stale when a reaction points at an excluded comment", () => {
+    assert.equal(
+      isAnalysisStale(
+        {
+          comments: [
+            comment("keep"),
+            comment("drop", { excluded: true })
+          ]
+        },
+        analysis({
+          reactions: [
+            {
+              commentIndex: 1,
+              emotion: "neutral",
+              memeCategory: null,
+              sfxCategory: null,
+              animation: "none",
+              duration: 1
+            }
+          ]
+        })
+      ),
+      true
+    );
+  });
+
+  it("is fresh when every included comment in range has a reaction", () => {
+    assert.equal(
+      isAnalysisStale(
+        { comments: [comment("a"), comment("b")] },
+        analysis({
+          reactions: [
+            {
+              commentIndex: 0,
+              emotion: "neutral",
+              memeCategory: null,
+              sfxCategory: null,
+              animation: "none",
+              duration: 1
+            },
+            {
+              commentIndex: 1,
+              emotion: "happy",
+              memeCategory: null,
+              sfxCategory: null,
+              animation: "none",
+              duration: 1
+            }
+          ]
+        })
+      ),
+      false
+    );
+  });
+});
+
+describe("topic title helpers", () => {
+  it("trims and caps topic title length", () => {
+    assert.equal(normalizeTopicTitle("  hello  "), "hello");
+    assert.equal(
+      normalizeTopicTitle("x".repeat(TOPIC_TITLE_MAX_LENGTH + 10)).length,
+      TOPIC_TITLE_MAX_LENGTH
+    );
+  });
+
+  it("skips title voice for short topic text", () => {
+    assert.equal(shouldGenerateTopicTitleVoice("short"), false);
+    assert.equal(
+      shouldGenerateTopicTitleVoice(
+        "a".repeat(TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH + 1)
+      ),
+      true
+    );
+  });
+});
+
+describe("timeline tracks", () => {
+  it("exposes the eight existing track ids and labels", () => {
+    assert.deepEqual([...TRACK_IDS], [
+      "background",
+      "images",
+      "title-card",
+      "meme",
+      "video",
+      "voice",
+      "sfx",
+      "music"
+    ]);
+    assert.equal(TRACK_LABELS.voice, "Voice");
+  });
+
+  it("classifies video files and clip labels", () => {
+    assert.equal(isVideoAsset("reaction.mp4"), true);
+    assert.equal(isVideoAsset("meme.png"), false);
+    assert.equal(formatClipLabel("folder/boom.mp3"), "boom.mp3");
+    assert.equal(formatClipLabel(undefined), "+");
+  });
+
+  it("maps a timeline into editable clips without dropping seekable duration", () => {
+    const tracks = getTimelineTracks(timeline());
+    const byId = Object.fromEntries(
+      tracks.map((track) => [track.id, track])
+    );
+    assert.equal(byId.background.clips[0]?.file, "bg.mp4");
+    assert.equal(byId.music.clips[0]?.editable, true);
+    assert.equal(byId.images.clips.length, 2);
+    assert.equal(byId.voice.clips.length, 2);
+    const meme = byId.meme.clips.find((clip) => clip.file === "meme.png");
+    assert.equal(meme?.editable, true);
+    assert.deepEqual(meme?.target, { kind: "meme", commentIndex: 0 });
+    const sfx = byId.sfx.clips.find((clip) => clip.file === "boom.mp3");
+    assert.deepEqual(sfx?.target, { kind: "sfx", commentIndex: 0 });
+  });
+
+  it("only allows removing meme, video, sfx, and topic clips", () => {
+    assert.equal(canRemoveTimelineAsset({ kind: "background" }), false);
+    assert.equal(canRemoveTimelineAsset({ kind: "music" }), false);
+    assert.equal(canRemoveTimelineAsset({ kind: "meme", commentIndex: 0 }), true);
+    assert.equal(canRemoveTimelineAsset({ kind: "topic-title" }), true);
+  });
+});
+
+describe("timeline preview clock", () => {
+  it("resolves the scene at a given playhead time", () => {
+    const scene = getPreviewScene(timeline(), 2.2);
+    assert.ok(scene);
+    assert.equal(scene.scene.id, "comment-0");
+    assert.ok(scene.elapsed >= 0);
+  });
+
+  it("builds music, voice, and sfx preview audio tracks", () => {
+    const tracks = getPreviewAudioTracks(timeline());
+    assert.ok(tracks.some((track) => track.key === "music"));
+    assert.ok(tracks.some((track) => track.key.startsWith("voice-")));
+    assert.ok(tracks.some((track) => track.key.startsWith("sfx-")));
+  });
+
+  it("uses a tighter seek threshold while playing", () => {
+    assert.equal(previewSeekThreshold(true), 0.08);
+    assert.equal(previewSeekThreshold(false), 1 / 30);
+  });
+});
+
+describe("asset picker", () => {
+  const library = [
+    asset({ id: "bg-1", type: "background", mediaKind: "video" }),
+    asset({ id: "music-1", type: "music", mediaKind: "audio" }),
+    asset({ id: "sfx-1", type: "sfx", mediaKind: "audio" }),
+    asset({ id: "meme-img", type: "meme", mediaKind: "image" }),
+    asset({ id: "meme-vid", type: "meme", mediaKind: "video" })
+  ];
+
+  it("filters library assets by clip target", () => {
+    assert.deepEqual(
+      assetsForTarget(library, { kind: "background" }).map((item) => item.id),
+      ["bg-1"]
+    );
+    assert.deepEqual(
+      assetsForTarget(library, { kind: "sfx", commentIndex: 0 }).map(
+        (item) => item.id
+      ),
+      ["sfx-1"]
+    );
+    assert.deepEqual(
+      assetsForTarget(library, { kind: "video", commentIndex: 0 }).map(
+        (item) => item.id
+      ),
+      ["meme-vid"]
+    );
+    assert.deepEqual(
+      assetsForTarget(library, { kind: "meme", commentIndex: 0 }).map(
+        (item) => item.id
+      ),
+      ["meme-img"]
+    );
+    assert.equal(assetsForTarget(library, { kind: "topic-title" }).length, 0);
+  });
+
+  it("keeps picker titles for each target kind", () => {
+    assert.equal(pickerTitle({ kind: "background" }), "Chọn background");
+    assert.equal(
+      pickerTitle({ kind: "video", commentIndex: 3 }),
+      "Chọn video meme · comment #3"
+    );
+    assert.equal(
+      pickerTitle({ kind: "meme", commentIndex: 2 }),
+      "Chọn meme · comment #2"
+    );
+  });
+
+  it("reads the currently assigned asset for a clip", () => {
+    const reactions: MatchedReaction[] = [
+      {
+        commentIndex: 0,
+        emotion: "happy",
+        meme: asset({ id: "meme-img", type: "meme", mediaKind: "image" }),
+        sfx: asset({ id: "sfx-1", type: "sfx", mediaKind: "audio" }),
+        animation: "none",
+        duration: 1
+      }
+    ];
+    const current = analysis({
+      backgroundAssetId: "bg-1",
+      musicAssetId: "music-1",
+      topicMemeId: "meme-vid"
+    });
+    assert.equal(
+      selectedAssetId({ kind: "background" }, current, reactions),
+      "bg-1"
+    );
+    assert.equal(
+      selectedAssetId({ kind: "sfx", commentIndex: 0 }, current, reactions),
+      "sfx-1"
+    );
+    assert.equal(
+      selectedAssetId({ kind: "meme", commentIndex: 0 }, current, reactions),
+      "meme-img"
+    );
+    assert.equal(
+      selectedAssetId({ kind: "topic-title" }, current, reactions),
+      undefined
+    );
+  });
+
+  it("rejects removing background or music through replacement", () => {
+    assert.throws(
+      () =>
+        applyTimelineAssetReplacement(
+          [],
+          analysis(),
+          library,
+          { kind: "background" },
+          null
+        ),
+      /Background cannot be removed/
+    );
+    const next = applyTimelineAssetReplacement(
+      [],
+      analysis(),
+      library,
+      { kind: "music" },
+      "music-1"
+    );
+    assert.equal(next.selections?.musicAssetId, "music-1");
+  });
+});
+
+describe("media helpers", () => {
+  it("builds the custom media protocol URL", () => {
+    assert.equal(
+      assetMediaSrc("meme/ok"),
+      "xammedia://library/?id=meme%2Fok"
+    );
+    assert.equal(assetFileName("a\\b\\c.png"), "c.png");
+  });
+});
+
+describe("className helper", () => {
+  it("drops falsey class fragments", () => {
+    assert.equal(cn("a", false, undefined, "b"), "a b");
+  });
+});

@@ -73,15 +73,15 @@ export function TimelineTracks({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/20">
-      <div className="overflow-x-auto">
+    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-panel">
+      <div className="h-full overflow-auto">
         <div
           className="flex min-w-full"
           style={{ width: LABEL_WIDTH + canvasWidth }}
         >
-          <div className="sticky left-0 z-20 shrink-0 bg-zinc-950">
+          <div className="sticky left-0 z-20 shrink-0 bg-sidebar">
             <div
-              className="border-b border-r border-white/10 px-3 py-2 text-[11px] uppercase tracking-wider text-zinc-500"
+              className="border-b border-r border-line px-2 py-1.5 text-[11px] uppercase tracking-wide text-ink-3"
               style={{ width: LABEL_WIDTH, height: RULER_HEIGHT }}
             >
               Tracks
@@ -89,7 +89,7 @@ export function TimelineTracks({
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="flex items-center border-b border-r border-white/10 px-3 text-xs text-zinc-300 last:border-b-0"
+                className="flex items-center border-b border-r border-line px-2 text-[12px] text-ink last:border-b-0"
                 style={{ width: LABEL_WIDTH, height: TRACK_HEIGHT }}
               >
                 {track.label}
@@ -102,14 +102,14 @@ export function TimelineTracks({
             style={{ width: canvasWidth }}
           >
             <div
-              className="relative cursor-ew-resize border-b border-white/10"
+              className="relative cursor-ew-resize border-b border-line"
               style={{ height: RULER_HEIGHT }}
               onClick={(event) => onSeek(timeFromEvent(event))}
             >
               {ticks.map((time) => (
                 <div
                   key={time}
-                  className="absolute top-0 h-full border-l border-white/10 pl-1 text-[10px] text-zinc-500"
+                  className="absolute top-0 h-full border-l border-line pl-1 text-[10px] text-ink-3"
                   style={{ left: time * PIXELS_PER_SECOND }}
                 >
                   {formatTime(time)}
@@ -119,7 +119,7 @@ export function TimelineTracks({
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="relative border-b border-white/5 last:border-b-0"
+                className="relative border-b border-line/60 last:border-b-0"
                 style={{ height: TRACK_HEIGHT }}
                 onClick={(event) => onSeek(timeFromEvent(event))}
               >
@@ -148,7 +148,7 @@ export function TimelineTracks({
                         className={[
                           "min-w-0 flex-1 truncate px-1.5 text-left text-[10px] font-medium leading-[20px]",
                           clip.placeholder
-                            ? "border border-dashed border-white/30 bg-transparent text-zinc-400"
+                            ? "border border-dashed border-line bg-transparent text-ink-3"
                             : `${TRACK_COLORS[track.id]} text-zinc-950`,
                           clip.editable
                             ? "hover:brightness-110"
@@ -168,7 +168,7 @@ export function TimelineTracks({
                               onRemoveClip(clip.target);
                             }
                           }}
-                          className="shrink-0 bg-zinc-950/70 px-1 text-[10px] font-bold leading-[20px] text-white hover:bg-red-500"
+                          className="shrink-0 bg-app/80 px-1 text-[10px] font-bold leading-[20px] text-ink hover:bg-danger hover:text-white"
                         >
                           ×
                         </button>
@@ -179,7 +179,7 @@ export function TimelineTracks({
               </div>
             ))}
             <div
-              className="pointer-events-none absolute top-0 z-10 w-px bg-cyan-300"
+              className="pointer-events-none absolute top-0 z-10 w-px bg-accent"
               style={{
                 left: previewTime * PIXELS_PER_SECOND,
                 height: RULER_HEIGHT + tracks.length * TRACK_HEIGHT

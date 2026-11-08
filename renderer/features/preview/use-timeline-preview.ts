@@ -19,6 +19,7 @@ import type { VideoTimeline } from "../../../src/types";
 interface UseTimelinePreviewOptions {
   timeline: VideoTimeline | undefined;
   assets: Record<string, string>;
+  active?: boolean;
 }
 
 export interface UseTimelinePreviewResult {
@@ -33,9 +34,17 @@ export interface UseTimelinePreviewResult {
   togglePreview: () => void;
 }
 
+export function playingIfActive(
+  playing: boolean,
+  active: boolean
+): boolean {
+  return active ? playing : false;
+}
+
 export function useTimelinePreview({
   timeline,
-  assets
+  assets,
+  active = true
 }: UseTimelinePreviewOptions): UseTimelinePreviewResult {
   const [previewTime, setPreviewTime] =
     useState(0);
@@ -56,6 +65,12 @@ export function useTimelinePreview({
         : undefined,
     [timeline, previewTime]
   );
+
+  useEffect(() => {
+    setPreviewPlaying((playing) =>
+      playingIfActive(playing, active)
+    );
+  }, [active]);
 
   useEffect(() => {
     if (!timeline) {

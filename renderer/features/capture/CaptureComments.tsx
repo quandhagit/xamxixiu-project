@@ -20,6 +20,10 @@ import type {
   CommentCurationKind,
   ThreadComment
 } from "../../../src/types";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Textarea } from "../ui/Textarea";
+import { cn } from "../ui/cn";
 
 type CommentFilter = "all" | "used" | "excluded";
 
@@ -460,33 +464,31 @@ export function CaptureComments({
     return (
       <div
         data-comment-index={index}
-        className={[
-          "relative grid gap-5 rounded-2xl border p-5 lg:grid-cols-[0.8fr_1.2fr]",
+        className={cn(
+          "relative grid gap-3 rounded-lg border p-3 lg:grid-cols-[0.8fr_1.2fr]",
           comment.excluded
-            ? "border-amber-400/20 bg-amber-400/5 opacity-70"
-            : "border-white/10 bg-white/[0.04]",
-          isDragging ? "opacity-50" : "",
-          isDropTarget
-            ? "ring-2 ring-fuchsia-400/70"
-            : ""
-        ].join(" ")}
+            ? "border-warning/30 bg-warning/5 opacity-70"
+            : "border-line bg-panel",
+          isDragging && "opacity-50",
+          isDropTarget && "ring-1 ring-accent"
+        )}
       >
-        <div className="flex min-h-[180px] items-start justify-center rounded-xl bg-black/20 p-4">
+        <div className="flex min-h-[160px] items-start justify-center rounded-md bg-app p-3">
           {screenshot ? (
             <img
               src={screenshot}
               alt={`Comment ${index + 1} screenshot`}
-              className="max-h-[260px] max-w-full rounded-xl object-contain"
+              className="max-h-[260px] max-w-full rounded-md object-contain"
               draggable={false}
             />
           ) : (
-            <p className="py-10 text-sm text-zinc-500">
+            <p className="py-8 text-[13px] text-ink-3">
               Đang tải...
             </p>
           )}
         </div>
         <div>
-          <div className="flex items-center justify-between gap-3 text-xs text-zinc-500">
+          <div className="flex items-center justify-between gap-3 text-[12px] text-ink-3">
             <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
@@ -495,7 +497,7 @@ export function CaptureComments({
                 onPointerDown={(event) =>
                   handlePointerDown(event, index)
                 }
-                className="touch-none cursor-grab rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-400 hover:border-fuchsia-400/40 hover:text-zinc-200 active:cursor-grabbing"
+                className="touch-none cursor-grab rounded-md border border-line px-2 py-1 text-[12px] text-ink-2 hover:border-accent/50 hover:text-ink active:cursor-grabbing"
               >
                 ⋮⋮
               </button>
@@ -519,7 +521,7 @@ export function CaptureComments({
               {(comment.parentCommentIndex !== undefined ||
                 comment.originalParentCommentIndex !==
                   undefined) && (
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+                <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2">
                   <input
                     type="checkbox"
                     checked={
@@ -540,12 +542,12 @@ export function CaptureComments({
                         next.imageSlots
                       );
                     }}
-                    className="accent-cyan-400"
+                    className="accent-accent"
                   />
                   Hiện như comment cha
                 </label>
               )}
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2">
                 <input
                   type="checkbox"
                   checked={comment.excluded === true}
@@ -567,23 +569,23 @@ export function CaptureComments({
                       imageSlots
                     );
                   }}
-                  className="accent-amber-400"
+                  className="accent-warning"
                 />
                 Exclude khỏi Analyze
               </label>
             </div>
           </div>
-          <p className="mt-2 text-xs text-zinc-500">
+          <p className="mt-2 text-[12px] text-ink-3">
             {comment.likes} likes
           </p>
           {comment.curation && (
             <p
-              className={[
-                "mt-2 inline-flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 text-xs",
+              className={cn(
+                "mt-2 inline-flex flex-wrap items-center gap-2 rounded-md px-2 py-1 text-[12px]",
                 comment.excluded
-                  ? "bg-amber-400/10 text-amber-200"
-                  : "bg-emerald-400/10 text-emerald-200"
-              ].join(" ")}
+                  ? "bg-warning/10 text-warning"
+                  : "bg-success/10 text-success"
+              )}
             >
               <span className="font-semibold">
                 {comment.curation.source === "ai"
@@ -601,7 +603,7 @@ export function CaptureComments({
               )}
             </p>
           )}
-          <textarea
+          <Textarea
             value={comment.text}
             onChange={(event) => {
               onChange(
@@ -617,7 +619,7 @@ export function CaptureComments({
                 imageSlots
               );
             }}
-            className="mt-3 min-h-[80px] w-full resize-y rounded-xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
+            className="mt-2 min-h-[80px] leading-5"
           />
         </div>
       </div>
@@ -683,12 +685,11 @@ export function CaptureComments({
       branches.push(
         <div
           key={imageSlots[node.index] ?? node.index}
-          className={[
-            "space-y-4",
-            depth > 0
-              ? "relative ml-8 border-l-2 border-l-cyan-400/50 pl-6 before:absolute before:-left-6 before:top-8 before:h-px before:w-6 before:bg-cyan-400/50"
-              : ""
-          ].join(" ")}
+          className={cn(
+            "space-y-3",
+            depth > 0 &&
+              "relative ml-6 border-l border-l-accent/40 pl-4 before:absolute before:-left-4 before:top-6 before:h-px before:w-4 before:bg-accent/40"
+          )}
         >
           {renderComment(node.index)}
           {node.children.length > 0 &&
@@ -705,9 +706,9 @@ export function CaptureComments({
   }
 
   return (
-    <div ref={listRef} className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-zinc-300">
+    <div ref={listRef} className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-medium text-ink">
           Comments ({comments.length}) · Dùng {usedCount} ·
           Loại {excludedCount}
         </h3>
@@ -721,12 +722,12 @@ export function CaptureComments({
               key={key}
               type="button"
               onClick={() => setFilter(key)}
-              className={[
-                "rounded-lg border px-3 py-1 text-xs",
+              className={cn(
+                "rounded-md border px-2 py-1 text-[12px]",
                 filter === key
-                  ? "border-fuchsia-400/60 bg-fuchsia-400/10 text-fuchsia-100"
-                  : "border-white/10 text-zinc-400 hover:bg-white/5"
-              ].join(" ")}
+                  ? "border-accent/50 bg-accent/15 text-ink"
+                  : "border-line text-ink-2 hover:bg-elevated"
+              )}
             >
               {FILTER_LABELS[key]} ({filterCounts[key]})
             </button>
@@ -734,27 +735,27 @@ export function CaptureComments({
         </div>
       </div>
       <form
-        className="flex gap-3"
+        className="flex gap-2"
         onSubmit={handleAdd}
       >
-        <input
+        <Input
           value={replyUrl}
           onChange={(event) =>
             setReplyUrl(event.target.value)
           }
           placeholder="Dán link reply Threads"
-          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-4 py-2 text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-fuchsia-400"
+          className="min-w-0 flex-1"
         />
-        <button
+        <Button
           type="submit"
+          variant="primary"
           disabled={
             addLoading ||
             replyUrl.trim().length === 0
           }
-          className="rounded-xl bg-fuchsia-500 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-400 disabled:opacity-40"
         >
           Thêm comment
-        </button>
+        </Button>
       </form>
       {renderForest(forest, 0, new Set())}
     </div>

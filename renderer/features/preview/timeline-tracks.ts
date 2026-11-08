@@ -53,14 +53,14 @@ export const TRACK_LABELS: Record<TrackId, string> = {
 };
 
 export const TRACK_COLORS: Record<TrackId, string> = {
-  background: "bg-zinc-500/80",
-  images: "bg-slate-400/80",
-  "title-card": "bg-violet-400/80",
-  meme: "bg-fuchsia-400/85",
-  video: "bg-cyan-400/85",
-  voice: "bg-amber-400/85",
-  sfx: "bg-emerald-400/85",
-  music: "bg-sky-500/80"
+  background: "bg-slate-500/80",
+  images: "bg-stone-400/80",
+  "title-card": "bg-blue-400/75",
+  meme: "bg-teal-400/80",
+  video: "bg-indigo-400/80",
+  voice: "bg-amber-400/80",
+  sfx: "bg-emerald-400/80",
+  music: "bg-sky-500/75"
 };
 
 export function isVideoAsset(file: string): boolean {

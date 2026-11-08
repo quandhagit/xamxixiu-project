@@ -1,7 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
+import { Button } from "../ui/Button";
+import { cn } from "../ui/cn";
 import { SettingsDialog } from "./SettingsDialog";
+import { APP_VIEW_HREF } from "./app-view";
 
 export function AppChrome({
   active,
@@ -15,55 +19,54 @@ export function AppChrome({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <main className="flex h-screen flex-col overflow-hidden">
-      <header className="flex h-20 shrink-0 items-center justify-between border-b border-white/10 px-8">
-        <div className="flex items-center gap-8">
-          <div>
-            <p className="text-xs font-semibold tracking-[0.35em] text-fuchsia-300">
-              XÀM XÍ XÍU
-            </p>
-            <h1 className="mt-1 text-lg font-semibold">
-              Threads content workspace
-            </h1>
-          </div>
-          <nav className="flex gap-2">
-            <a
-              href="/"
-              className={[
-                "rounded-full px-4 py-2 text-sm transition",
+    <main className="flex h-screen flex-col overflow-hidden bg-app text-ink">
+      <header className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-sidebar px-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <h1 className="shrink-0 text-[13px] font-medium text-ink">
+            Xàm Xí Xíu
+          </h1>
+          <nav className="flex items-center gap-0.5">
+            <Link
+              href={APP_VIEW_HREF.workflow}
+              scroll={false}
+              aria-current={active === "workflow" ? "page" : undefined}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[13px] transition",
                 active === "workflow"
-                  ? "bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30"
-                  : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
-              ].join(" ")}
+                  ? "bg-accent/15 text-ink"
+                  : "text-ink-2 hover:bg-elevated hover:text-ink"
+              )}
             >
               Workflow
-            </a>
-            <a
-              href="/library/"
-              className={[
-                "rounded-full px-4 py-2 text-sm transition",
+            </Link>
+            <Link
+              href={APP_VIEW_HREF.library}
+              scroll={false}
+              aria-current={active === "library" ? "page" : undefined}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[13px] transition",
                 active === "library"
-                  ? "bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30"
-                  : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
-              ].join(" ")}
+                  ? "bg-accent/15 text-ink"
+                  : "text-ink-2 hover:bg-elevated hover:text-ink"
+              )}
             >
               Library
-            </a>
+            </Link>
           </nav>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2">
           {projectLabel ? (
-            <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-400">
+            <div className="max-w-[240px] truncate rounded-md border border-line bg-panel px-2 py-0.5 text-[12px] text-ink-2">
               {projectLabel}
             </div>
           ) : null}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setSettingsOpen(true)}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-zinc-100"
           >
             Settings
-          </button>
+          </Button>
         </div>
       </header>
       <SettingsDialog

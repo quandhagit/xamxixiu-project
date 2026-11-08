@@ -1,13 +1,7 @@
 "use client";
 
 import { VOICE_POOL } from "../../../src/tts/voice-pool";
-
-const SELECT_CLASS = [
-  "mt-2 w-full rounded-lg border border-white/10 bg-black/40",
-  "px-3 py-2 text-sm text-fuchsia-200 outline-none",
-  "focus:ring-2 focus:ring-fuchsia-400",
-  "disabled:cursor-not-allowed disabled:opacity-50"
-].join(" ");
+import { Select } from "../ui/Select";
 
 function voiceLabel(id: string, style: string): string {
   return `${id} · ${style}`;
@@ -33,16 +27,16 @@ export function VoiceSelect({
   );
 
   return (
-    <select
+    <Select
       value={value ?? ""}
       disabled={disabled}
+      className="mt-2"
       onChange={(event) => {
         const next = event.target.value;
         if (next && next !== value) {
           onChange(next);
         }
       }}
-      className={SELECT_CLASS}
     >
       {!value ? (
         <option value="">Chưa được chọn</option>
@@ -64,6 +58,6 @@ export function VoiceSelect({
           </option>
         ))}
       </optgroup>
-    </select>
+    </Select>
   );
 }

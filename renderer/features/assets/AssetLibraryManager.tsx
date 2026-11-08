@@ -12,6 +12,11 @@ import type {
 } from "../../../src/assets/library";
 import { AssetPreview } from "./AssetPreview";
 import { useErrorToast } from "../app/ErrorToast";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Textarea } from "../ui/Textarea";
+import { cn } from "../ui/cn";
 
 type LibraryTab =
   | "meme-image"
@@ -42,7 +47,7 @@ function FieldLabel({
 }): React.ReactElement {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium tracking-wide text-zinc-500">
+      <span className="mb-1 block text-[11px] font-medium tracking-wide text-ink-3">
         {label}
       </span>
       {children}
@@ -50,8 +55,6 @@ function FieldLabel({
   );
 }
 
-const fieldClassName =
-  "w-full rounded border border-white/10 bg-zinc-900 p-2 text-xs";
 
 function matchesTab(asset: Asset, tab: (typeof TABS)[number]): boolean {
   if (asset.type !== tab.type) {
@@ -60,7 +63,11 @@ function matchesTab(asset: Asset, tab: (typeof TABS)[number]): boolean {
   return tab.mediaKind ? asset.mediaKind === tab.mediaKind : true;
 }
 
-export function AssetLibraryManager(): React.ReactElement {
+export function AssetLibraryManager({
+  visible = true
+}: {
+  visible?: boolean;
+}): React.ReactElement {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [tabId, setTabId] = useState<LibraryTab>("meme-image");
   const [category, setCategory] = useState("");
@@ -96,8 +103,11 @@ export function AssetLibraryManager(): React.ReactElement {
   }
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     void refresh();
-  }, []);
+  }, [visible]);
 
   const filtered = useMemo(() => assets.filter((asset) =>
     matchesTab(asset, tab) &&
@@ -151,16 +161,18 @@ export function AssetLibraryManager(): React.ReactElement {
   }
 
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section>
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="font-medium">Local asset library</h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            Import, preview và sửa metadata. File trong thư mục assets/ của máy sẽ được index tự động.
+          <h2 className="text-sm font-medium text-ink">Asset library</h2>
+          <p className="mt-0.5 text-[12px] text-ink-3">
+            Import, sửa metadata và xóa meme, SFX, music, background.
+            Gán asset cho project bằng cách click clip trên Timeline.
           </p>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="sm"
           onClick={async () => {
             setError(undefined);
             try {
@@ -178,12 +190,11 @@ export function AssetLibraryManager(): React.ReactElement {
               );
             }
           }}
-          className="rounded-lg bg-fuchsia-500 px-4 py-2 text-xs font-medium text-white"
         >
           Import {tab.label}
-        </button>
+        </Button>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-3 flex flex-wrap gap-1 border-b border-line pb-2">
         {TABS.map((item) => {
           const count = assets.filter((asset) => matchesTab(asset, item)).length;
           const active = item.id === tabId;
@@ -195,79 +206,79 @@ export function AssetLibraryManager(): React.ReactElement {
                 setTabId(item.id);
                 setCategory("");
               }}
-              className={[
-                "rounded-full px-3 py-1.5 text-xs transition",
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[12px] transition",
                 active
-                  ? "bg-fuchsia-500/20 text-fuchsia-100 ring-1 ring-fuchsia-400/40"
-                  : "bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
-              ].join(" ")}
+                  ? "bg-accent/15 text-ink"
+                  : "text-ink-2 hover:bg-elevated hover:text-ink"
+              )}
             >
               {item.label} ({count})
             </button>
           );
         })}
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <FieldLabel label="Danh mục">
-          <select value={category} onChange={(event) => setCategory(event.target.value)}
-            className="w-full rounded-lg border border-white/10 bg-zinc-900 p-2 text-sm">
+          <Select value={category} onChange={(event) => setCategory(event.target.value)}>
             <option value="">Tất cả</option>
             {categories.map((item) => <option key={item}>{item}</option>)}
-          </select>
+          </Select>
         </FieldLabel>
         <FieldLabel label="Tìm kiếm">
-          <input value={query} onChange={(event) => setQuery(event.target.value)}
-            placeholder="Tags hoặc tên file"
-            className="w-full rounded-lg border border-white/10 bg-black/20 p-2 text-sm" />
+          <Input value={query} onChange={(event) => setQuery(event.target.value)}
+            placeholder="Tags hoặc tên file" />
         </FieldLabel>
       </div>
       {loading ? (
-        <p className="mt-4 text-sm text-zinc-400">Đang tải library...</p>
+        <p className="mt-3 text-[13px] text-ink-2">Đang tải library...</p>
       ) : filtered.length === 0 ? (
-        <p className="mt-4 text-sm text-zinc-400">
+        <p className="mt-3 text-[13px] text-ink-2">
           Chưa có asset trong tab này.
         </p>
       ) : (
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
           {filtered.map((asset) => (
-            <div key={asset.id} className="rounded-xl border border-white/10 bg-black/10 p-4">
+            <div key={asset.id} className="rounded-lg border border-line bg-panel p-3">
               <AssetPreview asset={asset} source={previews[asset.id]} />
-              <p className="mt-2 truncate text-xs text-zinc-500">{pathLabel(asset)}</p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <p className="mt-2 truncate text-[12px] text-ink-3">{pathLabel(asset)}</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <FieldLabel label="Danh mục">
-                  <input value={asset.category} onChange={(event) => setAssets((current) =>
+                  <Input value={asset.category} onChange={(event) => setAssets((current) =>
                     current.map((item) => item.id === asset.id ? { ...item, category: event.target.value } : item)
-                  )} className={fieldClassName} />
+                  )} />
                 </FieldLabel>
                 <FieldLabel label="Tags">
-                  <input value={asset.tags.join(", ")} onChange={(event) => setAssets((current) =>
+                  <Input value={asset.tags.join(", ")} onChange={(event) => setAssets((current) =>
                     current.map((item) => item.id === asset.id
                       ? { ...item, tags: event.target.value.split(",").map((tag) => tag.trim()).filter(Boolean) }
                       : item)
-                  )} placeholder="Ngăn cách bằng dấu phẩy" className={fieldClassName} />
+                  )} placeholder="Ngăn cách bằng dấu phẩy" />
                 </FieldLabel>
                 <FieldLabel label="Cường độ (0–1)">
-                  <input type="number" min="0" max="1" step="0.1" value={asset.intensity}
+                  <Input type="number" min="0" max="1" step="0.1" value={asset.intensity}
                     onChange={(event) => setAssets((current) => current.map((item) =>
                       item.id === asset.id ? { ...item, intensity: Number(event.target.value) } : item
-                    ))} className={fieldClassName} />
+                    ))} />
                 </FieldLabel>
               </div>
               {(asset.type === "meme" || asset.type === "sfx") && (
-                <div className="mt-3">
+                <div className="mt-2">
                   <FieldLabel label="Spec">
-                    <textarea value={asset.spec ?? ""}
+                    <Textarea value={asset.spec ?? ""}
                       onChange={(event) => setAssets((current) => current.map((item) =>
                         item.id === asset.id ? { ...item, spec: event.target.value } : item
-                      ))} className="min-h-16 w-full rounded border border-white/10 bg-zinc-900 p-2 text-xs" />
+                      ))} className="min-h-16" />
                   </FieldLabel>
                 </div>
               )}
-              <div className="mt-3 flex gap-2">
-                <button type="button" onClick={() => void updateAsset(asset)}
-                  className="rounded border border-cyan-300/30 px-3 py-1 text-xs text-cyan-200">Save metadata</button>
-                <button type="button" onClick={() => void deleteAsset(asset)}
-                  className="rounded border border-red-300/30 px-3 py-1 text-xs text-red-200">Delete</button>
+              <div className="mt-2 flex gap-1.5">
+                <Button size="sm" onClick={() => void updateAsset(asset)}>
+                  Save metadata
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => void deleteAsset(asset)}>
+                  Delete
+                </Button>
               </div>
             </div>
           ))}
