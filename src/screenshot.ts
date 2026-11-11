@@ -1,7 +1,6 @@
 ﻿import type { Locator, Page } from "playwright";
 
-const PRESSABLE_SELECTOR =
-  '[data-pressable-container="true"]';
+import { PRESSABLE_SELECTOR } from "./extract.js";
 
 const IMAGE_WAIT_MS = 8000;
 const SETTLE_MS = 250;

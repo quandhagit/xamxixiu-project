@@ -3,10 +3,14 @@
  */
 
 /**
- * Comments to capture from a thread: at least 20 (or the whole thread if it
- * has fewer). Auto-scroll stops once this many are loaded.
+ * Default number of comment images to capture. The opening post is always
+ * captured in addition. Auto-scroll stops once this many are loaded, or the
+ * thread runs out.
  */
-export const CAPTURE_COMMENT_TARGET = 30;
+export const CAPTURE_COMMENT_TARGET = 20;
+
+/** Upper bound for the capture-count field. */
+export const CAPTURE_COMMENT_MAX = 100;
 
 /** Curate keeps between these many comments. */
 export const CURATE_KEEP_MIN = 8;

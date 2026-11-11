@@ -153,7 +153,11 @@ export function registerIpc(
 
   ipcMain.handle(
     "capture:thread",
-    async (_event, url: string) => {
+    async (
+      _event,
+      url: string,
+      commentLimit?: number
+    ) => {
       if (!url.trim()) {
         throw new Error(
           "Threads URL cannot be empty"
@@ -185,7 +189,7 @@ export function registerIpc(
       }
 
       const result =
-        await captureThread(url);
+        await captureThread(url, commentLimit);
       const processedDirectory =
         path.join(
           result.projectDir,

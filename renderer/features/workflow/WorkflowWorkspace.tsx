@@ -41,6 +41,9 @@ import {
 import { AnalyzeStep } from "./AnalyzeStep";
 import { CaptureStep } from "./CaptureStep";
 import { InputStep } from "./InputStep";
+import {
+  CAPTURE_COMMENT_TARGET
+} from "../../../src/comments/comment-constants";
 import { VoiceStep } from "./VoiceStep";
 import { WorkflowFooter } from "./WorkflowFooter";
 import { WorkflowSidebar } from "./WorkflowSidebar";
@@ -79,6 +82,8 @@ export function WorkflowWorkspace({
   const [previewAssets, setPreviewAssets] =
     useState<Record<string, string>>({});
   const [url, setUrl] = useState("");
+  const [captureCount, setCaptureCount] =
+    useState(CAPTURE_COMMENT_TARGET);
   const [loading, setLoading] =
     useState(true);
   const [captureLoading, setCaptureLoading] =
@@ -377,7 +382,11 @@ export function WorkflowWorkspace({
   }
 
   async function capture(): Promise<void> {
-    if (!url.trim()) {
+    if (
+      !url.trim() ||
+      !Number.isInteger(captureCount) ||
+      captureCount < 1
+    ) {
       return;
     }
 
@@ -386,7 +395,10 @@ export function WorkflowWorkspace({
 
     try {
       const project =
-        await window.xamxixiu.captureThread(url);
+        await window.xamxixiu.captureThread(
+          url,
+          captureCount
+        );
       const content =
         project.content ?? project.thread;
       setSelectedProject(project);
@@ -1064,8 +1076,10 @@ export function WorkflowWorkspace({
               {currentStep === "INPUT" ? (
                 <InputStep
                   url={url}
+                  captureCount={captureCount}
                   captureLoading={captureLoading}
                   onUrlChange={setUrl}
+                  onCaptureCountChange={setCaptureCount}
                   onCapture={() => {
                     void capture();
                   }}

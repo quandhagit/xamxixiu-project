@@ -7,8 +7,19 @@ import type {
 export type ExtractedComment = ThreadComment;
 export type ExtractedThread = ThreadData;
 
-const PRESSABLE_SELECTOR =
-  '[data-pressable-container="true"]';
+/**
+ * The thread column. The right rail (Quotes excerpts, follow
+ * suggestions) also uses pressable cards and must not be captured.
+ */
+export const THREAD_COLUMN_SELECTOR =
+  '[aria-label="Column body"]';
+
+/**
+ * Opening post and comments: pressable cards inside the thread
+ * column, excluding a quoted post nested inside a comment.
+ */
+export const PRESSABLE_SELECTOR =
+  `${THREAD_COLUMN_SELECTOR} [data-pressable-container="true"]:not([data-pressable-container="true"] [data-pressable-container="true"])`;
 
 export async function extractThread(
   page: Page
@@ -34,7 +45,7 @@ export async function extractThread(
     author: string;
     text: string;
     likes: number;
-    groupContainerIndexes?: number[];
+    parentContainerIndex?: number;
   }> = [];
 
   for (let i = 0; i < count; i++) {
@@ -47,8 +58,8 @@ export async function extractThread(
       continue;
     }
 
-    const groupContainerIndexes =
-      await extractCommentGroupIndexes(
+    const parentContainerIndex =
+      await extractParentContainerIndex(
         container,
         PRESSABLE_SELECTOR
       );
@@ -58,8 +69,8 @@ export async function extractThread(
       author: content.author,
       text: content.text,
       likes: content.likes,
-      ...(groupContainerIndexes
-        ? { groupContainerIndexes }
+      ...(parentContainerIndex !== undefined
+        ? { parentContainerIndex }
         : {})
     });
   }
@@ -72,24 +83,6 @@ export async function extractThread(
 
   const post =
     results[0];
-
-  const groupParentByContainer = new Map<
-    number,
-    number
-  >();
-  for (const item of results) {
-    const group = item.groupContainerIndexes;
-    if (!group || group.length < 2) {
-      continue;
-    }
-    const parentContainerIndex = group[0];
-    for (const childContainerIndex of group.slice(1)) {
-      groupParentByContainer.set(
-        childContainerIndex,
-        parentContainerIndex
-      );
-    }
-  }
 
   const comments: ThreadComment[] =
     results
@@ -112,7 +105,7 @@ export async function extractThread(
   results.slice(1).forEach((item, index) => {
     const comment = comments[index];
     const parentContainerIndex =
-      groupParentByContainer.get(item.index);
+      item.parentContainerIndex;
     const parentFromDom =
       parentContainerIndex !== undefined
         ? containerToCommentIndex.get(
@@ -189,21 +182,38 @@ export async function readPressableComment(
   text: string;
   likes: number;
 } | undefined> {
-  const profileLink =
-    container
-      .locator(
-        'a[role="link"][href^="/@"]'
-      )
-      .first();
+  const profileLinks =
+    container.locator(
+      'a[role="link"][href^="/@"]'
+    );
+  const linkCount =
+    await profileLinks.count();
+  let author = "";
 
-  if (!(await profileLink.count())) {
-    return undefined;
+  for (let i = 0; i < linkCount; i++) {
+    const link = profileLinks.nth(i);
+    const href =
+      (await link.getAttribute("href")) ?? "";
+
+    // Avatar links share this href but have no text. The
+    // timestamp link points at /post/ and must not win.
+    if (!/^\/@[^/]+\/?$/.test(href)) {
+      continue;
+    }
+
+    const text =
+      (await link.innerText())
+        .trim()
+        .split("\n")[0]
+        ?.trim() ?? "";
+
+    if (!text) {
+      continue;
+    }
+
+    author = text;
+    break;
   }
-
-  const author =
-    (
-      await profileLink.innerText()
-    ).trim();
 
   if (!author) {
     return undefined;
@@ -229,30 +239,111 @@ export async function readPressableComment(
   };
 }
 
-export async function extractCommentGroupIndexes(
-  container: ReturnType<Page["locator"]>,
-  selector: string
-): Promise<number[] | undefined> {
-  return container.evaluate(
-    (element, pressableSelector) => {
-      const wrapper = element.parentElement;
-      const group = wrapper?.parentElement;
-      if (!group || group.tagName !== "DIV") {
-        return undefined;
+const REPLY_INDENT_PX = 16;
+
+/**
+ * Parent of a reply is the closest earlier card in the nearest
+ * ancestor that is indented less than this card. Sibling replies
+ * share a left edge, so they are not each other's parent. The
+ * opening post is container 0 and is not a comment parent.
+ */
+export function chooseParentIndex(
+  selfIndex: number,
+  selfLeft: number,
+  levels: Array<Array<{ index: number; left: number }>>
+): number | undefined {
+  for (const members of levels) {
+    const ordered = members
+      .slice()
+      .sort((a, b) => a.index - b.index);
+    let parentIndex: number | undefined;
+
+    for (const member of ordered) {
+      if (member.index >= selfIndex) {
+        break;
       }
 
+      if (member.left < selfLeft - REPLY_INDENT_PX) {
+        parentIndex = member.index;
+      }
+    }
+
+    if (parentIndex === undefined) {
+      continue;
+    }
+
+    return parentIndex > 0 ? parentIndex : undefined;
+  }
+
+  return undefined;
+}
+
+export async function extractParentContainerIndex(
+  container: ReturnType<Page["locator"]>,
+  selector: string
+): Promise<number | undefined> {
+  const snapshot = await container.evaluate(
+    (element, pressableSelector) => {
       const all = Array.from(
         document.querySelectorAll(pressableSelector)
       );
-      const members = Array.from(
-        group.querySelectorAll(pressableSelector)
-      )
-        .map((member) => all.indexOf(member))
-        .filter((index) => index >= 0);
+      const selfIndex = all.indexOf(element);
 
-      return members.length > 1 ? members : undefined;
+      if (selfIndex < 0) {
+        return undefined;
+      }
+
+      const levels: Array<
+        Array<{ index: number; left: number }>
+      > = [];
+      let node = element.parentElement;
+
+      for (
+        let depth = 0;
+        depth < 8 && node;
+        depth += 1
+      ) {
+        const members: Array<{
+          index: number;
+          left: number;
+        }> = [];
+        const found =
+          node.querySelectorAll(pressableSelector);
+
+        for (let i = 0; i < found.length; i += 1) {
+          const index = all.indexOf(found[i]);
+
+          if (index < 0) {
+            continue;
+          }
+
+          members.push({
+            index,
+            left: found[i].getBoundingClientRect().left
+          });
+        }
+
+        levels.push(members);
+        node = node.parentElement;
+      }
+
+      return {
+        selfIndex,
+        selfLeft: element.getBoundingClientRect().left,
+        levels
+      };
     },
     selector
+  );
+
+  if (!snapshot) {
+    return undefined;
+  }
+
+  return chooseParentIndex(
+    snapshot.selfIndex,
+    snapshot.selfLeft,
+    snapshot.levels
   );
 }
 

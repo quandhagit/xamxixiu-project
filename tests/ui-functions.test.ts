@@ -22,6 +22,7 @@ import {
 } from "../src/timeline/topic-constants";
 import type { ThreadAnalysis, ThreadComment, VideoTimeline } from "../src/types";
 import { cn } from "../renderer/features/ui/cn";
+import { chooseParentIndex } from "../src/extract";
 import {
   assetsForTarget,
   pickerTitle,
@@ -636,5 +637,56 @@ describe("media helpers", () => {
 describe("className helper", () => {
   it("drops falsey class fragments", () => {
     assert.equal(cn("a", false, undefined, "b"), "a b");
+  });
+});
+
+describe("reply parent from indent", () => {
+  it("attaches every indented reply to the comment above, not a sibling", () => {
+    const root = 386;
+    const reply = 427;
+    const levels = [
+      [{ index: 3, left: reply }],
+      [{ index: 3, left: reply }],
+      [
+        { index: 3, left: reply },
+        { index: 4, left: reply }
+      ],
+      [
+        { index: 2, left: root },
+        { index: 3, left: reply },
+        { index: 4, left: reply }
+      ]
+    ];
+
+    assert.equal(chooseParentIndex(3, reply, levels), 2);
+    assert.equal(chooseParentIndex(4, reply, levels), 2);
+  });
+
+  it("keeps a direct reply to the post as a root", () => {
+    const left = 386;
+
+    assert.equal(
+      chooseParentIndex(2, left, [
+        [{ index: 2, left }],
+        [
+          { index: 0, left },
+          { index: 1, left },
+          { index: 2, left }
+        ]
+      ]),
+      undefined
+    );
+  });
+
+  it("uses the nearest less-indented card for a single reply", () => {
+    assert.equal(
+      chooseParentIndex(9, 427, [
+        [
+          { index: 8, left: 386 },
+          { index: 9, left: 427 }
+        ]
+      ]),
+      8
+    );
   });
 });

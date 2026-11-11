@@ -132,7 +132,8 @@ export type UpdaterStatus =
 
 export interface DesktopApi {
   captureThread(
-    url: string
+    url: string,
+    commentLimit?: number
   ): Promise<ProjectState>;
   captureComment(
     payload: CaptureCommentPayload
