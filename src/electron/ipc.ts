@@ -6,12 +6,16 @@ import {
 import fs from "node:fs/promises";
 
 import type {
+  AddBeepPayload,
+  AutoFormatTimelinePayload,
   CaptureCommentPayload,
+  CleanCommentTextPayload,
   DesktopApi,
   ExportProgress,
   ImportAssetsPayload,
   ReplaceTimelineAssetPayload,
   SaveAssetAssignmentsPayload,
+  SaveTimelineProjectPayload,
   UpdateAssetPayload,
   UpdateContentPayload,
   UpdateTopicIntroPayload,
@@ -45,14 +49,20 @@ import {
 import {
   processProjectImages
 } from "../process-image.js";
+import { exportWithHyperframes } from "../hyperframes/export.js";
+import { suggestCleanCommentText } from "../ai/clean-comment-text.js";
+import { suggestTopicTitles } from "../ai/suggest-topic-titles.js";
+import { assignVoices } from "../ai/assign-voices.js";
+import { suggestMemes } from "../ai/suggest-memes.js";
+import { autoFormat } from "../timeline/auto-format.js";
 import {
-  generateCapCutProjectWithCli,
-  validateCapCutBaseProject
-} from "../capcut/cli-adapter.js";
-import { exportTimelineVideo } from "../export/video-exporter.js";
-import type {
-  CapCutBaseProject
-} from "../project/store.js";
+  clearCommentAnalysisAssets,
+  clearCommentMemesAndSfx,
+  clearCommentReactionAssets
+} from "../timeline/clear-comment-assets.js";
+import { addBeepClip, createBeepWav } from "../timeline/beep.js";
+import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
+import { ENABLE_CAPCUT } from "../hyperframes/engine.js";
 import type {
   AudioFailureTarget,
   ThreadData,
@@ -66,6 +76,11 @@ import {
   loadAbbreviationEntries,
   saveAbbreviationEntries
 } from "./abbreviations.js";
+import {
+  deleteUserCombo,
+  loadUserCombos,
+  saveUserCombo
+} from "./meme-combos.js";
 import {
   renderTopicTitleCard
 } from "../capcut/compile/title-card.js";
@@ -381,6 +396,168 @@ export function registerIpc(
       }
 
       return project;
+    }
+  );
+
+  ipcMain.handle(
+    "project:clean-comment-text",
+    async (_event, payload: CleanCommentTextPayload) => {
+      if (!payload?.projectId || !Array.isArray(payload.texts)) {
+        throw new Error("Invalid clean-text payload");
+      }
+      return suggestCleanCommentText({ texts: payload.texts });
+    }
+  );
+
+  ipcMain.handle(
+    "project:suggest-topic-titles",
+    async (_event, projectId: string) => {
+      const project = await store.getProject(projectId);
+      const content = project?.content ?? project?.thread;
+      if (!content) {
+        throw new Error("Project content is missing");
+      }
+      return suggestTopicTitles({
+        author: content.author,
+        text: content.text,
+        comments: content.comments
+          .filter((comment) => !comment.excluded)
+          .map((comment) => comment.text)
+      });
+    }
+  );
+
+  ipcMain.handle(
+    "project:assign-voices",
+    async (_event, projectId: string) => {
+      const directory = store.getProjectDirectory(projectId);
+      const project = await store.getProject(projectId);
+      const patch = await assignVoices(directory, project?.analysis);
+      const analysis = {
+        tone: "casual" as const,
+        topicType: "other" as const,
+        intensity: 0.5,
+        musicType: "neutral" as const,
+        reactions: [],
+        ...project?.analysis,
+        ...patch
+      };
+      return store.saveAnalysis(projectId, analysis);
+    }
+  );
+
+  ipcMain.handle(
+    "project:suggest-memes",
+    async (_event, projectId: string) => {
+      const directory = store.getProjectDirectory(projectId);
+      const project = await store.getProject(projectId);
+      if (!project?.analysis) {
+        throw new Error("Hãy chạy AI voice hoặc Quick AI trước khi chọn meme.");
+      }
+      const analysis = await suggestMemes(directory, project.analysis);
+      await store.saveAnalysis(projectId, analysis);
+      await scanAssets();
+      await runMatchReactions(directory);
+      return store.rebuildTimeline(projectId);
+    }
+  );
+
+  ipcMain.handle(
+    "project:clear-comment-memes",
+    async (_event, projectId: string) => {
+      const project = await store.getProject(projectId);
+      if (!project) {
+        throw new Error(`Project could not be loaded: ${projectId}`);
+      }
+      const assets = await library.list();
+      if (project.analysis) {
+        await store.saveAnalysis(
+          projectId,
+          clearCommentAnalysisAssets(project.analysis)
+        );
+      }
+      await store.saveReactions(
+        projectId,
+        clearCommentReactionAssets(project.reactions ?? []),
+        assets
+      );
+      const source = project.timelineProject ??
+        (project.timeline
+          ? videoTimelineToProject(project.timeline)
+          : undefined);
+      if (!source) {
+        return store.getProject(projectId);
+      }
+      return store.saveTimelineProject(
+        projectId,
+        clearCommentMemesAndSfx(source)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "project:save-timeline-project",
+    async (_event, payload: SaveTimelineProjectPayload) => {
+      if (!payload?.projectId || !payload.timelineProject) {
+        throw new Error("Invalid timeline project payload");
+      }
+      return store.saveTimelineProject(
+        payload.projectId,
+        payload.timelineProject
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "project:auto-format-timeline",
+    async (_event, payload: AutoFormatTimelinePayload) => {
+      const project = await store.getProject(payload.projectId);
+      const source = project?.timelineProject ??
+        (project?.timeline
+          ? videoTimelineToProject(project.timeline)
+          : undefined);
+      if (!source) {
+        throw new Error("Chưa có timeline để format.");
+      }
+      return store.saveTimelineProject(
+        payload.projectId,
+        autoFormat(source, payload.settings ?? source.settings)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "project:add-beep",
+    async (_event, payload: AddBeepPayload) => {
+      const directory = store.getProjectDirectory(payload.projectId);
+      const beepDir = path.join(directory, "audio");
+      await fs.mkdir(beepDir, { recursive: true });
+      await fs.writeFile(
+        path.join(beepDir, "beep.wav"),
+        createBeepWav(payload.duration)
+      );
+      const project = await store.getProject(payload.projectId);
+      const source = project?.timelineProject ??
+        (project?.timeline
+          ? videoTimelineToProject(project.timeline)
+          : undefined);
+      if (!source) {
+        throw new Error("Chưa có timeline để thêm beep.");
+      }
+      return store.saveTimelineProject(
+        payload.projectId,
+        addBeepClip(source, payload.start, payload.duration)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "project:save-content-topic-title",
+    async (_event, projectId: string, topicTitle: string) => {
+      if (typeof projectId !== "string" || typeof topicTitle !== "string") {
+        throw new Error("Invalid topic title payload");
+      }
+      return store.saveContentTopicTitle(projectId, topicTitle);
     }
   );
 
@@ -845,6 +1022,12 @@ export function registerIpc(
         (
           payload.enabled !== undefined &&
           typeof payload.enabled !== "boolean"
+        ) ||
+        (
+          payload.topicTitleVoiceMode !== undefined &&
+          payload.topicTitleVoiceMode !== "auto" &&
+          payload.topicTitleVoiceMode !== "on" &&
+          payload.topicTitleVoiceMode !== "off"
         )
       ) {
         throw new Error("Invalid topic intro payload");
@@ -852,7 +1035,8 @@ export function registerIpc(
 
       return store.saveTopicIntro(payload.projectId, {
         topicTitle: payload.topicTitle,
-        enabled: payload.enabled
+        enabled: payload.enabled,
+        topicTitleVoiceMode: payload.topicTitleVoiceMode
       });
     }
   );
@@ -928,12 +1112,13 @@ export function registerIpc(
 
   ipcMain.handle(
     "project:create-capcut-project",
-    async (_event, projectId: string) => {
-      const directory =
-        store.getProjectDirectory(projectId);
-      return generateCapCutProjectWithCli(
-        directory
-      );
+    async () => {
+      if (!ENABLE_CAPCUT) {
+        throw new Error(
+          "CapCut đã được gỡ. Hãy xuất video từ timeline."
+        );
+      }
+      throw new Error("CapCut đã được gỡ.");
     }
   );
 
@@ -987,8 +1172,17 @@ export function registerIpc(
           );
         }
       };
-      return exportTimelineVideo(
+      const project = await store.getProject(projectId);
+      const timelineProject = project?.timelineProject ??
+        (project?.timeline
+          ? videoTimelineToProject(project.timeline)
+          : undefined);
+      if (!timelineProject) {
+        throw new Error("Chưa có timeline để xuất video.");
+      }
+      return exportWithHyperframes(
         directory,
+        timelineProject,
         outputPath,
         sendProgress
       );
@@ -1030,67 +1224,12 @@ export function registerIpc(
 
   ipcMain.handle(
     "capcut:get-base-project",
-    async () =>
-      store.getCapCutBaseProject()
+    async () => undefined
   );
 
   ipcMain.handle(
     "capcut:choose-base-project",
-    async () => {
-      const result =
-        await dialog.showOpenDialog({
-          properties: ["openDirectory"],
-          title:
-            "Chọn CapCut project rỗng làm base"
-        });
-      if (
-        result.canceled ||
-        result.filePaths.length === 0
-      ) {
-        return undefined;
-      }
-
-      const directory =
-        result.filePaths[0];
-      const projectFile =
-        path.join(
-          directory,
-          "Timelines",
-          "project.json"
-        );
-      let timelineId: string | undefined;
-      try {
-        const projectJson =
-          JSON.parse(
-            await fs.readFile(
-              projectFile,
-              "utf-8"
-            )
-          ) as {
-            main_timeline_id?: string;
-          };
-        timelineId =
-          projectJson.main_timeline_id;
-      } catch {
-        await fs.access(
-          path.join(
-            directory,
-            "draft_content.json"
-          )
-        );
-      }
-
-      const baseProject: CapCutBaseProject = {
-        directory,
-        timelineId
-      };
-      await validateCapCutBaseProject(
-        baseProject
-      );
-      return store.setCapCutBaseProject(
-        baseProject
-      );
-    }
+    async () => undefined
   );
 
   ipcMain.handle(
@@ -1152,6 +1291,21 @@ export function registerIpc(
     "settings:save-abbreviations",
     (_event, input: unknown) =>
       saveAbbreviationEntries(input)
+  );
+
+  ipcMain.handle(
+    "combos:list",
+    () => loadUserCombos()
+  );
+
+  ipcMain.handle(
+    "combos:save",
+    (_event, input: unknown) => saveUserCombo(input)
+  );
+
+  ipcMain.handle(
+    "combos:delete",
+    (_event, comboId: string) => deleteUserCombo(comboId)
   );
 
   ipcMain.handle(

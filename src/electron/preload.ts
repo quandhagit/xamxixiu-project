@@ -48,6 +48,61 @@ const api: DesktopApi = {
       projectId
     ),
 
+  cleanCommentText: (payload) =>
+    ipcRenderer.invoke(
+      "project:clean-comment-text",
+      payload
+    ),
+
+  suggestTopicTitles: (projectId) =>
+    ipcRenderer.invoke(
+      "project:suggest-topic-titles",
+      projectId
+    ),
+
+  assignVoices: (projectId) =>
+    ipcRenderer.invoke(
+      "project:assign-voices",
+      projectId
+    ),
+
+  suggestMemes: (projectId) =>
+    ipcRenderer.invoke(
+      "project:suggest-memes",
+      projectId
+    ),
+
+  clearCommentMemes: (projectId) =>
+    ipcRenderer.invoke(
+      "project:clear-comment-memes",
+      projectId
+    ),
+
+  saveTimelineProject: (payload) =>
+    ipcRenderer.invoke(
+      "project:save-timeline-project",
+      payload
+    ),
+
+  autoFormatTimeline: (payload) =>
+    ipcRenderer.invoke(
+      "project:auto-format-timeline",
+      payload
+    ),
+
+  addBeep: (payload) =>
+    ipcRenderer.invoke(
+      "project:add-beep",
+      payload
+    ),
+
+  saveContentTopicTitle: (projectId, topicTitle) =>
+    ipcRenderer.invoke(
+      "project:save-content-topic-title",
+      projectId,
+      topicTitle
+    ),
+
   generateAudio: (projectId) =>
     ipcRenderer.invoke(
       "project:generate-audio",
@@ -79,11 +134,6 @@ const api: DesktopApi = {
       projectId
     ),
 
-  createCapCutProject: (projectId) =>
-    ipcRenderer.invoke(
-      "project:create-capcut-project",
-      projectId
-    ),
 
   exportVideo: (projectId) =>
     ipcRenderer.invoke(
@@ -258,6 +308,15 @@ const api: DesktopApi = {
       "settings:save-abbreviations",
       entries
     ),
+
+  listMemeCombos: () =>
+    ipcRenderer.invoke("combos:list"),
+
+  saveMemeCombo: (combo) =>
+    ipcRenderer.invoke("combos:save", combo),
+
+  deleteMemeCombo: (comboId) =>
+    ipcRenderer.invoke("combos:delete", comboId),
 
   chooseSettingsDirectory: () =>
     ipcRenderer.invoke(

@@ -33,6 +33,8 @@ export interface ThreadData {
   text: string;
   /** Raw captured text, only set when `text` was rewritten (abbreviations expanded). */
   originalText?: string;
+  /** User/AI title entered at capture; empty until the user fills it. */
+  topicTitle?: string;
   likes: number;
   postContainerIndex: number;
   comments: ThreadComment[];
@@ -118,11 +120,19 @@ export interface ReactionEvent {
   animation: ReactionAnimation;
 
   duration: number;
+
+  comboId?: string;
+
+  comboLocked?: boolean;
 }
+
+export type TopicTitleVoiceMode = "auto" | "on" | "off";
 
 export interface ThreadAnalysis {
   topicTitle?: string;
   topicIntroEnabled?: boolean;
+  /** Override for title-voice generation. Missing means follow app default. */
+  topicTitleVoiceMode?: TopicTitleVoiceMode;
   topicVoiceId?: string;
   topicTitleVoiceId?: string;
   topicMemeId?: string | null;
@@ -182,6 +192,9 @@ export interface TimelineOverlay {
   scale?: number;
   fadeIn?: number;
   animationDuration?: number;
+  comboId?: string;
+  sfxOffset?: number;
+  comboLocked?: boolean;
 }
 
 export interface TimelineCommentBlock {

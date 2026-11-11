@@ -2,13 +2,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { app } from "electron";
+import os from "node:os";
 
-import {
-  defaultCapCutDraftsDirectory
-} from "../capcut/compile/project-generator.js";
 import type {
   AppSettings
 } from "./ipc-types.js";
+
+function defaultCapCutDraftsDirectory(): string {
+  const localAppData =
+    process.env.LOCALAPPDATA ??
+    path.join(os.homedir(), "AppData", "Local");
+  return path.join(
+    localAppData,
+    "CapCut",
+    "User Data",
+    "Projects",
+    "com.lveditor.draft"
+  );
+}
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
@@ -140,18 +151,12 @@ export async function assertValidSettings(
     );
   }
 
-  if (!path.isAbsolute(settings.capcutDraftsDir)) {
+  if (
+    settings.capcutDraftsDir &&
+    !path.isAbsolute(settings.capcutDraftsDir)
+  ) {
     throw new Error(
       "Thư mục CapCut phải là đường dẫn đầy đủ."
-    );
-  }
-
-  const draftsStat = await fs.stat(
-    settings.capcutDraftsDir
-  ).catch(() => undefined);
-  if (draftsStat && !draftsStat.isDirectory()) {
-    throw new Error(
-      "Đường dẫn CapCut không phải thư mục."
     );
   }
 }

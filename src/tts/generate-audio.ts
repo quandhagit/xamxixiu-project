@@ -23,7 +23,7 @@ import type {
 } from "../types.js";
 import {
   isTopicIntroEnabled,
-  shouldGenerateTopicTitleVoice
+  resolveTopicTitleVoiceEnabled
 } from "../timeline/topic-constants.js";
 
 function pickVoice(index: number): Voice {
@@ -239,7 +239,7 @@ export async function generateAudio(
 
   if (
     analysis?.topicTitle &&
-    shouldGenerateTopicTitleVoice(thread.text) &&
+    resolveTopicTitleVoiceEnabled(analysis, thread.text) &&
     (!onlyTarget || onlyTarget === "topic-title") &&
     (onlyTarget === "topic-title" || isTopicIntroEnabled(analysis))
   ) {

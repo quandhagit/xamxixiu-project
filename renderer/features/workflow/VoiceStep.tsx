@@ -20,6 +20,8 @@ export function VoiceStep({
   draftTopicTitle,
   audioAssets,
   skipTopicTitleVoice,
+  titleVoiceMode,
+  defaultTitleVoiceEnabled,
   operationLoading,
   onGenerateAll,
   onTopicTitleChange,
@@ -27,13 +29,17 @@ export function VoiceStep({
   onTopicTextChange,
   onCommentTextChange,
   onVoiceChange,
-  onRetryAudio
+  onRetryAudio,
+  onTitleVoiceModeChange,
+  onAssignVoices
 }: {
   project?: ProjectState;
   draftContent?: ContentData;
   draftTopicTitle: string;
   audioAssets: Record<string, string>;
   skipTopicTitleVoice: boolean;
+  titleVoiceMode: "auto" | "on" | "off";
+  defaultTitleVoiceEnabled: boolean;
   operationLoading: boolean;
   onGenerateAll: () => void;
   onTopicTitleChange: (value: string) => void;
@@ -42,6 +48,8 @@ export function VoiceStep({
   onCommentTextChange: (index: number, text: string) => void;
   onVoiceChange: (target: AudioFailureTarget, voiceId: string) => void;
   onRetryAudio: (target: AudioFailureTarget) => void;
+  onTitleVoiceModeChange: (mode: "auto" | "on" | "off") => void;
+  onAssignVoices: () => void;
 }): React.ReactElement {
   const topicFailure = project?.audioFailures.find(
     (item) => item.target === "topic"
@@ -63,9 +71,19 @@ export function VoiceStep({
             Đang generate voice...
           </span>
         ) : (
-          <Button variant="primary" size="sm" onClick={onGenerateAll}>
-            Generate all
-          </Button>
+          <div className="flex gap-1.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={operationLoading}
+              onClick={onAssignVoices}
+            >
+              AI chọn voice
+            </Button>
+            <Button variant="primary" size="sm" onClick={onGenerateAll}>
+              Generate all
+            </Button>
+          </div>
         )}
       </Panel>
 
@@ -87,9 +105,35 @@ export function VoiceStep({
           onBlur={onTopicTitleBlur}
           className="mt-2 min-h-[72px] leading-5"
         />
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-2">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="accent-accent"
+              checked={!skipTopicTitleVoice}
+              disabled={operationLoading || !project?.analysis}
+              onChange={(event) =>
+                onTitleVoiceModeChange(event.target.checked ? "on" : "off")
+              }
+            />
+            Generate topic title voice
+          </label>
+          <span className="text-ink-3">
+            Mặc định {defaultTitleVoiceEnabled ? "bật" : "tắt"} vì topic
+            {defaultTitleVoiceEnabled ? " dài hơn 200 ký tự." : " ngắn ≤ 200 ký tự."}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={operationLoading || titleVoiceMode === "auto"}
+            onClick={() => onTitleVoiceModeChange("auto")}
+          >
+            Reset về mặc định
+          </Button>
+        </div>
         {skipTopicTitleVoice ? (
           <p className="mt-2 text-[12px] text-warning">
-            Topic text ngắn nên không generate topic title voice.
+            Đang tắt title voice. Bật lại nếu vẫn muốn generate.
           </p>
         ) : (
           <>

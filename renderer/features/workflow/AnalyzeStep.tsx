@@ -33,10 +33,11 @@ export function AnalyzeStep({
       <Panel className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium text-ink">
-            AI analysis
+            Quick AI
           </h3>
           <p className="mt-0.5 text-[12px] text-ink-2">
-            AI phân tích nội dung, tone và chọn voice cho từng phần.
+            Chạy một lần: tone, voice, meme và SFX như luồng cũ. Có thể bỏ qua
+            và dùng các nút AI nhỏ ở Capture, Voice, Timeline.
           </p>
         </div>
         {operationLoading ? (
@@ -50,7 +51,7 @@ export function AnalyzeStep({
             disabled={operationLoading}
             onClick={onAnalyze}
           >
-            {analysis ? "Analyze lại" : "Analyze"}
+            {analysis ? "Chạy Quick AI lại" : "Quick AI"}
           </Button>
         )}
       </Panel>

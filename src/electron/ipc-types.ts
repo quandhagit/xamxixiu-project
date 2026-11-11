@@ -1,7 +1,14 @@
 import type {
   ContentData,
-  ThreadComment
+  ThreadComment,
+  TopicTitleVoiceMode
 } from "../types.js";
+import type { SpeechTextDiff } from "../comments/clean-speech-text.js";
+import type {
+  AutoFormatSettings,
+  TimelineProject
+} from "../timeline/project.js";
+import type { MemeCombo } from "../timeline/meme-combo.js";
 import type {
   SpeechAbbreviationEntry
 } from "../comments/speech-abbreviations.js";
@@ -81,6 +88,28 @@ export interface UpdateTopicIntroPayload {
   projectId: string;
   topicTitle?: string;
   enabled?: boolean;
+  topicTitleVoiceMode?: TopicTitleVoiceMode;
+}
+
+export interface SaveTimelineProjectPayload {
+  projectId: string;
+  timelineProject: TimelineProject;
+}
+
+export interface AutoFormatTimelinePayload {
+  projectId: string;
+  settings?: AutoFormatSettings;
+}
+
+export interface AddBeepPayload {
+  projectId: string;
+  start: number;
+  duration?: number;
+}
+
+export interface CleanCommentTextPayload {
+  projectId: string;
+  texts: string[];
 }
 
 export interface DeleteAssetResult {
@@ -143,6 +172,34 @@ export interface DesktopApi {
   analyzeProject(
     projectId: string
   ): Promise<ProjectState>;
+  cleanCommentText(
+    payload: CleanCommentTextPayload
+  ): Promise<SpeechTextDiff[]>;
+  suggestTopicTitles(
+    projectId: string
+  ): Promise<string[]>;
+  assignVoices(
+    projectId: string
+  ): Promise<ProjectState>;
+  suggestMemes(
+    projectId: string
+  ): Promise<ProjectState>;
+  clearCommentMemes(
+    projectId: string
+  ): Promise<ProjectState>;
+  saveTimelineProject(
+    payload: SaveTimelineProjectPayload
+  ): Promise<ProjectState>;
+  autoFormatTimeline(
+    payload: AutoFormatTimelinePayload
+  ): Promise<ProjectState>;
+  addBeep(
+    payload: AddBeepPayload
+  ): Promise<ProjectState>;
+  saveContentTopicTitle(
+    projectId: string,
+    topicTitle: string
+  ): Promise<ProjectState>;
   generateAudio(
     projectId: string
   ): Promise<ProjectState>;
@@ -159,7 +216,7 @@ export interface DesktopApi {
   createTimeline(
     projectId: string
   ): Promise<ProjectState>;
-  createCapCutProject(
+  createCapCutProject?(
     projectId: string
   ): Promise<string>;
   exportVideo(
@@ -242,6 +299,9 @@ export interface DesktopApi {
   saveSpeechAbbreviations(
     entries: SpeechAbbreviationEntry[]
   ): Promise<SpeechAbbreviationEntry[]>;
+  listMemeCombos(): Promise<MemeCombo[]>;
+  saveMemeCombo(combo: Partial<MemeCombo>): Promise<MemeCombo[]>;
+  deleteMemeCombo(comboId: string): Promise<MemeCombo[]>;
   chooseSettingsDirectory(): Promise<string | null>;
   /** Opens Chromium on the Threads login page; resolves when the user closes it. */
   openLoginBrowser(): Promise<void>;

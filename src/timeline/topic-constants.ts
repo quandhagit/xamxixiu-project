@@ -31,3 +31,19 @@ export function shouldGenerateTopicTitleVoice(
 ): boolean {
   return (text?.length ?? 0) > TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH;
 }
+
+export function resolveTopicTitleVoiceEnabled(
+  analysis: {
+    topicTitleVoiceMode?: "auto" | "on" | "off";
+  } | undefined,
+  text: string | undefined
+): boolean {
+  const mode = analysis?.topicTitleVoiceMode ?? "auto";
+  if (mode === "on") {
+    return true;
+  }
+  if (mode === "off") {
+    return false;
+  }
+  return shouldGenerateTopicTitleVoice(text);
+}

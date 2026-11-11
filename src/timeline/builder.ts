@@ -29,6 +29,11 @@ import {
 import { readMediaDuration } from "../media-duration.js";
 import { renderTopicTitleCard } from "../capcut/compile/title-card.js";
 import { randomBackgroundStart } from "./background-start.js";
+import {
+  applyCombo,
+  findCombo,
+  getBuiltinCombo
+} from "./meme-combo.js";
 
 const CANVAS = {
   width: 1080,
@@ -367,22 +372,41 @@ async function createCommentScene(
       memeAbsolute,
       `Meme asset ${reaction.meme.id}`
     );
+    const isVideo = reaction.meme.mediaKind === "video";
+    const combo =
+      isVideo
+        ? getBuiltinCombo("none")
+        : (findCombo(reaction.comboId) ?? getBuiltinCombo("none"));
     const memeDuration =
-      reaction.meme.mediaKind === "video"
+      isVideo
         ? await readMediaDuration(memeAbsolute)
         : Math.max(
+          combo.minDuration,
           MIN_OVERLAY_DURATION,
           reaction.duration
         );
+    const baked = applyCombo(
+      { file: projectPath(reaction.meme.file) },
+      combo
+    );
     const memeOverlay = createOverlay(
       "meme",
-      projectPath(reaction.meme.file),
+      baked.file ?? projectPath(reaction.meme.file),
       memeDuration,
-      reaction.animation,
+      ((baked.animation === "shake"
+        ? "shake-1"
+        : baked.animation) as TimelineOverlay["animation"]) ??
+        reaction.animation,
       audioDuration,
-      0.5
+      baked.fadeIn,
+      baked.animationDuration
     );
-    memeOverlay.scale = 1;
+    memeOverlay.scale = baked.scale;
+    memeOverlay.x = baked.x;
+    memeOverlay.y = baked.y;
+    memeOverlay.comboId = baked.comboId;
+    memeOverlay.sfxOffset = baked.sfxOffset;
+    memeOverlay.comboLocked = reaction.comboLocked;
     overlays.push(memeOverlay);
     postVoiceDuration = Math.max(
       postVoiceDuration,
@@ -401,27 +425,28 @@ async function createCommentScene(
     const sfxDuration = await readMediaDuration(
       sfxAbsolute
     );
+    const memeOverlay = overlays.find(
+      (overlay) => overlay.type === "meme"
+    );
+    const sfxStart =
+      audioDuration + (memeOverlay?.sfxOffset ?? 0);
     overlays.push(
       createOverlay(
         "sfx",
         projectPath(reaction.sfx.file),
         sfxDuration,
         undefined,
-        audioDuration
+        sfxStart
       )
     );
     postVoiceDuration = Math.max(
       postVoiceDuration,
-      sfxDuration
+      (memeOverlay?.sfxOffset ?? 0) + sfxDuration
     );
-    const memeOverlay =
-      overlays.find((overlay) =>
-        overlay.type === "meme"
-      );
     if (memeOverlay) {
       memeOverlay.duration = Math.max(
         memeOverlay.duration,
-        sfxDuration
+        (memeOverlay.sfxOffset ?? 0) + sfxDuration
       );
     }
   }

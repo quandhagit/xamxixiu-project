@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import type { Asset } from "../src/assets/library";
-import type { MatchedReaction } from "../src/assets/matcher";
+import {
+  matchReactions,
+  type MatchedReaction
+} from "../src/assets/matcher";
 import {
   buildCommentForest,
   reorderComments
@@ -16,10 +19,71 @@ import {
 } from "../src/timeline/replace-asset";
 import {
   normalizeTopicTitle,
+  resolveTopicTitleVoiceEnabled,
   shouldGenerateTopicTitleVoice,
   TOPIC_TITLE_MAX_LENGTH,
   TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH
 } from "../src/timeline/topic-constants";
+import {
+  applySpeechTextDiffs,
+  cleanSpeechText,
+  diffCleanedSpeechText
+} from "../src/comments/clean-speech-text";
+import {
+  autoFormat,
+  moveClip,
+  setClipAnimationDuration,
+  trimClip
+} from "../src/timeline/auto-format";
+import {
+  applyComboToProject,
+  clearComboOnProject,
+  setClipSfxOffset
+} from "../renderer/features/preview/timeline-edit";
+import {
+  compileTimelineProject,
+  createSpikeTimelineProject
+} from "../src/hyperframes/compile";
+import { addBeepClip, removeClip } from "../src/timeline/beep";
+import { SPIKE_DECISION } from "../src/hyperframes/engine";
+import {
+  clipAnimationLabel,
+  clipFlyUpProgress,
+  clipFlyUpTopPercent,
+  clipMotionName,
+  clipShakeOffsetPercent,
+  clipSlideLeftPercent,
+  clipUsesFlyUp,
+  clipZoomMultiplier,
+  withAnimationLabel
+} from "../src/timeline/clip-motion";
+import { videoTimelineToProject } from "../src/timeline/from-video-timeline";
+import {
+  cloneTimelineProject,
+  type TimelineClip
+} from "../src/timeline/project";
+import {
+  applyCombo,
+  assignReactionCombos,
+  clearCombo,
+  comboFromEmotion,
+  getBuiltinCombo,
+  isCustomCombo,
+  persistBuiltInComboIds,
+  preserveComboClips,
+  stampComboFromClips
+} from "../src/timeline/meme-combo";
+import { applyMemeSuggestions } from "../src/ai/suggest-memes";
+import { sanitizeAnalysis } from "../src/assets/prompt-catalog";
+import {
+  isCommentMemeOrSfxClip,
+  isTopicIntroMemeOrOpenSfx
+} from "../src/timeline/comment-overlay-clips";
+import {
+  clearCommentAnalysisAssets,
+  clearCommentMemesAndSfx,
+  clearCommentReactionAssets
+} from "../src/timeline/clear-comment-assets";
 import type { ThreadAnalysis, ThreadComment, VideoTimeline } from "../src/types";
 import { cn } from "../renderer/features/ui/cn";
 import {
@@ -29,9 +93,17 @@ import {
 } from "../renderer/features/preview/asset-picker";
 import { assetFileName, assetMediaSrc } from "../renderer/features/preview/asset-media";
 import {
+  clipActionDockOpen,
+  clipActionsDockOutside,
+  clipBarWidth,
+  clipCanRemove,
+  clipOpensAssetPicker,
+  clipPointerIntent,
   formatClipLabel,
+  getProjectTracks,
   getTimelineTracks,
   isVideoAsset,
+  targetFromProjectClip,
   TRACK_IDS,
   TRACK_LABELS
 } from "../renderer/features/preview/timeline-tracks";
@@ -40,6 +112,12 @@ import {
   getPreviewScene,
   previewSeekThreshold
 } from "../renderer/features/preview/preview-timeline";
+import {
+  isPreviewFullscreen,
+  previewFrameClass,
+  previewHostClass,
+  previewStageMode
+} from "../renderer/features/preview/preview-chrome";
 import {
   formatProjectId,
   identityImageSlots,
@@ -56,10 +134,93 @@ import {
 } from "../renderer/features/app/app-view";
 import { playingIfActive } from "../renderer/features/preview/use-timeline-preview";
 
-const rendererRoot = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../renderer/features/app"
-);
+const testsDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(testsDir, "..");
+const rendererRoot = path.join(repoRoot, "renderer/features/app");
+
+function listSourceFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".next") {
+      continue;
+    }
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listSourceFiles(full));
+      continue;
+    }
+    if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+function importSpecifiers(source: string): Array<{ typeOnly: boolean; specifier: string }> {
+  const matches: Array<{ typeOnly: boolean; specifier: string }> = [];
+  const pattern =
+    /(?:^|\n)\s*import\s+(type\s+)?(?:[\s\S]*?)\s+from\s+["']([^"']+)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source))) {
+    matches.push({
+      typeOnly: Boolean(match[1]),
+      specifier: match[2]
+    });
+  }
+  return matches;
+}
+
+function resolveSourceImport(fromFile: string, specifier: string): string | undefined {
+  if (!specifier.startsWith(".")) {
+    return undefined;
+  }
+  const withoutJs = specifier.endsWith(".js") ? specifier.slice(0, -3) : specifier;
+  const resolved = path.resolve(path.dirname(fromFile), withoutJs);
+  for (const candidate of [resolved, `${resolved}.ts`, `${resolved}.tsx`]) {
+    try {
+      if (statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Try the next extension.
+    }
+  }
+  return undefined;
+}
+
+function clientJsValueImports(): Array<{ file: string; specifier: string }> {
+  const rendererDir = path.join(repoRoot, "renderer");
+  const srcMarker = `${path.sep}src${path.sep}`;
+  const queue = listSourceFiles(rendererDir);
+  const seen = new Set<string>();
+  const bad: Array<{ file: string; specifier: string }> = [];
+
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (!file || seen.has(file)) {
+      continue;
+    }
+    seen.add(file);
+    const source = readFileSync(file, "utf8");
+    for (const item of importSpecifiers(source)) {
+      if (item.typeOnly) {
+        continue;
+      }
+      if (item.specifier.endsWith(".js") && file.includes(srcMarker)) {
+        bad.push({
+          file: path.relative(repoRoot, file).replaceAll("\\", "/"),
+          specifier: item.specifier
+        });
+        continue;
+      }
+      const resolved = resolveSourceImport(file, item.specifier);
+      if (resolved) {
+        queue.push(resolved);
+      }
+    }
+  }
+  return bad;
+}
 
 function hasClass(
   className: string,
@@ -450,21 +611,41 @@ describe("topic title helpers", () => {
       true
     );
   });
+
+  it("lets the user override the default title-voice rule", () => {
+    assert.equal(
+      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "on" }, "short"),
+      true
+    );
+    assert.equal(
+      resolveTopicTitleVoiceEnabled(
+        { topicTitleVoiceMode: "off" },
+        "a".repeat(TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH + 1)
+      ),
+      false
+    );
+    assert.equal(
+      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "auto" }, "short"),
+      false
+    );
+  });
 });
 
 describe("timeline tracks", () => {
-  it("exposes the eight existing track ids and labels", () => {
+  it("exposes the track ids including beep", () => {
     assert.deepEqual([...TRACK_IDS], [
       "background",
-      "images",
       "title-card",
+      "images",
       "meme",
       "video",
       "voice",
       "sfx",
+      "beep",
       "music"
     ]);
     assert.equal(TRACK_LABELS.voice, "Voice");
+    assert.equal(TRACK_LABELS.beep, "Beep");
   });
 
   it("classifies video files and clip labels", () => {
@@ -490,11 +671,151 @@ describe("timeline tracks", () => {
     assert.deepEqual(sfx?.target, { kind: "sfx", commentIndex: 0 });
   });
 
-  it("only allows removing meme, video, sfx, and topic clips", () => {
+  it("only allows removing meme, video, sfx, topic, and beep clips", () => {
     assert.equal(canRemoveTimelineAsset({ kind: "background" }), false);
     assert.equal(canRemoveTimelineAsset({ kind: "music" }), false);
     assert.equal(canRemoveTimelineAsset({ kind: "meme", commentIndex: 0 }), true);
+    assert.equal(canRemoveTimelineAsset({ kind: "video", commentIndex: 0 }), true);
+    assert.equal(canRemoveTimelineAsset({ kind: "sfx", commentIndex: 0 }), true);
     assert.equal(canRemoveTimelineAsset({ kind: "topic-title" }), true);
+    assert.equal(
+      clipCanRemove({
+        trackId: "beep",
+        placeholder: false
+      }),
+      true
+    );
+    assert.equal(
+      clipCanRemove({
+        trackId: "beep",
+        placeholder: false,
+        locked: true
+      }),
+      false
+    );
+    assert.equal(
+      clipCanRemove({
+        trackId: "voice",
+        placeholder: false
+      }),
+      false
+    );
+  });
+
+  it("docks lock and remove outside the bar when a clip is too short", () => {
+    assert.equal(clipBarWidth(0.2, 64), 18);
+    assert.equal(clipBarWidth(2, 64), 128);
+    assert.equal(clipActionsDockOutside(18), true);
+    assert.equal(clipActionsDockOutside(40), true);
+    assert.equal(clipActionsDockOutside(72), false);
+    assert.equal(clipActionDockOpen({ selected: false, hovered: false }), false);
+    assert.equal(clipActionDockOpen({ selected: false, hovered: true }), true);
+    assert.equal(clipActionDockOpen({ selected: true, hovered: false }), true);
+  });
+
+  it("treats a tap as click and a longer pointer move as drag", () => {
+    assert.equal(clipPointerIntent(100, 102), "click");
+    assert.equal(clipPointerIntent(100, 104), "drag");
+    assert.equal(clipPointerIntent(100, 90), "drag");
+  });
+
+  it("maps project clips so background, video, meme, and sfx can be replaced", () => {
+    const source = timeline();
+    const comment = source.scenes[1];
+    if (comment) {
+      comment.overlays = [
+        { type: "meme", file: "meme.png", start: 1.5, duration: 0.5 },
+        { type: "meme", file: "react.mp4", start: 1.6, duration: 0.4 },
+        { type: "sfx", file: "boom.mp3", start: 1.5, duration: 0.4 }
+      ];
+    }
+    const tracks = getProjectTracks(videoTimelineToProject(source));
+    const byId = Object.fromEntries(
+      tracks.map((track) => [track.id, track])
+    );
+    const background = byId.background?.clips[0];
+    const meme = byId.meme?.clips.find((clip) => clip.file === "meme.png");
+    const video = byId.video?.clips.find((clip) => clip.file === "react.mp4");
+    const sfx = byId.sfx?.clips.find((clip) => clip.file === "boom.mp3");
+    const voice = byId.voice?.clips[0];
+
+    assert.deepEqual(background?.target, { kind: "background" });
+    assert.equal(clipOpensAssetPicker(background!), true);
+    assert.equal(canRemoveTimelineAsset(background!.target!), false);
+
+    assert.deepEqual(meme?.target, { kind: "meme", commentIndex: 0 });
+    assert.equal(clipOpensAssetPicker(meme!), true);
+    assert.equal(canRemoveTimelineAsset(meme!.target!), true);
+
+    assert.deepEqual(video?.target, { kind: "video", commentIndex: 0 });
+    assert.equal(clipOpensAssetPicker(video!), true);
+    assert.equal(canRemoveTimelineAsset(video!.target!), true);
+
+    assert.deepEqual(sfx?.target, { kind: "sfx", commentIndex: 0 });
+    assert.equal(clipOpensAssetPicker(sfx!), true);
+    assert.equal(canRemoveTimelineAsset(sfx!.target!), true);
+
+    assert.equal(clipOpensAssetPicker(voice!), false);
+    assert.equal(
+      clipOpensAssetPicker({
+        editable: true,
+        locked: true,
+        target: { kind: "meme", commentIndex: 0 }
+      }),
+      false
+    );
+    assert.deepEqual(
+      targetFromProjectClip({
+        id: "video-1",
+        trackId: "video",
+        start: 0,
+        duration: 1,
+        trimIn: 0,
+        sourceDuration: 1,
+        file: "react.mp4",
+        fadeIn: 0,
+        fadeOut: 0,
+        volume: 1,
+        locked: false,
+        label: "Video",
+        kind: "video",
+        commentIndex: 2
+      }),
+      { kind: "video", commentIndex: 2 }
+    );
+  });
+});
+
+describe("timeline preview chrome", () => {
+  it("picks docked, native, and overlay stage modes", () => {
+    assert.equal(
+      previewStageMode({ native: false, overlay: false }),
+      "docked"
+    );
+    assert.equal(
+      previewStageMode({ native: true, overlay: false }),
+      "native"
+    );
+    assert.equal(
+      previewStageMode({ native: true, overlay: true }),
+      "overlay"
+    );
+  });
+
+  it("uses a taller docked frame and a fullscreen host", () => {
+    assert.match(previewFrameClass("docked"), /52vh/);
+    assert.doesNotMatch(previewFrameClass("docked"), /38vh/);
+    assert.match(previewHostClass("overlay"), /fixed inset-0/);
+    assert.match(previewFrameClass("native"), /100dvh/);
+  });
+
+  it("detects whether the preview host owns fullscreen", () => {
+    const host = { contains(node: Node) { return node === child; } };
+    const child = {} as Node;
+    assert.equal(isPreviewFullscreen(host, child), true);
+    assert.equal(isPreviewFullscreen(host, host as unknown as Node), true);
+    assert.equal(isPreviewFullscreen(host, {} as Node), false);
+    assert.equal(isPreviewFullscreen(null, child), false);
   });
 });
 
@@ -636,5 +957,708 @@ describe("media helpers", () => {
 describe("className helper", () => {
   it("drops falsey class fragments", () => {
     assert.equal(cn("a", false, undefined, "b"), "a b");
+  });
+});
+
+describe("speech text cleanup", () => {
+  it("strips emoji, elongated letters, and repeated punctuation", () => {
+    assert.equal(cleanSpeechText("Trờiii 😂 quáaaaa!!!!"), "Trời quáa!");
+  });
+
+  it("builds and applies accept/reject diffs", () => {
+    const diffs = diffCleanedSpeechText([
+      { text: "ok" },
+      { text: "heeee 🔥" }
+    ]);
+    assert.equal(diffs.length, 1);
+    assert.equal(diffs[0]?.index, 1);
+    const accepted = applySpeechTextDiffs(
+      [{ text: "ok" }, { text: "heeee 🔥" }],
+      diffs,
+      [1]
+    );
+    assert.equal(accepted[1]?.text, "he");
+  });
+});
+
+describe("timeline project and hyperframes", () => {
+  it("records the Hyperframes engine decision", () => {
+    assert.equal(SPIKE_DECISION.engine, "hyperframes");
+    assert.equal(SPIKE_DECISION.canvas.width, 1080);
+    assert.equal(SPIKE_DECISION.canvas.height, 1920);
+  });
+
+  it("converts a video timeline, auto-formats memes, and compiles HTML", () => {
+    const project = videoTimelineToProject(timeline());
+    const formatted = autoFormat(project, {
+      ...project.settings,
+      memeGap: 0.2,
+      memeMinDuration: 1,
+      memeMaxDuration: 4,
+      fadeIn: 0.3,
+      fadeOut: 0.3
+    });
+    const meme = formatted.clips.find((clip) => clip.trackId === "meme");
+    assert.ok(meme);
+    assert.equal(meme?.fadeIn, 0.3);
+    const html = compileTimelineProject(formatted);
+    assert.match(html, /data-composition-id="xamxixiu"/);
+    assert.match(html, /data-width="1080"/);
+    assert.match(html, /data-height="1920"/);
+  });
+
+  it("trims voice, moves clips, and inserts a beep that mutes overlapping voice", () => {
+    const spike = createSpikeTimelineProject();
+    const withBeep = addBeepClip(spike, 1, 0.2);
+    const beep = withBeep.clips.find((clip) => clip.trackId === "beep");
+    assert.ok(beep);
+    assert.equal(
+      clipCanRemove({
+        trackId: "beep",
+        placeholder: false,
+        locked: beep.locked
+      }),
+      true
+    );
+    const withoutBeep = removeClip(withBeep, beep.id);
+    assert.equal(
+      withoutBeep.clips.some((clip) => clip.id === beep.id),
+      false
+    );
+    const moved = moveClip(withBeep, "comment", 0.5);
+    const comment = moved.clips.find((clip) => clip.id === "comment");
+    assert.equal(comment?.start, 0.5);
+    const trimmed = trimClip(moved, "voice", "out", 3);
+    const voice = trimmed.clips.find((clip) => clip.id === "voice");
+    assert.ok((voice?.duration ?? 99) <= 3);
+    const html = compileTimelineProject(withBeep);
+    assert.match(html, /data-track-index="7"/);
+  });
+
+  it("flies topic title and topic meme up from the bottom", () => {
+    assert.equal(clipAnimationLabel({ trackId: "title-card" }), "Slide up");
+    assert.equal(
+      withAnimationLabel("Hello", { trackId: "title-card" }),
+      "Hello · Slide up"
+    );
+    assert.equal(clipUsesFlyUp({ trackId: "title-card" }), true);
+    assert.equal(
+      clipUsesFlyUp({ trackId: "meme", animation: "slide-up", commentIndex: 0 }),
+      true
+    );
+    assert.equal(clipUsesFlyUp({ trackId: "meme", commentIndex: 0 }), false);
+    assert.equal(clipFlyUpProgress(0, 0.35), 0);
+    assert.equal(clipFlyUpProgress(0.35, 0.35), 1);
+    assert.equal(clipFlyUpProgress(0, 0), 1);
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: 40, progress: 0, mode: "title" }),
+      100
+    );
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: 40, progress: 1, mode: "title" }),
+      40
+    );
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: 30, progress: 0, mode: "full" }),
+      130
+    );
+
+    const source = timeline({
+      topicIntro: {
+        case: "short",
+        title: "Hello",
+        titleVoiceDuration: 0,
+        openSfxFile: "open.mp3",
+        openSfxDuration: 0.4,
+        titleCardFile: "title.png",
+        animationDuration: 0.35,
+        blocksDuration: 2,
+        captureStart: 0
+      },
+      scenes: [
+        {
+          id: "topic",
+          commentIndex: null,
+          imageFile: "processed/topic.png",
+          imageStart: 0,
+          imageDuration: 2,
+          audioFile: "audio/topic.mp3",
+          audioStart: 0,
+          audioDuration: 2,
+          overlays: [
+            {
+              type: "meme",
+              file: "topic-meme.png",
+              start: 0,
+              duration: 2,
+              animation: "slide-up",
+              animationDuration: 0.35,
+              y: 0.4,
+              scale: 0.7
+            }
+          ]
+        }
+      ]
+    });
+    const project = videoTimelineToProject(source);
+    const title = project.clips.find((clip) => clip.trackId === "title-card");
+    const topicMeme = project.clips.find(
+      (clip) => clip.trackId === "meme" && clip.file === "topic-meme.png"
+    );
+    const titleTrack = getProjectTracks(project).find(
+      (track) => track.id === "title-card"
+    );
+    assert.match(titleTrack?.clips[0]?.label ?? "", /Slide up/);
+    const memeTrack = getProjectTracks(project).find(
+      (track) => track.id === "meme"
+    );
+    assert.match(
+      memeTrack?.clips.find((clip) => clip.file === "topic-meme.png")?.label ?? "",
+      /Slide up/
+    );
+    assert.equal(title?.animation, "slide-up");
+    assert.equal(title?.animationDuration, 0.35);
+    assert.equal(topicMeme?.animation, "slide-up");
+    const html = compileTimelineProject(project);
+    assert.match(html, /y: \d+/);
+    assert.ok(title);
+    const slower = setClipAnimationDuration(project, title.id, 0.8);
+    assert.equal(
+      slower.clips.find((clip) => clip.id === title.id)?.animationDuration,
+      0.8
+    );
+    assert.match(
+      compileTimelineProject(slower),
+      /fromTo\("#title-card".*duration: 0.8/
+    );
+    const locked = cloneTimelineProject(project);
+    const lockedTitle = locked.clips.find((clip) => clip.id === title.id);
+    assert.ok(lockedTitle);
+    lockedTitle.locked = true;
+    assert.equal(
+      setClipAnimationDuration(locked, title.id, 1).clips.find(
+        (clip) => clip.id === title.id
+      )?.animationDuration,
+      0.35
+    );
+    const off = setClipAnimationDuration(project, title.id, 0);
+    assert.doesNotMatch(
+      compileTimelineProject(off),
+      /fromTo\("#title-card"/
+    );
+  });
+
+  it("does not move locked meme clips during auto format", () => {
+    const project = createSpikeTimelineProject();
+    const locked = project.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(locked);
+    if (locked) {
+      locked.locked = true;
+      locked.start = 3;
+    }
+    const formatted = autoFormat(project);
+    assert.equal(
+      formatted.clips.find((clip) => clip.id === "meme-b")?.start,
+      3
+    );
+  });
+});
+
+describe("meme combo presets", () => {
+  function memeClip(partial: Partial<TimelineClip> = {}): TimelineClip {
+    return {
+      id: "meme-0",
+      trackId: "meme",
+      start: 1,
+      duration: 1.4,
+      trimIn: 0,
+      sourceDuration: 1.4,
+      file: "meme.png",
+      fadeIn: 0.3,
+      fadeOut: 0.3,
+      volume: 1,
+      locked: false,
+      label: "Meme",
+      kind: "image",
+      commentIndex: 0,
+      ...partial
+    };
+  }
+
+  function comboLibrary(): Asset[] {
+    return [
+      asset({
+        id: "meme-laugh",
+        type: "meme",
+        mediaKind: "image",
+        category: "laughing"
+      }),
+      asset({
+        id: "meme-laugh-2",
+        type: "meme",
+        mediaKind: "image",
+        category: "laughing"
+      }),
+      asset({
+        id: "sfx-boom",
+        type: "sfx",
+        mediaKind: "audio",
+        category: "boom"
+      }),
+      asset({
+        id: "sfx-boom-2",
+        type: "sfx",
+        mediaKind: "audio",
+        category: "boom"
+      })
+    ];
+  }
+
+  function laughingReaction(commentIndex: number) {
+    return {
+      commentIndex,
+      emotion: "laughing" as const,
+      memeCategory: "laughing",
+      sfxCategory: "boom",
+      animation: "none" as const,
+      duration: 1
+    };
+  }
+
+  it("maps emotion to a built-in combo and skips stacked punches", () => {
+    assert.equal(comboFromEmotion("laughing").id, "punch");
+    assert.equal(comboFromEmotion("angry").id, "punch");
+    assert.equal(
+      comboFromEmotion("laughing", { previousPunch: true }).id,
+      "soft"
+    );
+    assert.equal(comboFromEmotion("cringe").id, "cringe");
+    assert.equal(comboFromEmotion("shocked").id, "shock");
+    assert.equal(comboFromEmotion("happy").id, "soft");
+    assert.equal(comboFromEmotion("laughing", { isVideo: true }).id, "none");
+  });
+
+  it("applies and clears a combo without deleting the meme file", () => {
+    const punch = getBuiltinCombo("punch");
+    const baked = applyCombo({ file: "kept.png", comboLocked: true }, punch);
+    assert.equal(baked.file, "kept.png");
+    assert.equal(baked.comboId, "punch");
+    assert.equal(baked.scale, punch.scale);
+    assert.equal(baked.animation, "zoom-in");
+    const cleared = clearCombo(baked);
+    assert.equal(cleared.file, "kept.png");
+    assert.equal(cleared.comboId, "none");
+    assert.equal(cleared.animation, undefined);
+    assert.equal(cleared.comboLocked, false);
+  });
+
+  it("forces video memes to the none combo", () => {
+    const thread = analysis({
+      reactions: [laughingReaction(0)]
+    });
+    const matched = matchReactions(thread, [
+      asset({
+        id: "meme-vid",
+        type: "meme",
+        mediaKind: "video",
+        category: "laughing"
+      }),
+      asset({
+        id: "sfx-boom",
+        type: "sfx",
+        mediaKind: "audio",
+        category: "boom"
+      })
+    ]);
+    assert.equal(matched[0]?.meme?.mediaKind, "video");
+    assert.equal(matched[0]?.sfx, null);
+    assert.equal(matched[0]?.comboId, "none");
+    assert.equal(matched[0]?.animation, "none");
+  });
+
+  it("assigns punch then soft when consecutive comments both punch", () => {
+    const matched = matchReactions(
+      analysis({
+        reactions: [laughingReaction(0), laughingReaction(1)]
+      }),
+      comboLibrary()
+    );
+    const imageMatches = matched.filter((item) => item.meme?.mediaKind === "image");
+    assert.equal(imageMatches[0]?.comboId, "punch");
+    assert.equal(imageMatches[1]?.comboId, "soft");
+  });
+
+  it("falls back to a real meme/SFX when AI ids are missing and keeps comboId", () => {
+    const library = comboLibrary();
+    const matched = matchReactions(
+      analysis({
+        reactions: [
+          {
+            ...laughingReaction(0),
+            memeAssetId: "not-a-real-id",
+            memeCategory: "laughing",
+            sfxAssetId: null,
+            sfxCategory: null,
+            comboId: "shock"
+          }
+        ]
+      }),
+      library
+    );
+    assert.ok(
+      matched[0]?.meme?.id === "meme-laugh" ||
+        matched[0]?.meme?.id === "meme-laugh-2"
+    );
+    assert.ok(matched[0]?.sfx);
+    assert.equal(matched[0]?.comboId, "shock");
+    assert.equal(matched[0]?.animation, "shake-1");
+  });
+
+  it("fills meme, sfx, and combo when AI returns no reactions", () => {
+    const library = comboLibrary();
+    const suggested = applyMemeSuggestions(
+      analysis({
+        reactions: [
+          {
+            commentIndex: 0,
+            emotion: "laughing",
+            memeCategory: null,
+            sfxCategory: null,
+            animation: "none",
+            duration: 1
+          }
+        ]
+      }),
+      {},
+      library,
+      [0]
+    );
+    assert.equal(suggested.reactions[0]?.memeCategory, "laughing");
+    assert.equal(suggested.reactions[0]?.comboId, "punch");
+    assert.equal(suggested.reactions[0]?.animation, "zoom-in");
+    const sanitized = sanitizeAnalysis(
+      analysis({
+        reactions: [
+          {
+            commentIndex: 0,
+            emotion: "shocked",
+            memeAssetId: "missing",
+            memeCategory: null,
+            sfxCategory: null,
+            animation: "none",
+            duration: 1
+          }
+        ]
+      }),
+      library
+    );
+    assert.equal(sanitized.reactions[0]?.memeAssetId, null);
+    assert.equal(sanitized.reactions[0]?.memeCategory, "shocked");
+    const assigned = assignReactionCombos(suggested.reactions);
+    assert.equal(assigned[0]?.comboId, "punch");
+  });
+
+  it("keeps a locked combo on rematch and preserves custom bake on rebuild", () => {
+    const library = comboLibrary();
+    const image = library.find((item) => item.id === "meme-laugh");
+    const sfx = library.find((item) => item.id === "sfx-boom");
+    assert.ok(image);
+    assert.ok(sfx);
+    const rematched = matchReactions(
+      analysis({ reactions: [laughingReaction(0)] }),
+      library,
+      [
+        {
+          commentIndex: 0,
+          emotion: "laughing",
+          meme: image,
+          sfx,
+          animation: "shake-1",
+          duration: 1,
+          comboId: "shock",
+          comboLocked: true
+        }
+      ]
+    );
+    assert.equal(rematched[0]?.comboId, "shock");
+    assert.equal(rematched[0]?.animation, "shake-1");
+
+    const punch = getBuiltinCombo("punch");
+    const previous = [
+      applyCombo(memeClip({ file: "old.png", comboLocked: true }), punch)
+    ];
+    previous[0].scale = 0.41;
+    const next = [
+      applyCombo(memeClip({ file: "new.png", id: "meme-0" }), getBuiltinCombo("soft"))
+    ];
+    const preserved = preserveComboClips(next, previous);
+    assert.equal(preserved[0]?.file, "new.png");
+    assert.equal(preserved[0]?.comboId, "punch");
+    assert.equal(preserved[0]?.scale, 0.41);
+    assert.equal(isCustomCombo(previous[0]), true);
+
+    const stamped = stampComboFromClips(
+      [{ commentIndex: 0, comboId: "none" }],
+      previous
+    );
+    assert.equal(stamped[0]?.comboId, "punch");
+    assert.equal(stamped[0]?.comboLocked, true);
+    assert.deepEqual(
+      persistBuiltInComboIds(
+        [{ commentIndex: 0, emotion: "laughing" }],
+        rematched
+      )[0]?.comboId,
+      "shock"
+    );
+  });
+
+  it("compiles zoom-in and shake with the same motion math as preview", () => {
+    assert.equal(clipMotionName({ animation: "zoom-in" }), "zoom-in");
+    assert.equal(clipMotionName({ animation: "shake-1" }), "shake");
+    assert.equal(clipZoomMultiplier(0), 1.12);
+    assert.equal(clipZoomMultiplier(1), 1);
+    assert.equal(clipShakeOffsetPercent(1), 0);
+    assert.equal(clipSlideLeftPercent(50, 0), -50);
+    assert.equal(clipSlideLeftPercent(50, 1), 50);
+
+    const project = createSpikeTimelineProject();
+    const meme = project.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(meme);
+    Object.assign(meme, applyCombo(meme, getBuiltinCombo("punch")));
+    const zoomHtml = compileTimelineProject(project);
+    assert.match(zoomHtml, /scale: 1.12/);
+    Object.assign(meme, applyCombo(meme, getBuiltinCombo("shock")));
+    const shakeHtml = compileTimelineProject(project);
+    assert.match(shakeHtml, /repeat: 3, yoyo: true/);
+    assert.match(shakeHtml, /x: 38/);
+  });
+
+  it("does not let auto-format wipe combo bake", () => {
+    const punch = getBuiltinCombo("punch");
+    const project = createSpikeTimelineProject();
+    const meme = project.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(meme);
+    Object.assign(meme, applyCombo(meme, punch));
+    const formatted = autoFormat(project, {
+      ...project.settings,
+      fadeIn: 0.9,
+      fadeOut: 0.9
+    });
+    const kept = formatted.clips.find((clip) => clip.id === "meme-b");
+    assert.equal(kept?.comboId, "punch");
+    assert.equal(kept?.fadeIn, punch.fadeIn);
+    assert.equal(kept?.scale, punch.scale);
+    assert.equal(kept?.animation, "zoom-in");
+  });
+
+  it("does not value-import .js paths from renderer-bundled src modules", () => {
+    assert.deepEqual(clientJsValueImports(), []);
+  });
+
+  it("applies and clears a combo on the timeline without deleting the meme or SFX", () => {
+    const punch = getBuiltinCombo("punch");
+    const project = createSpikeTimelineProject();
+    const meme = memeClip({ id: "meme-combo", start: 1, commentIndex: 0 });
+    const sfx: TimelineClip = {
+      id: "sfx-0",
+      trackId: "sfx",
+      start: 1,
+      duration: 0.4,
+      trimIn: 0,
+      sourceDuration: 0.4,
+      file: "boom.mp3",
+      fadeIn: 0,
+      fadeOut: 0,
+      volume: 1,
+      locked: false,
+      label: "SFX",
+      kind: "audio",
+      commentIndex: 0
+    };
+    project.clips.push(meme, sfx);
+    const baked = applyComboToProject(project, meme.id, punch);
+    const bakedMeme = baked.clips.find((clip) => clip.id === meme.id);
+    const bakedSfx = baked.clips.find((clip) => clip.id === sfx.id);
+    assert.equal(bakedMeme?.file, "meme.png");
+    assert.equal(bakedMeme?.comboId, "punch");
+    assert.equal(bakedMeme?.animation, "zoom-in");
+    assert.equal(bakedSfx?.file, "boom.mp3");
+    assert.equal(bakedSfx?.start, 1 + punch.sfxOffset);
+    const offset = setClipSfxOffset(baked, meme.id, 0.4);
+    assert.equal(
+      offset.clips.find((clip) => clip.id === sfx.id)?.start,
+      1.4
+    );
+    const cleared = clearComboOnProject(offset, meme.id);
+    const clearedMeme = cleared.clips.find((clip) => clip.id === meme.id);
+    assert.equal(clearedMeme?.file, "meme.png");
+    assert.equal(clearedMeme?.comboId, "none");
+    assert.equal(clearedMeme?.animation, undefined);
+    assert.equal(
+      cleared.clips.find((clip) => clip.id === sfx.id)?.file,
+      "boom.mp3"
+    );
+  });
+});
+
+describe("clear comment memes and sfx", () => {
+  it("keeps title meme and Open SFX, removes comment meme/video/sfx", () => {
+    assert.equal(
+      isTopicIntroMemeOrOpenSfx({
+        id: "topic-open-sfx",
+        trackId: "sfx",
+        label: "Open SFX"
+      }),
+      true
+    );
+    assert.equal(
+      isTopicIntroMemeOrOpenSfx({
+        id: "meme-topic-intro",
+        trackId: "meme",
+        label: "meme",
+        commentIndex: null
+      }),
+      true
+    );
+    assert.equal(
+      isCommentMemeOrSfxClip({
+        id: "meme-0",
+        trackId: "meme",
+        label: "meme",
+        commentIndex: 0
+      }),
+      true
+    );
+
+    const project = createSpikeTimelineProject();
+    project.clips.push(
+      {
+        id: "topic-open-sfx",
+        trackId: "sfx",
+        start: 0,
+        duration: 0.4,
+        trimIn: 0,
+        sourceDuration: 0.4,
+        file: "open.mp3",
+        fadeIn: 0,
+        fadeOut: 0,
+        volume: 1,
+        locked: false,
+        label: "Open SFX",
+        kind: "audio"
+      },
+      {
+        id: "meme-topic-title",
+        trackId: "meme",
+        start: 0,
+        duration: 2,
+        trimIn: 0,
+        sourceDuration: 2,
+        file: "topic-meme.png",
+        fadeIn: 0.2,
+        fadeOut: 0,
+        volume: 1,
+        locked: false,
+        label: "Topic meme",
+        kind: "image",
+        commentIndex: null
+      },
+      {
+        id: "sfx-0",
+        trackId: "sfx",
+        start: 1.5,
+        duration: 0.3,
+        trimIn: 0,
+        sourceDuration: 0.3,
+        file: "boom.mp3",
+        fadeIn: 0,
+        fadeOut: 0,
+        volume: 1,
+        locked: false,
+        label: "sfx",
+        kind: "audio",
+        commentIndex: 0
+      },
+      {
+        id: "meme-0",
+        trackId: "meme",
+        start: 1.5,
+        duration: 1.2,
+        trimIn: 0,
+        sourceDuration: 1.2,
+        file: "comment-meme.png",
+        fadeIn: 0.1,
+        fadeOut: 0.1,
+        volume: 1,
+        locked: true,
+        label: "Comment meme",
+        kind: "image",
+        commentIndex: 0
+      }
+    );
+    const cleared = clearCommentMemesAndSfx(project);
+    const ids = cleared.clips.map((clip) => clip.id);
+    assert.equal(ids.includes("topic-open-sfx"), true);
+    assert.equal(ids.includes("meme-topic-title"), true);
+    assert.equal(ids.includes("title-card") || ids.includes("bg"), true);
+    assert.equal(ids.includes("meme-a"), false);
+    assert.equal(ids.includes("meme-b"), false);
+    assert.equal(ids.includes("sfx-0"), false);
+    assert.equal(ids.includes("meme-0"), false);
+    assert.equal(ids.includes("music"), true);
+    assert.equal(ids.includes("voice"), true);
+  });
+
+  it("clears comment meme/sfx from reactions and analysis, not topicMemeId", () => {
+    const meme = asset({
+      id: "meme-laugh",
+      type: "meme",
+      mediaKind: "image",
+      category: "laughing"
+    });
+    const sfx = asset({
+      id: "sfx-boom",
+      type: "sfx",
+      mediaKind: "audio",
+      category: "boom"
+    });
+    const reactions = clearCommentReactionAssets([
+      {
+        commentIndex: 0,
+        emotion: "laughing",
+        meme,
+        sfx,
+        animation: "zoom-in",
+        duration: 1.2,
+        comboId: "punch",
+        comboLocked: true
+      }
+    ]);
+    assert.equal(reactions[0]?.meme, null);
+    assert.equal(reactions[0]?.sfx, null);
+    assert.equal(reactions[0]?.comboId, "none");
+    assert.equal(reactions[0]?.animation, "none");
+    const next = clearCommentAnalysisAssets(
+      analysis({
+        topicMemeId: "keep-topic",
+        reactions: [
+          {
+            commentIndex: 0,
+            emotion: "laughing",
+            memeAssetId: "meme-laugh",
+            memeCategory: "laughing",
+            sfxAssetId: "sfx-boom",
+            sfxCategory: "boom",
+            comboId: "punch",
+            animation: "zoom-in",
+            duration: 1.2
+          }
+        ]
+      })
+    );
+    assert.equal(next.topicMemeId, "keep-topic");
+    assert.equal(next.reactions[0]?.memeAssetId, null);
+    assert.equal(next.reactions[0]?.sfxAssetId, null);
+    assert.equal(next.reactions[0]?.comboId, "none");
   });
 });

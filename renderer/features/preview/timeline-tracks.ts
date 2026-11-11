@@ -3,21 +3,29 @@ import {
   getTimelineSceneEntries
 } from "../../../src/timeline/timing";
 import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
+import { canRemoveTimelineAsset } from "../../../src/timeline/replace-asset";
 import type {
   TimelineCommentBlock,
   VideoTimeline
 } from "../../../src/types";
+import { withAnimationLabel } from "../../../src/timeline/clip-motion";
+import type {
+  TimelineClip,
+  TimelineProject,
+  TimelineProjectTrackId
+} from "../../../src/timeline/project";
 
 export const PLACEHOLDER_DURATION = 1;
 
 export const TRACK_IDS = [
   "background",
-  "images",
   "title-card",
+  "images",
   "meme",
   "video",
   "voice",
   "sfx",
+  "beep",
   "music"
 ] as const;
 
@@ -32,6 +40,9 @@ export interface TimelineTrackClip {
   file?: string;
   editable: boolean;
   placeholder: boolean;
+  locked?: boolean;
+  fadeIn?: number;
+  fadeOut?: number;
   target?: TimelineAssetTarget;
 }
 
@@ -49,6 +60,7 @@ export const TRACK_LABELS: Record<TrackId, string> = {
   video: "Video",
   voice: "Voice",
   sfx: "SFX",
+  beep: "Beep",
   music: "Music"
 };
 
@@ -60,6 +72,7 @@ export const TRACK_COLORS: Record<TrackId, string> = {
   video: "bg-indigo-400/80",
   voice: "bg-amber-400/80",
   sfx: "bg-emerald-400/80",
+  beep: "bg-rose-400/80",
   music: "bg-sky-500/75"
 };
 
@@ -90,6 +103,135 @@ function overlayFile(
     }
     return video === isVideoAsset(overlay.file);
   })?.file;
+}
+
+export function targetFromProjectClip(
+  clip: TimelineClip
+): TimelineAssetTarget | undefined {
+  if (clip.trackId === "background") {
+    return { kind: "background" };
+  }
+  if (clip.trackId === "music") {
+    return { kind: "music" };
+  }
+  if (clip.trackId === "title-card") {
+    return { kind: "topic-title" };
+  }
+  if (
+    (clip.trackId === "meme" || clip.trackId === "video") &&
+    (clip.commentIndex === null || clip.commentIndex === undefined) &&
+    clip.id.includes("topic")
+  ) {
+    return { kind: "topic-meme" };
+  }
+  if (clip.commentIndex === null || clip.commentIndex === undefined) {
+    if (clip.trackId === "meme" || clip.trackId === "video") {
+      return { kind: "topic-meme" };
+    }
+    return undefined;
+  }
+  if (clip.trackId === "meme") {
+    return { kind: "meme", commentIndex: clip.commentIndex };
+  }
+  if (clip.trackId === "video") {
+    return { kind: "video", commentIndex: clip.commentIndex };
+  }
+  if (clip.trackId === "sfx") {
+    return { kind: "sfx", commentIndex: clip.commentIndex };
+  }
+  return undefined;
+}
+
+export const CLIP_DRAG_THRESHOLD_PX = 4;
+export const CLIP_MIN_WIDTH_PX = 18;
+export const CLIP_INLINE_ACTIONS_MIN_PX = 72;
+
+export function clipBarWidth(
+  duration: number,
+  pixelsPerSecond: number
+): number {
+  return Math.max(duration * pixelsPerSecond, CLIP_MIN_WIDTH_PX);
+}
+
+export function clipActionsDockOutside(widthPx: number): boolean {
+  return widthPx < CLIP_INLINE_ACTIONS_MIN_PX;
+}
+
+export function clipActionDockOpen(options: {
+  selected: boolean;
+  hovered: boolean;
+}): boolean {
+  return options.selected || options.hovered;
+}
+
+export function clipPointerIntent(
+  originX: number,
+  clientX: number,
+  thresholdPx = CLIP_DRAG_THRESHOLD_PX
+): "click" | "drag" {
+  return Math.abs(clientX - originX) >= thresholdPx ? "drag" : "click";
+}
+
+export function clipCanRemove(clip: {
+  trackId: string;
+  placeholder?: boolean;
+  locked?: boolean;
+  target?: TimelineAssetTarget;
+}): boolean {
+  if (clip.placeholder) {
+    return false;
+  }
+  if (clip.trackId === "beep") {
+    return !clip.locked;
+  }
+  return Boolean(clip.target && canRemoveTimelineAsset(clip.target));
+}
+
+export function clipOpensAssetPicker(clip: {
+  editable: boolean;
+  locked?: boolean;
+  target?: TimelineAssetTarget;
+}): boolean {
+  if (!clip.editable || clip.locked || !clip.target) {
+    return false;
+  }
+  return (
+    clip.target.kind === "background" ||
+    clip.target.kind === "music" ||
+    clip.target.kind === "meme" ||
+    clip.target.kind === "video" ||
+    clip.target.kind === "sfx" ||
+    clip.target.kind === "topic-meme" ||
+    clip.target.kind === "topic-title"
+  );
+}
+
+export function getProjectTracks(
+  project: TimelineProject
+): TimelineTrack[] {
+  return TRACK_IDS.map((id) => ({
+    id,
+    label: TRACK_LABELS[id],
+    clips: project.clips
+      .filter((clip) => clip.trackId === (id as TimelineProjectTrackId))
+      .map((clip) => ({
+        id: clip.id,
+        trackId: id,
+        start: clip.start,
+        duration: clip.duration,
+        label: withAnimationLabel(
+          clip.locked ? `🔒 ${clip.label}` : clip.label,
+          clip
+        ),
+        file: clip.file,
+        editable: !clip.locked && clip.trackId !== "images",
+        placeholder: false,
+        locked: clip.locked,
+        fadeIn: clip.fadeIn,
+        fadeOut: clip.fadeOut,
+        target: targetFromProjectClip(clip)
+      }))
+  }));
 }
 
 export function getTimelineTracks(
@@ -133,7 +275,10 @@ export function getTimelineTracks(
         trackId: "title-card",
         start: 0,
         duration: timeline.topicIntro.blocksDuration,
-        label: timeline.topicIntro.title || "Title card",
+        label: withAnimationLabel(
+          timeline.topicIntro.title || "Title card",
+          { trackId: "title-card" }
+        ),
         file: timeline.topicIntro.titleCardFile,
         editable: true,
         placeholder: false,
@@ -225,7 +370,14 @@ export function getTimelineTracks(
             trackId: video ? "video" : "meme",
             start: entry.start + topicOverlay.start,
             duration: topicOverlay.duration,
-            label: formatClipLabel(topicOverlay.file),
+            label: withAnimationLabel(
+              formatClipLabel(topicOverlay.file),
+              {
+                trackId: video ? "video" : "meme",
+                animation: topicOverlay.animation ?? "slide-up",
+                commentIndex: null
+              }
+            ),
             file: topicOverlay.file,
             editable: true,
             placeholder: false,
@@ -337,6 +489,8 @@ export function getTimelineTracks(
     label: TRACK_LABELS[id],
     clips: clips.filter((clip) => clip.trackId === id)
   })).filter((track) =>
-    track.id !== "title-card" || track.clips.length > 0
+    track.id === "beep" ||
+    track.id !== "title-card" ||
+    track.clips.length > 0
   );
 }

@@ -8,6 +8,13 @@ import type {
   ReactionEmotion,
   ThreadAnalysis
 } from "../types.js";
+import {
+  comboFromEmotion,
+  comboToReactionAnimation,
+  findCombo,
+  getBuiltinCombo,
+  isBuiltInComboId
+} from "../timeline/meme-combo.js";
 
 export interface MatchedReaction {
   commentIndex: number;
@@ -16,6 +23,8 @@ export interface MatchedReaction {
   sfx: Asset | null;
   animation: ReactionAnimation;
   duration: number;
+  comboId?: string;
+  comboLocked?: boolean;
 }
 
 function selectableOfType(
@@ -98,27 +107,35 @@ function pickRequestedAsset(options: {
       pickUnusedAsset(sameKind, options.usedIds, false);
   }
 
-  if (options.requestedId) {
+  if (options.category) {
+    const byCategory = pickUnusedAsset(
+      pool.filter((asset) => asset.category === options.category),
+      options.usedIds,
+      options.allowReuse
+    );
+    if (byCategory) {
+      return byCategory;
+    }
+  }
+
+  if (!options.requestedId && !options.category) {
     return null;
   }
 
-  if (!options.category) {
-    return null;
-  }
-
-  return pickUnusedAsset(
-    pool.filter((asset) => asset.category === options.category),
-    options.usedIds,
-    options.allowReuse
-  );
+  return pickUnusedAsset(pool, options.usedIds, options.allowReuse);
 }
 
 export function matchReactions(
   analysis: ThreadAnalysis,
-  assets: Asset[]
+  assets: Asset[],
+  previous: MatchedReaction[] = []
 ): MatchedReaction[] {
   const usedMemeIds = new Set<string>();
   const usedSfxIds = new Set<string>();
+  const previousByIndex = new Map(
+    previous.map((item) => [item.commentIndex, item])
+  );
+  let previousPunch = false;
 
   return analysis.reactions.map((reaction) => {
     let meme = pickRequestedAsset({
@@ -130,7 +147,7 @@ export function matchReactions(
       allowReuse: false
     });
 
-    const sfx = meme?.mediaKind === "video"
+    let sfx = meme?.mediaKind === "video"
       ? null
       : pickRequestedAsset({
         requestedId: reaction.sfxAssetId,
@@ -142,7 +159,45 @@ export function matchReactions(
       });
 
     if (meme?.mediaKind === "image" && !sfx) {
+      sfx = pickUnusedAsset(
+        selectableOfType(assets, "sfx"),
+        usedSfxIds,
+        true
+      );
+    }
+    if (meme?.mediaKind === "image" && !sfx) {
       meme = null;
+    }
+
+    const prior = previousByIndex.get(reaction.commentIndex);
+    const keepCombo =
+      Boolean(prior?.comboLocked && prior.comboId) &&
+      meme?.mediaKind !== "video";
+    const requestedComboId = reaction.comboId;
+    const namedCombo =
+      !keepCombo &&
+      requestedComboId &&
+      requestedComboId !== "none" &&
+      isBuiltInComboId(requestedComboId)
+        ? getBuiltinCombo(requestedComboId)
+        : undefined;
+    const chosen = keepCombo
+      ? (findCombo(prior?.comboId) ?? getBuiltinCombo("none"))
+      : namedCombo ?? comboFromEmotion(reaction.emotion, {
+          isVideo: meme?.mediaKind === "video" || !meme,
+          previousPunch
+        });
+    const comboId = keepCombo
+      ? (prior?.comboId ?? "none")
+      : meme
+        ? chosen.id
+        : "none";
+    const applied =
+      comboId === "none" ? getBuiltinCombo("none") : chosen;
+    if (comboId === "punch") {
+      previousPunch = true;
+    } else if (meme) {
+      previousPunch = false;
     }
 
     return {
@@ -150,8 +205,10 @@ export function matchReactions(
       emotion: reaction.emotion,
       meme,
       sfx,
-      animation: "none",
-      duration: 1
+      animation: comboToReactionAnimation(applied.animation),
+      duration: Math.max(1, applied.minDuration),
+      comboId,
+      comboLocked: prior?.comboLocked
     };
   });
 }
