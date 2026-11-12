@@ -10,9 +10,11 @@ import {
 } from "./browser.js";
 
 import {
-  extractCommentGroupIndexes,
+  extractParentContainerIndex,
   extractPressableComment,
-  readPressableComment
+  PRESSABLE_SELECTOR,
+  readPressableComment,
+  THREAD_COLUMN_SELECTOR
 } from "./extract.js";
 
 import {
@@ -33,6 +35,7 @@ import {
 } from "./comments/speech-abbreviations.js";
 
 import {
+  CAPTURE_COMMENT_MAX,
   CAPTURE_COMMENT_TARGET
 } from "./comments/comment-constants.js";
 import { getRuntimeRoot } from "./binaries.js";
@@ -43,8 +46,6 @@ export interface CaptureResult {
   rawDir: string;
 }
 
-const PRESSABLE_SELECTOR =
-  '[data-pressable-container="true"]';
 const MAX_SCROLL_ROUNDS = 40;
 const MAX_STALLED_ROUNDS = 5;
 const SCROLL_WAIT_MS = 1500;
@@ -171,7 +172,8 @@ function commentKey(author: string, text: string): string {
  */
 async function harvestThread(
   page: Page,
-  rawDir: string
+  rawDir: string,
+  commentTarget: number
 ): Promise<ThreadData> {
   const containers = page.locator(PRESSABLE_SELECTOR);
 
@@ -202,14 +204,14 @@ async function harvestThread(
   for (
     let round = 0;
     round < MAX_SCROLL_ROUNDS &&
-      harvested.length < CAPTURE_COMMENT_TARGET &&
+      harvested.length < commentTarget &&
       stalled < MAX_STALLED_ROUNDS;
     round++
   ) {
     const before = harvested.length;
     const count = await containers.count();
     const keys: Array<string | undefined> = [];
-    const groups: Array<number[] | undefined> = [];
+    const parents: Array<number | undefined> = [];
     const contents: Array<
       Awaited<ReturnType<typeof readPressableComment>>
     > = [];
@@ -225,9 +227,9 @@ async function harvestThread(
           ? commentKey(content.author, content.text)
           : undefined
       );
-      groups.push(
+      parents.push(
         content
-          ? await extractCommentGroupIndexes(
+          ? await extractParentContainerIndex(
             containers.nth(i),
             PRESSABLE_SELECTOR
           ).catch(() => undefined)
@@ -238,13 +240,39 @@ async function harvestThread(
     for (
       let i = 0;
       i < count &&
-        harvested.length < CAPTURE_COMMENT_TARGET;
+        harvested.length < commentTarget;
       i++
     ) {
       const key = keys[i];
       const content = contents[i];
 
-      if (!key || !content || seen.has(key)) {
+      if (!key || !content) {
+        continue;
+      }
+
+      const parentContainer = parents[i];
+      const parentKey =
+        parentContainer !== undefined
+          ? keys[parentContainer]
+          : undefined;
+      const resolvedParent =
+        parentKey &&
+        parentKey !== postKey &&
+        parentKey !== key
+          ? parentKey
+          : undefined;
+
+      if (seen.has(key)) {
+        if (resolvedParent) {
+          const existing = harvested.find(
+            (item) => item.key === key
+          );
+
+          if (existing && !existing.parentKey) {
+            existing.parentKey = resolvedParent;
+          }
+        }
+
         continue;
       }
 
@@ -282,20 +310,14 @@ async function harvestThread(
         continue;
       }
 
-      const group = groups[i];
-      const parentKey =
-        group && group.length > 1 && group[0] !== i
-          ? keys[group[0]]
-          : undefined;
-
       seen.add(key);
       harvested.push({
         key,
         author: content.author,
         text: content.text,
         likes: content.likes,
-        ...(parentKey && parentKey !== postKey
-          ? { parentKey }
+        ...(resolvedParent
+          ? { parentKey: resolvedParent }
           : {})
       });
     }
@@ -303,7 +325,7 @@ async function harvestThread(
     stalled =
       harvested.length > before ? 0 : stalled + 1;
 
-    if (harvested.length >= CAPTURE_COMMENT_TARGET) {
+    if (harvested.length >= commentTarget) {
       break;
     }
 
@@ -326,7 +348,7 @@ async function harvestThread(
   }
 
   console.log(
-    `Captured ${harvested.length} comments (target ${CAPTURE_COMMENT_TARGET}).\n`
+    `Captured ${harvested.length} comments (target ${commentTarget}).\n`
   );
 
   const keyToIndex = new Map(
@@ -383,8 +405,25 @@ async function harvestThread(
   };
 }
 
+export function normalizeCaptureCount(
+  value: number | undefined
+): number {
+  if (
+    value === undefined ||
+    !Number.isInteger(value)
+  ) {
+    return CAPTURE_COMMENT_TARGET;
+  }
+
+  return Math.min(
+    CAPTURE_COMMENT_MAX,
+    Math.max(1, value)
+  );
+}
+
 export async function captureThread(
-  url: string
+  url: string,
+  commentLimit?: number
 ): Promise<CaptureResult> {
   const context = await createContext();
 
@@ -421,7 +460,11 @@ export async function captureThread(
 
     console.log("Loading and capturing comments...\n");
 
-    const thread = await harvestThread(page, rawDir);
+    const thread = await harvestThread(
+      page,
+      rawDir,
+      normalizeCaptureCount(commentLimit)
+    );
 
     // Save thread.json
     const threadPath = path.join(
@@ -499,47 +542,77 @@ async function findReplyContainerIndex(
   page: Page,
   codes: string[]
 ): Promise<number> {
-  return page.evaluate((needles) => {
-    const anchors = Array.from(
-      document.querySelectorAll("a[href]")
-    );
-    // Some matching anchors live outside any post container
-    // (e.g. a canonical link), so only accept ones inside one.
-    let container: Element | null = null;
-
-    for (const element of anchors) {
-      const href =
-        element.getAttribute("href") ?? "";
-
-      if (
-        !needles.some(
-          (code) =>
-            code.length > 0 &&
-            href.includes(code)
-        )
-      ) {
-        continue;
-      }
-
-      container = element.closest(
-        '[data-pressable-container="true"]'
+  return page.evaluate(
+    ({ needles, columnSelector, pressableSelector }) => {
+      const anchors = Array.from(
+        document.querySelectorAll("a[href]")
       );
+      const containers = Array.from(
+        document.querySelectorAll(pressableSelector)
+      );
+      // Permalink links also appear in the right-rail Quotes
+      // card. Only a card inside the thread column counts, and
+      // a link inside a nested quote still belongs to the
+      // outer comment.
+      let container: Element | null = null;
 
-      if (container) {
+      for (const element of anchors) {
+        const href =
+          element.getAttribute("href") ?? "";
+
+        if (
+          !needles.some(
+            (code) =>
+              code.length > 0 &&
+              href.includes(code)
+          )
+        ) {
+          continue;
+        }
+
+        const column = element.closest(columnSelector);
+
+        if (!column) {
+          continue;
+        }
+
+        container = element.closest(
+          '[data-pressable-container="true"]'
+        );
+
+        if (!container || !column.contains(container)) {
+          container = null;
+          continue;
+        }
+
+        let parent =
+          container.parentElement?.closest(
+            '[data-pressable-container="true"]'
+          ) ?? null;
+
+        while (parent && column.contains(parent)) {
+          container = parent;
+          parent =
+            container.parentElement?.closest(
+              '[data-pressable-container="true"]'
+            ) ?? null;
+        }
+
         break;
       }
-    }
 
-    if (!container) {
-      return -1;
-    }
+      if (!container) {
+        return -1;
+      }
 
-    return Array.from(
-      document.querySelectorAll(
-        '[data-pressable-container="true"]'
-      )
-    ).indexOf(container);
-  }, codes);
+      return containers.indexOf(container);
+    },
+    {
+      needles: codes,
+      columnSelector: THREAD_COLUMN_SELECTOR,
+      pressableSelector: PRESSABLE_SELECTOR
+    }
+  );
 }
 
 export async function captureComment(

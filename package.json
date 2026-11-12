@@ -1,6 +1,6 @@
 {
   "name": "xamxixiu-project",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Tạo video ngắn từ bài đăng Threads",
   "author": "Xàm Xí Xíu",
   "main": "dist-electron/electron/main.js",
