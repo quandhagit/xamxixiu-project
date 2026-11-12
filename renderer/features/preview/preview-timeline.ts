@@ -117,12 +117,12 @@ export function getPreviewAudioTracks(
       volume: 1
     });
   }
-  if (timeline.topicIntro) {
+  if (timeline.topicIntro?.openSfxFile) {
     tracks.push({
       key: "topic-open-sfx",
       file: timeline.topicIntro.openSfxFile,
       start: 0,
-      duration: timeline.topicIntro.openSfxDuration,
+      duration: timeline.topicIntro.openSfxDuration ?? 0,
       volume: 1
     });
   }

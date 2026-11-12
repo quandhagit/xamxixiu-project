@@ -11,6 +11,7 @@ import {
 } from "./project.js";
 import type { VideoTimeline } from "../types.js";
 import { preserveComboClips } from "./meme-combo.js";
+import { TOPIC_POST_COMMENT_INDEX } from "./topic-constants.js";
 
 function isVideoAsset(file: string): boolean {
   return [".mp4", ".mov", ".webm", ".mkv"].some((extension) =>
@@ -114,14 +115,16 @@ export function videoTimelineToProject(
         animationDuration: timeline.topicIntro.animationDuration
       }));
     }
-    clips.push(makeClip({
-      id: "topic-open-sfx",
-      trackId: "sfx",
-      start: 0,
-      duration: timeline.topicIntro.openSfxDuration,
-      file: timeline.topicIntro.openSfxFile,
-      label: "Open SFX"
-    }));
+    if (timeline.topicIntro.openSfxFile) {
+      clips.push(makeClip({
+        id: "topic-open-sfx",
+        trackId: "sfx",
+        start: 0,
+        duration: timeline.topicIntro.openSfxDuration ?? 0,
+        file: timeline.topicIntro.openSfxFile,
+        label: "Open SFX"
+      }));
+    }
     if (
       timeline.topicIntro.case === "long" &&
       timeline.topicIntro.titleVoiceFile
@@ -165,6 +168,7 @@ export function videoTimelineToProject(
         commentIndex: isTopic ? null : block.commentIndex,
         muteUnderBeep: true
       }));
+      const postVoiceStart = block.audioStart + block.audioDuration;
       for (const overlay of block.overlays) {
         const video = overlay.type === "meme" && isVideoAsset(overlay.file);
         const trackId = overlay.type === "sfx"
@@ -172,14 +176,20 @@ export function videoTimelineToProject(
           : video
             ? "video"
             : "meme";
+        const isPostTopic =
+          isTopic && overlay.start + 0.001 >= postVoiceStart;
         clips.push(makeClip({
-          id: `${trackId}-${entry.scene.id}-${block.commentIndex}-${overlay.file}`,
+          id: isPostTopic
+            ? `${trackId}-topic-post`
+            : `${trackId}-${entry.scene.id}-${block.commentIndex}-${overlay.file}`,
           trackId,
           start: entry.start + overlay.start,
           duration: overlay.duration,
           file: overlay.file,
-          label: overlay.type,
-          commentIndex: isTopic ? null : block.commentIndex,
+          label: isPostTopic ? `${overlay.type} after topic` : overlay.type,
+          commentIndex: isTopic
+            ? (isPostTopic ? TOPIC_POST_COMMENT_INDEX : null)
+            : block.commentIndex,
           fadeIn: overlay.fadeIn ?? 0,
           scale: overlay.scale,
           x: overlay.x,

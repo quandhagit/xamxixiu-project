@@ -58,7 +58,8 @@ import { autoFormat } from "../timeline/auto-format.js";
 import {
   clearCommentAnalysisAssets,
   clearCommentMemesAndSfx,
-  clearCommentReactionAssets
+  clearCommentReactionAssets,
+  collectClearedOverlayKinds
 } from "../timeline/clear-comment-assets.js";
 import { addBeepClip, createBeepWav } from "../timeline/beep.js";
 import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
@@ -435,15 +436,16 @@ export function registerIpc(
     "project:assign-voices",
     async (_event, projectId: string) => {
       const directory = store.getProjectDirectory(projectId);
-      const project = await store.getProject(projectId);
-      const patch = await assignVoices(directory, project?.analysis);
+      await store.ensureAnalysis(projectId);
+      const current = await store.getProject(projectId);
+      const patch = await assignVoices(directory, current?.analysis);
       const analysis = {
         tone: "casual" as const,
         topicType: "other" as const,
         intensity: 0.5,
         musicType: "neutral" as const,
         reactions: [],
-        ...project?.analysis,
+        ...current?.analysis,
         ...patch
       };
       return store.saveAnalysis(projectId, analysis);
@@ -455,10 +457,9 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory = store.getProjectDirectory(projectId);
       const project = await store.getProject(projectId);
-      if (!project?.analysis) {
-        throw new Error("Hãy chạy AI voice hoặc Quick AI trước khi chọn meme.");
-      }
-      const analysis = await suggestMemes(directory, project.analysis);
+      const existing =
+        project?.analysis ?? (await store.ensureAnalysis(projectId));
+      const analysis = await suggestMemes(directory, existing);
       await store.saveAnalysis(projectId, analysis);
       await scanAssets();
       await runMatchReactions(directory);
@@ -473,24 +474,25 @@ export function registerIpc(
       if (!project) {
         throw new Error(`Project could not be loaded: ${projectId}`);
       }
-      const assets = await library.list();
-      if (project.analysis) {
-        await store.saveAnalysis(
-          projectId,
-          clearCommentAnalysisAssets(project.analysis)
-        );
-      }
-      await store.saveReactions(
-        projectId,
-        clearCommentReactionAssets(project.reactions ?? []),
-        assets
-      );
       const source = project.timelineProject ??
         (project.timeline
           ? videoTimelineToProject(project.timeline)
           : undefined);
       if (!source) {
         return store.getProject(projectId);
+      }
+      const kinds = collectClearedOverlayKinds(source);
+      if (project.analysis) {
+        await store.saveAnalysis(
+          projectId,
+          clearCommentAnalysisAssets(project.analysis, kinds)
+        );
+      }
+      if (project.reactions) {
+        await store.writeReactions(
+          projectId,
+          clearCommentReactionAssets(project.reactions, kinds)
+        );
       }
       return store.saveTimelineProject(
         projectId,
@@ -1050,6 +1052,7 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
+      await store.ensureAnalysis(projectId);
       await generateAudio(directory);
       const project =
         await store.getProject(projectId);
@@ -1073,6 +1076,7 @@ export function registerIpc(
     ) => {
       const directory =
         store.getProjectDirectory(projectId);
+      await store.ensureAnalysis(projectId);
       await generateAudio(directory, target);
       const project =
         await store.getProject(projectId);
@@ -1092,6 +1096,7 @@ export function registerIpc(
     async (_event, projectId: string) => {
       const directory =
         store.getProjectDirectory(projectId);
+      await store.ensureAnalysis(projectId);
       await scanAssets();
       await runMatchReactions(directory);
       const project =

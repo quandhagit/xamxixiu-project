@@ -1,17 +1,13 @@
 "use client";
 
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
 import type { TimelineProject } from "../../../src/timeline/project";
 import type { VideoTimeline } from "../../../src/types";
 import {
   TRACK_COLORS,
-  clipActionDockOpen,
-  clipActionsDockOutside,
   clipBarWidth,
   clipCanRemove,
-  clipOpensAssetPicker,
   clipPointerIntent,
   getProjectTracks,
   getTimelineTracks,
@@ -34,7 +30,6 @@ interface TimelineTracksProps {
   selectedClipId?: string;
   voicePeaks?: Record<string, number[]>;
   onSeek: (time: number) => void;
-  onEditClip: (target: TimelineAssetTarget) => void;
   onRemoveClip: (clip: TimelineTrackClip) => void;
   onMoveClip?: (clipId: string, start: number) => void;
   onTrimClip?: (clipId: string, edge: "in" | "out", time: number) => void;
@@ -56,8 +51,12 @@ interface DragState {
   lastX: number;
   snapTimes: number[];
   element: HTMLElement;
-  target?: TimelineAssetTarget;
-  opensPicker: boolean;
+}
+
+interface ClipContextMenu {
+  clip: TimelineTrackClip;
+  x: number;
+  y: number;
 }
 
 function formatTime(time: number): string {
@@ -121,7 +120,6 @@ function TimelineTracksComponent({
   selectedClipId,
   voicePeaks,
   onSeek,
-  onEditClip,
   onRemoveClip,
   onMoveClip,
   onTrimClip,
@@ -142,8 +140,8 @@ function TimelineTracksComponent({
   const drag = useRef<DragState | null>(null);
   const frame = useRef(0);
   const moved = useRef(false);
-  const [hoveredClipId, setHoveredClipId] = useState<string>();
-  const hoverHide = useRef(0);
+  const [menu, setMenu] = useState<ClipContextMenu>();
+  const menuRef = useRef<HTMLDivElement>(null);
   const ppsRef = useRef(pixelsPerSecond);
   const callbacksRef = useRef({
     onMoveClip,
@@ -151,8 +149,7 @@ function TimelineTracksComponent({
     onDragStart,
     onDragEnd,
     onSeek,
-    onSelectClip,
-    onEditClip
+    onSelectClip
   });
   ppsRef.current = pixelsPerSecond;
   callbacksRef.current = {
@@ -161,9 +158,35 @@ function TimelineTracksComponent({
     onDragStart,
     onDragEnd,
     onSeek,
-    onSelectClip,
-    onEditClip
+    onSelectClip
   };
+
+  useEffect(() => {
+    if (!menu) {
+      return;
+    }
+    function closeMenu(): void {
+      setMenu(undefined);
+    }
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    }
+    function onPointer(event: PointerEvent): void {
+      const node = menuRef.current;
+      if (node && event.target instanceof Node && node.contains(event.target)) {
+        return;
+      }
+      closeMenu();
+    }
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [menu]);
 
   const duration = Math.max(
     timelineProject?.totalDuration ?? timeline.totalDuration,
@@ -181,18 +204,6 @@ function TimelineTracksComponent({
 
   if (playheadRef.current) {
     playheadRef.current.style.left = `${previewTime * pixelsPerSecond}px`;
-  }
-
-  function showClipActions(clipId: string): void {
-    window.clearTimeout(hoverHide.current);
-    setHoveredClipId(clipId);
-  }
-
-  function hideClipActions(): void {
-    window.clearTimeout(hoverHide.current);
-    hoverHide.current = window.setTimeout(() => {
-      setHoveredClipId(undefined);
-    }, 160);
   }
 
   function timeFromEvent(event: React.MouseEvent<HTMLElement>): number {
@@ -309,9 +320,7 @@ function TimelineTracksComponent({
       liveStart,
       liveDuration,
       element,
-      originStart,
-      target,
-      opensPicker
+      originStart
     } = current;
     element.style.willChange = "";
     element.style.transform = "";
@@ -322,9 +331,6 @@ function TimelineTracksComponent({
       drag.current = null;
       callbacks.onSeek(originStart);
       callbacks.onSelectClip?.(clipId);
-      if (opensPicker && target) {
-        callbacks.onEditClip(target);
-      }
       return;
     }
     element.style.left = `${liveStart * ppsRef.current}px`;
@@ -357,10 +363,11 @@ function TimelineTracksComponent({
       mode: "move" | "in" | "out";
       originStart: number;
       originDuration: number;
-      target?: TimelineAssetTarget;
-      opensPicker?: boolean;
     }
   ): void {
+    if (event.button !== 0) {
+      return;
+    }
     event.stopPropagation();
     const element = event.currentTarget.closest("[data-clip-id]");
     if (!(element instanceof HTMLElement)) {
@@ -378,8 +385,7 @@ function TimelineTracksComponent({
       liveDuration: next.originDuration,
       lastX: event.clientX,
       snapTimes: snapTimesFor(next.clipId),
-      element,
-      opensPicker: next.opensPicker ?? false
+      element
     };
     element.setPointerCapture(event.pointerId);
     window.addEventListener("pointermove", onWindowPointerMove, true);
@@ -439,63 +445,39 @@ function TimelineTracksComponent({
                 onClick={(event) => onSeek(timeFromEvent(event))}
               >
                 {track.clips.map((clip) => {
-                  const removable = clipCanRemove(clip);
                   const peaks =
                     track.id === "voice" && clip.file
                       ? voicePeaks?.[clip.file]
                       : undefined;
                   const selected = selectedClipId === clip.id;
-                  const dockOutside = clipActionsDockOutside(
-                    clipBarWidth(clip.duration, pixelsPerSecond)
-                  );
-                  const dockOpen = clipActionDockOpen({
-                    selected,
-                    hovered: hoveredClipId === clip.id
-                  });
-                  const showLock = Boolean(onToggleLock && !clip.placeholder);
-                  const actionButtons = (
-                    <>
-                      {showLock ? (
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          title={clip.locked ? "Mở khóa" : "Khóa clip"}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onToggleLock?.(clip.id);
-                          }}
-                          className="shrink-0 bg-app/90 px-1 text-[10px] leading-[20px]"
-                        >
-                          {clip.locked ? "🔒" : "○"}
-                        </button>
-                      ) : null}
-                      {removable ? (
-                        <button
-                          type="button"
-                          disabled={disabled}
-                          title="Gỡ khỏi timeline"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onRemoveClip(clip);
-                          }}
-                          className="shrink-0 bg-app/90 px-1 text-[10px] font-bold leading-[20px] text-ink hover:bg-danger hover:text-white"
-                        >
-                          ×
-                        </button>
-                      ) : null}
-                    </>
-                  );
+                  const canDrag = Boolean(clip.editable && !clip.locked);
                   return (
                     <div
                       key={clip.id}
                       data-clip-id={clip.id}
                       className={[
                         "absolute top-1.5",
-                        selected || dockOpen ? "z-20" : "z-10"
+                        selected ? "z-20" : "z-10"
                       ].join(" ")}
                       style={clipStyle(clip, pixelsPerSecond)}
-                      onMouseEnter={() => showClipActions(clip.id)}
-                      onMouseLeave={hideClipActions}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (disabled) {
+                          return;
+                        }
+                        const canLock = Boolean(onToggleLock && !clip.placeholder);
+                        const canRemove = clipCanRemove(clip) && !clip.locked;
+                        if (!canLock && !canRemove) {
+                          return;
+                        }
+                        onSelectClip?.(clip.id);
+                        setMenu({
+                          clip,
+                          x: Math.min(event.clientX, window.innerWidth - 168),
+                          y: Math.min(event.clientY, window.innerHeight - 96)
+                        });
+                      }}
                     >
                       <div
                         className={[
@@ -520,23 +502,23 @@ function TimelineTracksComponent({
                       ) : null}
                       <button
                         type="button"
-                        disabled={disabled || !clip.editable}
-                        title={
-                          clipOpensAssetPicker(clip)
-                            ? `${clip.label} · Click để đổi hoặc gỡ`
-                            : clip.label
-                        }
+                        disabled={disabled}
+                        title={clip.label}
                         onPointerDown={(event) => {
-                          if (disabled || !clip.editable) {
+                          if (disabled || event.button !== 0) {
+                            return;
+                          }
+                          if (!canDrag) {
+                            event.stopPropagation();
+                            onSelectClip?.(clip.id);
+                            onSeek(clip.start);
                             return;
                           }
                           beginDrag(event, {
                             clipId: clip.id,
                             mode: "move",
                             originStart: clip.start,
-                            originDuration: clip.duration,
-                            target: clip.target,
-                            opensPicker: clipOpensAssetPicker(clip)
+                            originDuration: clip.duration
                           });
                         }}
                         className={[
@@ -544,7 +526,7 @@ function TimelineTracksComponent({
                           clip.placeholder
                             ? "border border-dashed border-line bg-transparent text-ink-3"
                             : `${TRACK_COLORS[track.id]} text-zinc-950`,
-                          clip.editable
+                          canDrag
                             ? "hover:brightness-110"
                             : "cursor-default opacity-70"
                         ].join(" ")}
@@ -577,22 +559,7 @@ function TimelineTracksComponent({
                           }}
                         />
                       ) : null}
-                      {!dockOutside ? actionButtons : null}
                       </div>
-                      {dockOutside && (showLock || removable) ? (
-                        <div
-                          className={[
-                            "absolute top-0 left-full z-30 -ml-1 flex rounded border border-line bg-app/90 pl-1 shadow-sm",
-                            dockOpen
-                              ? "opacity-100"
-                              : "pointer-events-none opacity-0"
-                          ].join(" ")}
-                          onMouseEnter={() => showClipActions(clip.id)}
-                          onMouseLeave={hideClipActions}
-                        >
-                          {actionButtons}
-                        </div>
-                      ) : null}
                     </div>
                   );
                 })}
@@ -609,6 +576,40 @@ function TimelineTracksComponent({
           </div>
         </div>
       </div>
+      {menu ? (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[148px] rounded-md border border-line bg-panel py-1 shadow-lg"
+          style={{ left: menu.x, top: menu.y }}
+        >
+          {onToggleLock && !menu.clip.placeholder ? (
+            <button
+              type="button"
+              disabled={disabled}
+              className="block w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-elevated"
+              onClick={() => {
+                onToggleLock(menu.clip.id);
+                setMenu(undefined);
+              }}
+            >
+              {menu.clip.locked ? "Mở khóa" : "Khóa"}
+            </button>
+          ) : null}
+          {clipCanRemove(menu.clip) ? (
+            <button
+              type="button"
+              disabled={disabled || menu.clip.locked}
+              className="block w-full px-3 py-1.5 text-left text-[12px] text-danger hover:bg-danger/10 disabled:opacity-40"
+              onClick={() => {
+                onRemoveClip(menu.clip);
+                setMenu(undefined);
+              }}
+            >
+              Gỡ
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

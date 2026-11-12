@@ -63,7 +63,7 @@ export function VoiceStep({
             Voice generation
           </h3>
           <p className="mt-0.5 text-[12px] text-ink-2">
-            Chỉnh text bên trái. Chọn lại voice ở bên phải rồi Generate.
+            Chỉnh text bên trái. Bấm AI chọn voice, hoặc chọn tay rồi Generate.
           </p>
         </div>
         {operationLoading ? (
@@ -99,7 +99,7 @@ export function VoiceStep({
         <Textarea
           value={draftTopicTitle}
           maxLength={TOPIC_TITLE_MAX_LENGTH}
-          disabled={operationLoading || !project?.analysis}
+          disabled={operationLoading}
           placeholder="Nhập topic title..."
           onChange={(event) => onTopicTitleChange(event.target.value)}
           onBlur={onTopicTitleBlur}
@@ -111,7 +111,7 @@ export function VoiceStep({
               type="checkbox"
               className="accent-accent"
               checked={!skipTopicTitleVoice}
-              disabled={operationLoading || !project?.analysis}
+              disabled={operationLoading}
               onChange={(event) =>
                 onTitleVoiceModeChange(event.target.checked ? "on" : "off")
               }
@@ -140,7 +140,7 @@ export function VoiceStep({
             <p className="mt-2 text-[11px] text-ink-3">Voice</p>
             <VoiceSelect
               value={project?.analysis?.topicTitleVoiceId ?? "ngoc-huyen"}
-              disabled={operationLoading || !project?.analysis}
+              disabled={operationLoading}
               onChange={(voiceId) => onVoiceChange("topic-title", voiceId)}
             />
             {audioAssets["topic-title.mp3"] ? (
@@ -198,8 +198,8 @@ export function VoiceStep({
                 Topic voice
               </p>
               <VoiceSelect
-                value={project?.analysis?.topicVoiceId}
-                disabled={operationLoading || !project?.analysis}
+                value={project?.analysis?.topicVoiceId ?? "ngoc-huyen"}
+                disabled={operationLoading}
                 onChange={(voiceId) => onVoiceChange("topic", voiceId)}
               />
               <p className="mt-2 text-[12px] text-ink-3">
@@ -271,8 +271,8 @@ export function VoiceStep({
                       Selected voice
                     </p>
                     <VoiceSelect
-                      value={reaction?.voiceId}
-                      disabled={operationLoading || !reaction}
+                      value={reaction?.voiceId ?? "ngoc-huyen"}
+                      disabled={operationLoading}
                       onChange={(voiceId) => onVoiceChange(target, voiceId)}
                     />
                     <p className="mt-2 text-[12px] text-ink-3">

@@ -13,11 +13,65 @@ export const TOPIC_TITLE_PADDING = 64;
 export const TOPIC_TITLE_ANIMATION_DURATION = 0.35;
 export const TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH = 200;
 export const TOPIC_TITLE_MAX_LENGTH = 80;
+/** Sentinel commentIndex for meme/video/SFX placed right after the topic voice. */
+export const TOPIC_POST_COMMENT_INDEX = -1;
+
+export function isTopicPostIndex(
+  index: number | null | undefined
+): boolean {
+  return index === TOPIC_POST_COMMENT_INDEX;
+}
+
+export function isTopicVoiceClip(clip: {
+  id: string;
+  trackId: string;
+  commentIndex?: number | null;
+}): boolean {
+  if (clip.trackId !== "voice") {
+    return false;
+  }
+  if (clip.id === "topic-title-voice") {
+    return false;
+  }
+  return (
+    clip.commentIndex === null ||
+    clip.id.startsWith("voice-topic")
+  );
+}
 
 export function normalizeTopicTitle(
   title: string | undefined
 ): string {
   return (title ?? "").trim().slice(0, TOPIC_TITLE_MAX_LENGTH);
+}
+
+export function isTopicTitleMissing(
+  title: string | undefined
+): boolean {
+  return normalizeTopicTitle(title).length === 0;
+}
+
+export const DEFAULT_TOPIC_TITLE = "Title";
+
+export function resolveTimelineTopicTitle(
+  analysisTitle?: string,
+  contentTitle?: string,
+  postText?: string
+): string {
+  const named =
+    normalizeTopicTitle(analysisTitle) ||
+    normalizeTopicTitle(contentTitle);
+  if (named) {
+    return named;
+  }
+  const text = (postText ?? "").trim();
+  if (!text) {
+    return DEFAULT_TOPIC_TITLE;
+  }
+  if (text.length <= TOPIC_TITLE_MAX_LENGTH) {
+    return text;
+  }
+  return `${text.slice(0, TOPIC_TITLE_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
 export function isTopicIntroEnabled(

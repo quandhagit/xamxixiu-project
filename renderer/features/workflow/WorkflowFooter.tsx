@@ -35,7 +35,6 @@ export function WorkflowFooter({
         {operationLoading
           ? "Đang xử lý..."
           : currentStep === "CAPTURE" ||
-              currentStep === "ANALYZE" ||
               currentStep === "VOICE"
             ? "Chạy bước tiếp →"
             : "Next →"}

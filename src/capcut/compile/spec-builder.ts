@@ -205,14 +205,14 @@ export async function buildCompileSpec(
       ref: "topic-title-voice"
     });
   }
-  if (timeline.topicIntro) {
+  if (timeline.topicIntro?.openSfxFile) {
     sfxItems.push({
       path: absoluteAsset(
         timeline.topicIntro.openSfxFile
       ),
       start: 0,
       duration: await safeAudioDuration(
-        timeline.topicIntro.openSfxDuration,
+        timeline.topicIntro.openSfxDuration ?? 0,
         absoluteAsset(
           timeline.topicIntro.openSfxFile
         )

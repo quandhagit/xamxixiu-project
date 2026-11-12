@@ -49,11 +49,11 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
     builtIn: true,
     animation: "zoom-in",
     animationDuration: 0.18,
-    scale: 0.72,
-    x: 0.08,
-    y: -0.12,
+    scale: 1,
+    x: 0,
+    y: 0,
     fadeIn: 0.08,
-    sfxOffset: 0.12,
+    sfxOffset: 0,
     minDuration: 1.2
   },
   {
@@ -62,9 +62,9 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
     builtIn: true,
     animation: "slide-up",
     animationDuration: 0.28,
-    scale: 0.7,
-    x: -0.06,
-    y: -0.08,
+    scale: 1,
+    x: 0,
+    y: 0,
     fadeIn: 0.12,
     sfxOffset: 0,
     minDuration: 1.4
@@ -75,9 +75,9 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
     builtIn: true,
     animation: "shake",
     animationDuration: 0.25,
-    scale: 0.75,
+    scale: 1,
     x: 0,
-    y: 0.04,
+    y: 0,
     fadeIn: 0.05,
     sfxOffset: 0,
     minDuration: 1
@@ -88,11 +88,11 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
     builtIn: true,
     animation: "fade-in",
     animationDuration: 0,
-    scale: 0.65,
-    x: 0.18,
-    y: 0.14,
+    scale: 1,
+    x: 0,
+    y: 0,
     fadeIn: 0.25,
-    sfxOffset: 0.05,
+    sfxOffset: 0,
     minDuration: 1.2
   },
   {
@@ -340,9 +340,13 @@ export function shouldPreserveCombo(
   clip: ComboBake,
   userCombos: MemeCombo[] = []
 ): boolean {
-  return Boolean(
-    clip.comboLocked || isCustomCombo(clip, userCombos)
-  );
+  if (clip.comboLocked) {
+    return true;
+  }
+  if (isBuiltInComboId(clip.comboId ?? "")) {
+    return false;
+  }
+  return isCustomCombo(clip, userCombos);
 }
 
 export function copyComboBake<T extends ComboBake>(

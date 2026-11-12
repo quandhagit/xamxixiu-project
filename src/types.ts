@@ -136,6 +136,10 @@ export interface ThreadAnalysis {
   topicVoiceId?: string;
   topicTitleVoiceId?: string;
   topicMemeId?: string | null;
+  /** Meme or video overlay placed immediately after the topic voice. */
+  topicPostMemeId?: string | null;
+  /** SFX placed immediately after the topic voice. */
+  topicPostSfxId?: string | null;
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
 
@@ -234,8 +238,8 @@ export interface TimelineTopicIntro {
   title: string;
   titleVoiceFile?: string;
   titleVoiceDuration: number;
-  openSfxFile: string;
-  openSfxDuration: number;
+  openSfxFile?: string;
+  openSfxDuration?: number;
   titleCardFile?: string;
   memeFile?: string;
   animationDuration: number;

@@ -22,6 +22,7 @@ import { normalizeTopicTitle } from "../timeline/topic-constants.js";
 import type { TimelineProject } from "../timeline/project.js";
 import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
 import { stampComboFromClips } from "../timeline/meme-combo.js";
+import { createDefaultAnalysis } from "../ai/default-analysis.js";
 
 export interface ProjectSummary {
   id: string;
@@ -297,6 +298,21 @@ export class ProjectStore {
     });
   }
 
+  async ensureAnalysis(projectId: string): Promise<ThreadAnalysis> {
+    const directory = this.getProjectDirectory(projectId);
+    const analysisFile = path.join(directory, "analysis.json");
+    const existing = await readJson<ThreadAnalysis>(analysisFile);
+    const content =
+      (await readJson<ContentData>(path.join(directory, "content.json"))) ??
+      (await readJson<ThreadData>(path.join(directory, "thread.json")));
+    if (!content) {
+      throw new Error("Project content is missing");
+    }
+    const analysis = createDefaultAnalysis(content, existing ?? undefined);
+    await atomicWriteJson(analysisFile, analysis);
+    return analysis;
+  }
+
   async saveVoiceAssignment(
     projectId: string,
     target: AudioFailureTarget,
@@ -312,12 +328,7 @@ export class ProjectStore {
       directory,
       "analysis.json"
     );
-    const analysis =
-      await readJson<ThreadAnalysis>(analysisFile);
-
-    if (!analysis) {
-      throw new Error("Project analysis is missing");
-    }
+    const analysis = await this.ensureAnalysis(projectId);
 
     if (target === "topic") {
       analysis.topicVoiceId = voiceId;
@@ -426,6 +437,30 @@ export class ProjectStore {
         }
         analysis.topicMemeId = id ?? null;
       }
+      if ("topicPostMemeId" in selections) {
+        const id = selections.topicPostMemeId;
+        if (
+          id &&
+          !assets.some(
+            (asset) => asset.id === id && asset.type === "meme"
+          )
+        ) {
+          throw new Error(`Unknown meme asset: ${id}`);
+        }
+        analysis.topicPostMemeId = id ?? null;
+      }
+      if ("topicPostSfxId" in selections) {
+        const id = selections.topicPostSfxId;
+        if (
+          id &&
+          !assets.some(
+            (asset) => asset.id === id && asset.type === "sfx"
+          )
+        ) {
+          throw new Error(`Unknown sfx asset: ${id}`);
+        }
+        analysis.topicPostSfxId = id ?? null;
+      }
       if ("topicIntroEnabled" in selections) {
         analysis.topicIntroEnabled =
           selections.topicIntroEnabled !== false;
@@ -449,6 +484,16 @@ export class ProjectStore {
     return project;
   }
 
+  async writeReactions(
+    projectId: string,
+    reactions: MatchedReaction[]
+  ): Promise<void> {
+    await atomicWriteJson(
+      path.join(this.getProjectDirectory(projectId), "reactions.json"),
+      reactions
+    );
+  }
+
   async saveTopicIntro(
     projectId: string,
     update: {
@@ -467,10 +512,7 @@ export class ProjectStore {
 
     const directory = this.getProjectDirectory(projectId);
     const analysisFile = path.join(directory, "analysis.json");
-    const analysis = await readJson<ThreadAnalysis>(analysisFile);
-    if (!analysis) {
-      throw new Error("Project analysis is missing");
-    }
+    const analysis = await this.ensureAnalysis(projectId);
 
     if (update.topicTitle !== undefined) {
       if (typeof update.topicTitle !== "string") {
@@ -508,6 +550,7 @@ export class ProjectStore {
   async rebuildTimeline(
     projectId: string
   ): Promise<ProjectState> {
+    await this.ensureAnalysis(projectId);
     const directory = this.getProjectDirectory(projectId);
     const timeline = await buildTimeline(directory);
     await atomicWriteJson(

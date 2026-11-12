@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { ContentData } from "../../../src/types";
 import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
@@ -7,6 +8,7 @@ import { CaptureComments } from "../capture/CaptureComments";
 import { Button } from "../ui/Button";
 import { Panel } from "../ui/Panel";
 import { Textarea } from "../ui/Textarea";
+import { cn } from "../ui/cn";
 
 export function CaptureStep({
   draftContent,
@@ -16,6 +18,8 @@ export function CaptureStep({
   operationLoading,
   hasProject,
   draftTopicTitle,
+  titleInvalid = false,
+  titleInvalidNonce = 0,
   titleSuggestions,
   textDiffs,
   onReset,
@@ -38,6 +42,8 @@ export function CaptureStep({
   operationLoading: boolean;
   hasProject: boolean;
   draftTopicTitle: string;
+  titleInvalid?: boolean;
+  titleInvalidNonce?: number;
   titleSuggestions: string[];
   textDiffs: SpeechTextDiff[];
   onReset: () => void;
@@ -56,6 +62,20 @@ export function CaptureStep({
   onSuggestTitles: () => void;
   onPickTitle: (title: string) => void;
 }): React.ReactElement {
+  const titlePanelRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!titleInvalid) {
+      return;
+    }
+    titlePanelRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+    titleInputRef.current?.focus();
+  }, [titleInvalid, titleInvalidNonce]);
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
@@ -129,7 +149,10 @@ export function CaptureStep({
             </Panel>
           </div>
 
-          <Panel>
+          <div ref={titlePanelRef}>
+          <Panel
+            className={titleInvalid ? "border-danger" : undefined}
+          >
             <div className="flex items-center justify-between gap-3">
               <p className="text-[11px] uppercase tracking-wide text-ink-3">
                 Topic title
@@ -139,14 +162,21 @@ export function CaptureStep({
               </span>
             </div>
             <Textarea
+              ref={titleInputRef}
               value={draftTopicTitle}
               maxLength={TOPIC_TITLE_MAX_LENGTH}
               placeholder="Bắt buộc nhập title, hoặc bấm AI gợi ý"
               onChange={(event) => onTopicTitleChange(event.target.value)}
-              className="mt-2 min-h-[72px] leading-5"
+              className={cn(
+                "mt-2 min-h-[72px] leading-5",
+                titleInvalid && "border-danger focus:ring-danger"
+              )}
             />
-            {!draftTopicTitle.trim() ? (
-              <p className="mt-2 text-[12px] text-warning">
+            {!draftTopicTitle.trim() || titleInvalid ? (
+              <p className={cn(
+                "mt-2 text-[12px]",
+                titleInvalid ? "text-danger" : "text-warning"
+              )}>
                 Chưa có topic title. Hãy nhập hoặc generate bằng AI.
               </p>
             ) : null}
@@ -171,6 +201,7 @@ export function CaptureStep({
               ))}
             </div>
           </Panel>
+          </div>
 
           {textDiffs.length > 0 ? (
             <Panel className="space-y-2">

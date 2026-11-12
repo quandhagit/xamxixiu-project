@@ -24,6 +24,7 @@ import { getTopicMemeLayout } from "./topic-layout.js";
 import {
   TOPIC_TITLE_ANIMATION_DURATION,
   isTopicIntroEnabled,
+  resolveTimelineTopicTitle,
   shouldGenerateTopicTitleVoice
 } from "./topic-constants.js";
 import { readMediaDuration } from "../media-duration.js";
@@ -334,6 +335,89 @@ function getDescendantIndexes(
   return result;
 }
 
+async function createPostVoiceOverlays(
+  reaction: Pick<
+    MatchedReaction,
+    "meme" | "sfx" | "duration" | "animation" | "comboId" | "comboLocked"
+  > | undefined,
+  overlayStart: number
+): Promise<{ overlays: TimelineOverlay[]; extraDuration: number }> {
+  const overlays: TimelineOverlay[] = [];
+  let extraDuration = 0;
+  if (!reaction) {
+    return { overlays, extraDuration };
+  }
+
+  if (reaction.meme) {
+    const memeAbsolute = path.resolve(reaction.meme.file);
+    await assertFile(memeAbsolute, `Meme asset ${reaction.meme.id}`);
+    const isVideo = reaction.meme.mediaKind === "video";
+    const combo = isVideo
+      ? getBuiltinCombo("none")
+      : (findCombo(reaction.comboId) ?? getBuiltinCombo("none"));
+    const memeDuration = isVideo
+      ? await readMediaDuration(memeAbsolute)
+      : Math.max(
+        combo.minDuration,
+        MIN_OVERLAY_DURATION,
+        reaction.duration
+      );
+    const baked = applyCombo(
+      { file: projectPath(reaction.meme.file) },
+      combo
+    );
+    const memeOverlay = createOverlay(
+      "meme",
+      baked.file ?? projectPath(reaction.meme.file),
+      memeDuration,
+      ((baked.animation === "shake"
+        ? "shake-1"
+        : baked.animation) as TimelineOverlay["animation"]) ??
+        reaction.animation,
+      overlayStart,
+      baked.fadeIn,
+      baked.animationDuration
+    );
+    memeOverlay.scale = baked.scale;
+    memeOverlay.x = baked.x;
+    memeOverlay.y = baked.y;
+    memeOverlay.comboId = baked.comboId;
+    memeOverlay.sfxOffset = baked.sfxOffset;
+    memeOverlay.comboLocked = reaction.comboLocked;
+    overlays.push(memeOverlay);
+    extraDuration = Math.max(extraDuration, memeDuration);
+  }
+
+  if (reaction.sfx && reaction.meme?.mediaKind !== "video") {
+    const sfxAbsolute = path.resolve(reaction.sfx.file);
+    await assertFile(sfxAbsolute, `SFX asset ${reaction.sfx.id}`);
+    const sfxDuration = await readMediaDuration(sfxAbsolute);
+    const memeOverlay = overlays.find((overlay) => overlay.type === "meme");
+    const sfxStart = overlayStart + (memeOverlay?.sfxOffset ?? 0);
+    overlays.push(
+      createOverlay(
+        "sfx",
+        projectPath(reaction.sfx.file),
+        sfxDuration,
+        undefined,
+        sfxStart
+      )
+    );
+    extraDuration = Math.max(
+      extraDuration,
+      (memeOverlay?.sfxOffset ?? 0) + sfxDuration
+    );
+    if (memeOverlay) {
+      memeOverlay.duration = Math.max(
+        memeOverlay.duration,
+        (memeOverlay.sfxOffset ?? 0) + sfxDuration
+      );
+    }
+  }
+
+  return { overlays, extraDuration };
+}
+
 async function createCommentScene(
   projectDir: string,
   commentIndex: number,
@@ -361,95 +445,8 @@ async function createCommentScene(
 
   const audioDuration =
     await readMediaDuration(audioAbsolute);
-  const overlays: TimelineOverlay[] = [];
-  let postVoiceDuration = 0;
-
-  if (reaction?.meme) {
-    const memeAbsolute = path.resolve(
-      reaction.meme.file
-    );
-    await assertFile(
-      memeAbsolute,
-      `Meme asset ${reaction.meme.id}`
-    );
-    const isVideo = reaction.meme.mediaKind === "video";
-    const combo =
-      isVideo
-        ? getBuiltinCombo("none")
-        : (findCombo(reaction.comboId) ?? getBuiltinCombo("none"));
-    const memeDuration =
-      isVideo
-        ? await readMediaDuration(memeAbsolute)
-        : Math.max(
-          combo.minDuration,
-          MIN_OVERLAY_DURATION,
-          reaction.duration
-        );
-    const baked = applyCombo(
-      { file: projectPath(reaction.meme.file) },
-      combo
-    );
-    const memeOverlay = createOverlay(
-      "meme",
-      baked.file ?? projectPath(reaction.meme.file),
-      memeDuration,
-      ((baked.animation === "shake"
-        ? "shake-1"
-        : baked.animation) as TimelineOverlay["animation"]) ??
-        reaction.animation,
-      audioDuration,
-      baked.fadeIn,
-      baked.animationDuration
-    );
-    memeOverlay.scale = baked.scale;
-    memeOverlay.x = baked.x;
-    memeOverlay.y = baked.y;
-    memeOverlay.comboId = baked.comboId;
-    memeOverlay.sfxOffset = baked.sfxOffset;
-    memeOverlay.comboLocked = reaction.comboLocked;
-    overlays.push(memeOverlay);
-    postVoiceDuration = Math.max(
-      postVoiceDuration,
-      memeDuration
-    );
-  }
-
-  if (reaction?.sfx) {
-    const sfxAbsolute = path.resolve(
-      reaction.sfx.file
-    );
-    await assertFile(
-      sfxAbsolute,
-      `SFX asset ${reaction.sfx.id}`
-    );
-    const sfxDuration = await readMediaDuration(
-      sfxAbsolute
-    );
-    const memeOverlay = overlays.find(
-      (overlay) => overlay.type === "meme"
-    );
-    const sfxStart =
-      audioDuration + (memeOverlay?.sfxOffset ?? 0);
-    overlays.push(
-      createOverlay(
-        "sfx",
-        projectPath(reaction.sfx.file),
-        sfxDuration,
-        undefined,
-        sfxStart
-      )
-    );
-    postVoiceDuration = Math.max(
-      postVoiceDuration,
-      (memeOverlay?.sfxOffset ?? 0) + sfxDuration
-    );
-    if (memeOverlay) {
-      memeOverlay.duration = Math.max(
-        memeOverlay.duration,
-        (memeOverlay.sfxOffset ?? 0) + sfxDuration
-      );
-    }
-  }
+  const { overlays, extraDuration: postVoiceDuration } =
+    await createPostVoiceOverlays(reaction, audioDuration);
 
   return createScene(
     `comment-${commentIndex}`,
@@ -533,9 +530,11 @@ export async function buildTimeline(
 
   const topicDuration =
     await readMediaDuration(topicAudio);
-  const topicTitle =
-    inputs.analysis.topicTitle?.trim() ||
-    `${thread.text.slice(0, 77).trim()}...`;
+  const topicTitle = resolveTimelineTopicTitle(
+    inputs.analysis.topicTitle,
+    thread.topicTitle,
+    thread.text
+  );
   const titleAudioAbsolute = path.join(
     projectDir,
     "audio",
@@ -573,25 +572,23 @@ export async function buildTimeline(
     await fs.access(titleAudioAbsolute)
       .then(() => true)
       .catch(() => false);
-  const hasTopicIntro =
-    isTopicIntroEnabled(inputs.analysis) &&
-    Boolean(inputs.analysis.topicTitle?.trim()) &&
-    Boolean(openTopicSfx) &&
-    (introCase === "short" || hasTitleAudio);
+  const hasTopicIntro = isTopicIntroEnabled(inputs.analysis);
+  const effectiveIntroCase =
+    introCase === "long" && hasTitleAudio ? "long" : "short";
   const titleAudioDuration =
-    hasTopicIntro && introCase === "long"
+    hasTopicIntro && effectiveIntroCase === "long"
       ? await readMediaDuration(titleAudioAbsolute)
       : 0;
   const blocksDuration =
-    introCase === "long"
+    effectiveIntroCase === "long"
       ? TOPIC_TITLE_ANIMATION_DURATION + titleAudioDuration
       : Math.min(3, topicDuration);
 
   if (hasTopicIntro) {
     topicCaptureStart =
-      introCase === "long" ? blocksDuration : 0;
+      effectiveIntroCase === "long" ? blocksDuration : 0;
     topicAudioStart =
-      introCase === "long" ? blocksDuration : 0;
+      effectiveIntroCase === "long" ? blocksDuration : 0;
   }
 
   if (topicMeme) {
@@ -623,18 +620,44 @@ export async function buildTimeline(
       topicOverlay.y = topicMemeLayout.y;
     }
   }
-  if (hasTopicIntro && openTopicSfx) {
-    const openTopicSfxDuration =
-      await readMediaDuration(openTopicSfx);
+
+  const topicPostMeme =
+    findAsset(inputs.assets, {
+      id: inputs.analysis.topicPostMemeId,
+      type: "meme"
+    });
+  const topicPostSfx =
+    topicPostMeme?.mediaKind === "video"
+      ? undefined
+      : findAsset(inputs.assets, {
+        id: inputs.analysis.topicPostSfxId,
+        type: "sfx"
+      });
+  const topicPostOverlays = await createPostVoiceOverlays(
+    topicPostMeme || topicPostSfx
+      ? {
+        meme: topicPostMeme ?? null,
+        sfx: topicPostSfx ?? null,
+        animation: "none",
+        duration: MIN_OVERLAY_DURATION
+      }
+      : undefined,
+    topicAudioStart + topicDuration
+  );
+  topicOverlays.push(...topicPostOverlays.overlays);
+  if (hasTopicIntro) {
     const titleCardAbsolute =
       await renderTopicTitleCard(
         projectDir,
         topicTitle
       );
+    const openTopicSfxDuration = openTopicSfx
+      ? await readMediaDuration(openTopicSfx)
+      : 0;
     topicIntro = {
-      case: introCase,
+      case: effectiveIntroCase,
       title: topicTitle,
-      ...(introCase === "long" && hasTitleAudio
+      ...(effectiveIntroCase === "long" && hasTitleAudio
         ? {
           titleVoiceFile: timelineFile(
             titleAudioAbsolute
@@ -642,8 +665,12 @@ export async function buildTimeline(
         }
         : {}),
       titleVoiceDuration: titleAudioDuration,
-      openSfxFile: timelineFile(openTopicSfx),
-      openSfxDuration: openTopicSfxDuration,
+      ...(openTopicSfx
+        ? {
+          openSfxFile: timelineFile(openTopicSfx),
+          openSfxDuration: openTopicSfxDuration
+        }
+        : {}),
       titleCardFile: timelineFile(
         titleCardAbsolute
       ),

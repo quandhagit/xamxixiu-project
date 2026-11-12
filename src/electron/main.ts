@@ -13,6 +13,8 @@ import {
 import {
   handleAssetMediaRequest
 } from "./media-protocol.js";
+import { installMainProcessErrorHandlers } from "./process-errors.js";
+import { isIgnorableStreamClosedError } from "./stream-closed-error.js";
 
 import {
   registerIpc
@@ -39,6 +41,8 @@ import {
   resolveFfmpegPath,
   resolveFfprobePath
 } from "../binaries.js";
+
+installMainProcessErrorHandlers();
 
 const rendererUrl =
   process.env.XAMXIXIU_RENDERER_URL ??
@@ -145,8 +149,14 @@ function registerRendererProtocol(): void {
       return new Response("Not found", { status: 404 });
     }
     try {
+      if (request.signal.aborted) {
+        return new Response(null, { status: 499 });
+      }
       return await net.fetch(pathToFileURL(file).href);
-    } catch {
+    } catch (error) {
+      if (request.signal.aborted || isIgnorableStreamClosedError(error)) {
+        return new Response(null, { status: 499 });
+      }
       return new Response("Not found", { status: 404 });
     }
   });
@@ -243,8 +253,14 @@ app.whenReady().then(async () => {
 
   protocol.handle("xammedia", async (request) => {
     try {
+      if (request.signal.aborted) {
+        return new Response(null, { status: 499 });
+      }
       return await handleAssetMediaRequest(request, library);
-    } catch {
+    } catch (error) {
+      if (request.signal.aborted || isIgnorableStreamClosedError(error)) {
+        return new Response(null, { status: 499 });
+      }
       return new Response("Preview failed", { status: 500 });
     }
   });

@@ -7,7 +7,7 @@ import type {
   TimelineAssetTarget
 } from "../../../src/electron/ipc-types";
 import { canRemoveTimelineAsset } from "../../../src/timeline/replace-asset";
-import { isCommentMemeOrSfxClip } from "../../../src/timeline/comment-overlay-clips";
+import { isBulkClearableOverlayClip } from "../../../src/timeline/comment-overlay-clips";
 import type { ProjectState } from "../../../src/project/store";
 import type { VideoTimeline } from "../../../src/types";
 import type { TimelineProject } from "../../../src/timeline/project";
@@ -53,6 +53,13 @@ import {
   pickerTitle,
   selectedAssetId
 } from "./asset-picker";
+import {
+  clipCanRemove,
+  clipChooseLabel,
+  clipHasAssetPickerTarget,
+  findTrackClip,
+  type TimelineTrackClip
+} from "./timeline-tracks";
 import { TimelineTracks } from "./TimelineTracks";
 import { useTimelinePreview } from "./use-timeline-preview";
 import { useErrorToast } from "../app/ErrorToast";
@@ -299,6 +306,28 @@ export function TimelineWorkspace({
     }
   }
 
+  function removeTrackClip(clip: TimelineTrackClip): void {
+    if (selectedClipId === clip.id) {
+      setSelectedClipId(undefined);
+    }
+    if (clip.trackId === "beep") {
+      const current = draftRef.current ?? timelineProject;
+      if (!current) {
+        return;
+      }
+      void persistEditor(removeClip(current, clip.id));
+      return;
+    }
+    if (!clip.target) {
+      return;
+    }
+    if (clip.target.kind === "topic-title") {
+      void updateTopicIntro({ enabled: false });
+      return;
+    }
+    void replaceAsset(clip.target, null);
+  }
+
   async function undoEdit(): Promise<void> {
     const previous = history[history.length - 1];
     if (!previous) {
@@ -421,7 +450,9 @@ export function TimelineWorkspace({
             size="sm"
             disabled={
               busy ||
-              !editorProject?.clips.some((clip) => isCommentMemeOrSfxClip(clip))
+              !editorProject?.clips.some((clip) =>
+                isBulkClearableOverlayClip(clip)
+              )
             }
             onClick={() => void clearTimelineMemes()}
           >
@@ -552,6 +583,24 @@ export function TimelineWorkspace({
                   userCombos={userCombos}
                   onCombosChange={setUserCombos}
                   onChange={(next) => void persistEditor(next)}
+                  onChoose={(clipTarget) => {
+                    if (clipTarget.kind !== "topic-title") {
+                      setTarget(clipTarget);
+                      return;
+                    }
+                    if (timeline?.topicIntro) {
+                      setEditingTitle(
+                        analysis?.topicTitle ?? timeline.topicIntro.title
+                      );
+                      return;
+                    }
+                    if (analysis?.topicTitle?.trim()) {
+                      void updateTopicIntro({ enabled: true });
+                      return;
+                    }
+                    setEditingTitle(analysis?.topicTitle ?? "");
+                  }}
+                  onRemove={removeTrackClip}
                   onSplit={() => {
                     if (!editorProject) {
                       return;
@@ -586,44 +635,7 @@ export function TimelineWorkspace({
               preview.setPreviewPlaying(false);
               preview.setPreviewTime(time);
             }}
-            onEditClip={(clipTarget) => {
-              if (clipTarget.kind !== "topic-title") {
-                setTarget(clipTarget);
-                return;
-              }
-              if (timeline?.topicIntro) {
-                setEditingTitle(
-                  analysis?.topicTitle ?? timeline.topicIntro.title
-                );
-                return;
-              }
-              if (analysis?.topicTitle?.trim()) {
-                void updateTopicIntro({ enabled: true });
-                return;
-              }
-              setEditingTitle(analysis?.topicTitle ?? "");
-            }}
-            onRemoveClip={(clip) => {
-              if (clip.trackId === "beep") {
-                const current = draftRef.current ?? timelineProject;
-                if (!current) {
-                  return;
-                }
-                if (selectedClipId === clip.id) {
-                  setSelectedClipId(undefined);
-                }
-                void persistEditor(removeClip(current, clip.id));
-                return;
-              }
-              if (!clip.target) {
-                return;
-              }
-              if (clip.target.kind === "topic-title") {
-                void updateTopicIntro({ enabled: false });
-                return;
-              }
-              void replaceAsset(clip.target, null);
-            }}
+            onRemoveClip={removeTrackClip}
             onSelectClip={setSelectedClipId}
             onDragStart={() => {
               draggingRef.current = true;
@@ -770,6 +782,8 @@ function ClipFadePanel({
   userCombos,
   onCombosChange,
   onChange,
+  onChoose,
+  onRemove,
   onSplit
 }: {
   project: TimelineProject;
@@ -778,12 +792,41 @@ function ClipFadePanel({
   userCombos: MemeCombo[];
   onCombosChange: (combos: MemeCombo[]) => void;
   onChange: (project: TimelineProject) => void;
+  onChoose: (target: TimelineAssetTarget) => void;
+  onRemove: (clip: TimelineTrackClip) => void;
   onSplit: () => void;
 }): React.ReactElement | null {
+  const trackClip = findTrackClip(project, clipId);
   const clip = project.clips.find((item) => item.id === clipId);
   const [comboName, setComboName] = useState("");
-  if (!clip) {
+  if (!trackClip && !clip) {
     return null;
+  }
+  const locked = Boolean(clip?.locked ?? trackClip?.locked);
+  const pickerTarget = trackClip?.target;
+  const canChoose = Boolean(
+    pickerTarget && trackClip && clipHasAssetPickerTarget(trackClip)
+  );
+  const removable = trackClip ? clipCanRemove(trackClip) : false;
+
+  if (!clip) {
+    return (
+      <div className="rounded-lg border border-line bg-panel p-2.5">
+        <p className="text-[12px] font-medium text-ink">
+          {trackClip?.label ?? "Clip"}
+        </p>
+        {trackClip?.target && clipHasAssetPickerTarget(trackClip) ? (
+          <Button
+            size="sm"
+            className="mt-2"
+            disabled={disabled || locked}
+            onClick={() => onChoose(trackClip.target!)}
+          >
+            {clipChooseLabel(trackClip.target)}
+          </Button>
+        ) : null}
+      </div>
+    );
   }
   const imageMeme =
     clip.trackId === "meme" &&
@@ -811,6 +854,29 @@ function ClipFadePanel({
   return (
     <div className="rounded-lg border border-line bg-panel p-2.5">
       <p className="text-[12px] font-medium text-ink">{clip.label}</p>
+      {canChoose || removable ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {canChoose && pickerTarget ? (
+            <Button
+              size="sm"
+              disabled={disabled || locked}
+              onClick={() => onChoose(pickerTarget)}
+            >
+              {clipChooseLabel(pickerTarget)}
+            </Button>
+          ) : null}
+          {removable && trackClip ? (
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={disabled || locked}
+              onClick={() => onRemove(trackClip)}
+            >
+              Gỡ
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {imageMeme || videoMeme ? (
         <label className="mt-2 block text-[11px] text-ink-2">
           Combo

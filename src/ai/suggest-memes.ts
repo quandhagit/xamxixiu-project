@@ -9,15 +9,22 @@ import {
   toPromptAsset,
   topicMemeAssets
 } from "../assets/prompt-catalog.js";
-import { ANALYZE_TARGET_COMMENT_COUNT } from "../comments/comment-constants.js";
-import type { ThreadAnalysis, ThreadData } from "../types.js";
+import { pickScoredAsset, scoreAssetForText } from "../assets/score-asset.js";
+import type {
+  ReactionEmotion,
+  ReactionEvent,
+  ThreadAnalysis,
+  ThreadData
+} from "../types.js";
 import { generateJsonWithRetry, parseModelJson } from "./json.js";
 import { applyMiddleCommentTransitionSfx, hasMemeOrVideo } from "./meme-rules.js";
 import {
   assignReactionCombos,
-  isBuiltInComboId,
-  memeCategoryForEmotion
+  comboFromEmotion,
+  isBuiltInComboId
 } from "../timeline/meme-combo.js";
+
+const CASUAL_MEME_DENSITY = 0.7;
 
 export interface SuggestedMemePatch {
   topicMemeId?: string | null;
@@ -33,6 +40,11 @@ export interface SuggestedMemePatch {
   }>;
 }
 
+export interface MemeSuggestionComment {
+  commentIndex: number;
+  text: string;
+}
+
 export async function suggestMemes(
   projectDir: string,
   existing: ThreadAnalysis
@@ -41,7 +53,7 @@ export async function suggestMemes(
   const thread = await readThread(projectDir);
   const selectableMemes = reactionMemeAssets(assets);
   const selectableSfx = reactionSfxAssets(assets);
-  const topicMemeIds = topicMemeAssets(assets).map((asset) => asset.id);
+  const topicMemes = topicMemeAssets(assets);
   const includedComments = thread.comments
     .map((comment, index) => ({ comment, index }))
     .filter(({ comment }) => !comment.excluded);
@@ -54,17 +66,22 @@ export async function suggestMemes(
   const videoTarget =
     videoCount === 0
       ? "There are no video memes. Use image memes plus SFX."
-      : `Prefer video memes when they fit (${videoCount} videos, ${imageCount} images). Humorous threads can use video on about 65% of ~${ANALYZE_TARGET_COMMENT_COUNT} comments, but only with real video ids from the list.`;
+      : `Video memes exist (${videoCount} videos, ${imageCount} images). Use a video meme only when the comment is a visual gag or needs a moving reaction. Do not target a video percentage.`;
 
   const prompt = `
 You are a short-form video editor picking meme/SFX/music/combo for a Threads video.
 Tone: ${existing.tone}. Topic type: ${existing.topicType}.
-Do not force memes on serious/sad/educational content.
-${videoTarget}
+Ignore stored emotion if it is "neutral" — infer punch from the comment text.
+Match meme ids to each comment using use / when / avoid. Skip an asset when avoid fits.
+Casual or humorous threads: put a meme on about 60–80% of comments, leaving breathing room.
+Serious, sad, or educational threads: fewer or no reaction memes.
+Never reuse the same memeAssetId or sfxAssetId across comments.
 Image memes MUST have an sfxAssetId from AVAILABLE SFX ASSETS. Video memes must have sfxAssetId null.
 Middle comments with no meme need sfxCategory "transition".
 comboId must be one of: punch, cringe, shock, soft, none. Video memes use none.
+Pick topicMemeId from AVAILABLE TOPIC MEMES when that list is not empty.
 Do not change voiceId values.
+${videoTarget}
 
 AVAILABLE MEME ASSETS:
 ${JSON.stringify(selectableMemes.map(toPromptAsset), null, 2)}
@@ -73,17 +90,13 @@ AVAILABLE SFX ASSETS:
 ${JSON.stringify(selectableSfx.map(toPromptAsset), null, 2)}
 
 AVAILABLE TOPIC MEMES:
-${JSON.stringify(topicMemeIds, null, 2)}
+${JSON.stringify(topicMemes.map(toPromptAsset), null, 2)}
 
 Post: ${thread.text}
 
 Comments:
 ${includedComments.map(({ comment, index }) => `
-Comment ${index} (voice ${
-    existing.reactions.find((reaction) => reaction.commentIndex === index)?.voiceId ?? "none"
-  }, emotion ${
-    existing.reactions.find((reaction) => reaction.commentIndex === index)?.emotion ?? "neutral"
-  }): ${comment.text}
+Comment ${index}: ${comment.text}
 `).join("\n")}
 
 Return JSON:
@@ -97,7 +110,7 @@ Return JSON:
     "sfxAssetId": "id or null",
     "sfxCategory": "transition or null",
     "comboId": "punch | cringe | shock | soft | none",
-    "candidates": ["id", "id", "id"]
+    "candidates": ["unused-meme-id", "unused-meme-id", "unused-meme-id"]
   }]
 }
 `;
@@ -109,7 +122,11 @@ Return JSON:
     existing,
     parsed,
     assets,
-    includedComments.map(({ index }) => index)
+    includedComments.map(({ index }) => index),
+    includedComments.map(({ comment, index }) => ({
+      commentIndex: index,
+      text: comment.text
+    }))
   );
 }
 
@@ -117,8 +134,13 @@ export function applyMemeSuggestions(
   existing: ThreadAnalysis,
   parsed: SuggestedMemePatch,
   assets: Asset[],
-  includedIndexes: number[]
+  includedIndexes: number[],
+  comments: MemeSuggestionComment[] = []
 ): ThreadAnalysis {
+  const commentsByIndex = new Map(
+    comments.map((item) => [item.commentIndex, item.text])
+  );
+  const candidatesByIndex = new Map<number, string[]>();
   const reactionsByIndex = new Map(
     existing.reactions.map((reaction) => [reaction.commentIndex, { ...reaction }])
   );
@@ -127,6 +149,7 @@ export function applyMemeSuggestions(
     if (!current) {
       continue;
     }
+    candidatesByIndex.set(item.commentIndex, item.candidates ?? []);
     reactionsByIndex.set(item.commentIndex, {
       ...current,
       memeAssetId: item.memeAssetId ?? null,
@@ -147,7 +170,11 @@ export function applyMemeSuggestions(
       (left, right) => left.commentIndex - right.commentIndex
     )
   };
-  fillMissingMemeSlots(analysis, assets);
+  if (!analysis.topicMemeId) {
+    analysis.topicMemeId = topicMemeAssets(assets)[0]?.id ?? null;
+  }
+  dedupeReactionAssets(analysis, assets, candidatesByIndex, commentsByIndex);
+  fillMissingMemeSlots(analysis, assets, commentsByIndex);
   const memeById = new Map(
     assets
       .filter((asset) => asset.type === "meme")
@@ -173,32 +200,203 @@ export function applyMemeSuggestions(
   return analysis;
 }
 
-function fillMissingMemeSlots(
-  analysis: ThreadAnalysis,
-  assets: Asset[]
+function commentQuery(
+  reaction: ReactionEvent,
+  commentsByIndex: Map<number, string>
+): string {
+  const text = commentsByIndex.get(reaction.commentIndex) ?? "";
+  const emotion =
+    reaction.emotion && reaction.emotion !== "neutral"
+      ? reaction.emotion
+      : "";
+  return `${emotion} ${text}`.trim();
+}
+
+function assignMeme(
+  reaction: ReactionEvent,
+  meme: Asset | null,
+  sfx: Asset | null
 ): void {
-  const hasImage = assets.some(
-    (asset) => asset.type === "meme" && asset.mediaKind === "image"
-  );
-  const hasVideo = assets.some(
-    (asset) => asset.type === "meme" && asset.mediaKind === "video"
-  );
-  const hasSfx = assets.some((asset) => asset.type === "sfx");
-  if (!hasImage && !hasVideo) {
+  reaction.memeAssetId = meme?.id ?? null;
+  reaction.memeCategory = meme?.category ?? null;
+  if (!meme) {
     return;
   }
+  if (meme.mediaKind === "video") {
+    reaction.sfxAssetId = null;
+    reaction.sfxCategory = null;
+    reaction.comboId = "none";
+    return;
+  }
+  reaction.sfxAssetId = sfx?.id ?? null;
+  reaction.sfxCategory = sfx?.category ?? null;
+  if (!isBuiltInComboId(reaction.comboId ?? "")) {
+    reaction.comboId = comboFromEmotion(
+      (meme.category as ReactionEmotion) || reaction.emotion,
+      { previousPunch: false }
+    ).id;
+  }
+}
+
+function pickMemeForComment(
+  memes: Asset[],
+  usedMemeIds: Set<string>,
+  query: string
+): Asset | null {
+  const images = memes.filter((asset) => asset.mediaKind === "image");
+  const videos = memes.filter((asset) => asset.mediaKind === "video");
+  return (
+    pickScoredAsset(images, usedMemeIds, query, false) ??
+    pickScoredAsset(videos, usedMemeIds, query, false)
+  );
+}
+
+function pickSfxForMeme(
+  meme: Asset | null,
+  sfxPool: Asset[],
+  usedSfxIds: Set<string>,
+  query: string
+): Asset | null {
+  if (!meme || meme.mediaKind === "video") {
+    return null;
+  }
+  return (
+    pickScoredAsset(sfxPool, usedSfxIds, query, false) ??
+    pickScoredAsset(sfxPool, usedSfxIds, query, true)
+  );
+}
+
+function dedupeReactionAssets(
+  analysis: ThreadAnalysis,
+  assets: Asset[],
+  candidatesByIndex: Map<number, string[]>,
+  commentsByIndex: Map<number, string>
+): void {
+  const memes = reactionMemeAssets(assets);
+  const sfxPool = reactionSfxAssets(assets);
+  const memeById = new Map(memes.map((asset) => [asset.id, asset]));
+  const usedMemeIds = new Set<string>();
+  const usedSfxIds = new Set<string>();
+
   for (const reaction of analysis.reactions) {
-    if (hasMemeOrVideo(reaction)) {
+    const query = commentQuery(reaction, commentsByIndex);
+    let meme = reaction.memeAssetId
+      ? memeById.get(reaction.memeAssetId) ?? null
+      : null;
+    if (!meme) {
+      if (reaction.sfxAssetId && usedSfxIds.has(reaction.sfxAssetId)) {
+        const replacement = pickScoredAsset(sfxPool, usedSfxIds, query, false);
+        reaction.sfxAssetId = replacement?.id ?? null;
+        reaction.sfxCategory = replacement?.category ?? reaction.sfxCategory;
+      } else if (reaction.sfxAssetId) {
+        usedSfxIds.add(reaction.sfxAssetId);
+      }
       continue;
     }
-    const category = memeCategoryForEmotion(reaction.emotion);
-    if (!category) {
+    if (usedMemeIds.has(meme.id)) {
+      const nextId = (candidatesByIndex.get(reaction.commentIndex) ?? []).find(
+        (id) => !usedMemeIds.has(id) && memeById.has(id)
+      );
+      meme = nextId
+        ? memeById.get(nextId) ?? null
+        : pickMemeForComment(memes, usedMemeIds, query);
+    } else {
+      usedMemeIds.add(meme.id);
+    }
+
+    let sfx = reaction.sfxAssetId
+      ? sfxPool.find((asset) => asset.id === reaction.sfxAssetId) ?? null
+      : null;
+    if (meme?.mediaKind === "video") {
+      sfx = null;
+    } else if (sfx && usedSfxIds.has(sfx.id)) {
+      sfx = pickSfxForMeme(meme, sfxPool, usedSfxIds, query);
+    } else if (sfx) {
+      usedSfxIds.add(sfx.id);
+    }
+    if (meme?.mediaKind === "image" && !sfx) {
+      sfx = pickSfxForMeme(meme, sfxPool, usedSfxIds, query);
+    }
+    if (!meme) {
+      reaction.memeAssetId = null;
+      reaction.memeCategory = null;
       continue;
     }
-    reaction.memeCategory = category;
-    if (hasImage && hasSfx) {
-      reaction.sfxCategory = reaction.sfxCategory ?? "boom";
+    assignMeme(reaction, meme, sfx);
+  }
+}
+
+function shouldFillMemeDensity(analysis: ThreadAnalysis): boolean {
+  return analysis.tone !== "serious" && analysis.musicType !== "sad";
+}
+
+function fillMissingMemeSlots(
+  analysis: ThreadAnalysis,
+  assets: Asset[],
+  commentsByIndex: Map<number, string>
+): void {
+  const memes = reactionMemeAssets(assets);
+  const sfxPool = reactionSfxAssets(assets);
+  if (memes.length === 0) {
+    return;
+  }
+  const usedMemeIds = new Set(
+    analysis.reactions
+      .map((reaction) => reaction.memeAssetId)
+      .filter((id): id is string => Boolean(id))
+  );
+  const usedSfxIds = new Set(
+    analysis.reactions
+      .map((reaction) => reaction.sfxAssetId)
+      .filter((id): id is string => Boolean(id))
+  );
+  if (!shouldFillMemeDensity(analysis)) {
+    return;
+  }
+  const targetCount = Math.max(
+    1,
+    Math.round(analysis.reactions.length * CASUAL_MEME_DENSITY)
+  );
+  const missing = analysis.reactions
+    .filter((reaction) => !hasMemeOrVideo(reaction))
+    .map((reaction) => {
+      const query = commentQuery(reaction, commentsByIndex);
+      const scored = [...memes]
+        .filter((asset) => !usedMemeIds.has(asset.id))
+        .sort((left, right) => {
+          const delta =
+            scoreAssetForText(right, query) - scoreAssetForText(left, query);
+          if (delta !== 0) {
+            return delta;
+          }
+          return left.id.localeCompare(right.id);
+        });
+      return { reaction, query, best: scored[0] ?? null };
+    })
+    .sort((left, right) => {
+      const leftScore = left.best ? scoreAssetForText(left.best, left.query) : -1;
+      const rightScore = right.best
+        ? scoreAssetForText(right.best, right.query)
+        : -1;
+      return rightScore - leftScore;
+    });
+
+  let filled = analysis.reactions.filter(hasMemeOrVideo).length;
+  for (const item of missing) {
+    if (filled >= targetCount) {
+      break;
     }
+    const meme = pickMemeForComment(memes, usedMemeIds, item.query);
+    if (!meme) {
+      continue;
+    }
+    const sfx = pickSfxForMeme(meme, sfxPool, usedSfxIds, item.query);
+    if (meme.mediaKind === "image" && !sfx) {
+      usedMemeIds.delete(meme.id);
+      continue;
+    }
+    assignMeme(item.reaction, meme, sfx);
+    filled += 1;
   }
 }
 

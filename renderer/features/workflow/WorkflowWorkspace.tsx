@@ -22,14 +22,12 @@ import {
 } from "../app/ErrorToast";
 import {
   TOPIC_TITLE_CARD_FILE,
+  isTopicTitleMissing,
   normalizeTopicTitle,
   resolveTopicTitleVoiceEnabled,
   shouldGenerateTopicTitleVoice
 } from "../../../src/timeline/topic-constants";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
-import {
-  isAnalysisStale
-} from "../../../src/comments/analysis-stale";
 import { Button } from "../ui/Button";
 import {
   formatProjectId,
@@ -40,7 +38,6 @@ import {
   WORKFLOW_STEPS,
   type WorkflowStep
 } from "./steps";
-import { AnalyzeStep } from "./AnalyzeStep";
 import { CaptureStep } from "./CaptureStep";
 import { InputStep } from "./InputStep";
 import {
@@ -94,6 +91,10 @@ export function WorkflowWorkspace({
     useState(false);
   const [draftTopicTitle, setDraftTopicTitle] =
     useState("");
+  const [titleMissing, setTitleMissing] =
+    useState(false);
+  const [titleInvalidNonce, setTitleInvalidNonce] =
+    useState(0);
   const [titleSuggestions, setTitleSuggestions] =
     useState<string[]>([]);
   const [textDiffs, setTextDiffs] =
@@ -436,31 +437,31 @@ export function WorkflowWorkspace({
     }
   }
 
-  async function persistTopicTitle(): Promise<
+  async function persistTopicTitle(
+    projectState = selectedProject
+  ): Promise<
     ProjectState | undefined
   > {
-    if (!selectedProject) {
+    if (!projectState) {
       return undefined;
     }
 
     const next = normalizeTopicTitle(
       draftTopicTitleRef.current
     );
-    const current =
-      selectedProject.content?.topicTitle ??
-      selectedProject.analysis?.topicTitle ??
-      "";
-    if (next === current) {
-      return selectedProject;
+    const contentTitle = projectState.content?.topicTitle ?? "";
+    const analysisTitle = projectState.analysis?.topicTitle ?? "";
+    if (next === contentTitle && next === analysisTitle) {
+      return projectState;
     }
 
-    if (selectedProject.analysis) {
+    if (projectState.analysis) {
       if (typeof window.xamxixiu.updateTopicIntro !== "function") {
         setError("Cần restart app để sửa topic title.");
         return undefined;
       }
       const project = await window.xamxixiu.updateTopicIntro({
-        projectId: selectedProject.id,
+        projectId: projectState.id,
         topicTitle: next
       });
       setSelectedProject(project);
@@ -476,7 +477,7 @@ export function WorkflowWorkspace({
       return undefined;
     }
     const project = await window.xamxixiu.saveContentTopicTitle(
-      selectedProject.id,
+      projectState.id,
       next
     );
     setSelectedProject(project);
@@ -511,7 +512,12 @@ export function WorkflowWorkspace({
     const project =
       await window.xamxixiu.updateContent({
         projectId: selectedProject.id,
-        content: draftContent,
+        content: {
+          ...draftContent,
+          topicTitle: normalizeTopicTitle(
+            draftTopicTitleRef.current
+          )
+        },
         imageOrder: imageSlots
       });
     const saved =
@@ -687,11 +693,31 @@ export function WorkflowWorkspace({
 
     setError(undefined);
     if (currentStep === "CAPTURE") {
-      setCurrentStep("ANALYZE");
-      return;
-    }
-    if (currentStep === "ANALYZE") {
-      setCurrentStep("VOICE");
+      if (isTopicTitleMissing(draftTopicTitleRef.current)) {
+        setTitleMissing(true);
+        setTitleInvalidNonce((value) => value + 1);
+        return;
+      }
+      setTitleMissing(false);
+      setOperationLoading(true);
+      try {
+        const saved = await persistDraft();
+        if (!saved) {
+          return;
+        }
+        setSelectedProject(saved);
+        setDraftContent(saved.content ?? draftContent);
+        await persistTopicTitle(saved);
+        setCurrentStep("VOICE");
+      } catch (reason: unknown) {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Không thể lưu capture."
+        );
+      } finally {
+        setOperationLoading(false);
+      }
       return;
     }
     setOperationLoading(true);
@@ -759,39 +785,6 @@ export function WorkflowWorkspace({
         reason instanceof Error
           ? reason.message
           : "AI chọn comment thất bại."
-      );
-    } finally {
-      setOperationLoading(false);
-    }
-  }
-
-  async function analyzeProject(): Promise<void> {
-    if (!selectedProject) {
-      return;
-    }
-
-    setError(undefined);
-    setOperationLoading(true);
-
-    try {
-      let project = selectedProject;
-      if (draftContent) {
-        const saved = await persistDraft();
-
-        if (saved) {
-          project = saved;
-        }
-      }
-      setSelectedProject(
-        await window.xamxixiu.analyzeProject(
-          project.id
-        )
-      );
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Analyze thất bại."
       );
     } finally {
       setOperationLoading(false);
@@ -1132,8 +1125,7 @@ export function WorkflowWorkspace({
   async function updateTitleVoiceMode(
     mode: "auto" | "on" | "off"
   ): Promise<void> {
-    if (!selectedProject?.analysis) {
-      setError("Hãy chạy Quick AI hoặc AI chọn voice trước.");
+    if (!selectedProject) {
       return;
     }
     try {
@@ -1159,19 +1151,6 @@ export function WorkflowWorkspace({
     selectedProject?.analysis,
     topicText
   );
-  const commentsForAnalysis =
-    draftContent ??
-    selectedProject?.content ??
-    selectedProject?.thread;
-  const analysisStale = Boolean(
-    commentsForAnalysis &&
-      selectedProject?.analysis &&
-      isAnalysisStale(
-        commentsForAnalysis,
-        selectedProject.analysis
-      )
-  );
-
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
         <WorkflowSidebar
@@ -1239,6 +1218,8 @@ export function WorkflowWorkspace({
                   operationLoading={operationLoading}
                   hasProject={Boolean(selectedProject)}
                   draftTopicTitle={draftTopicTitle}
+                  titleInvalid={titleMissing}
+                  titleInvalidNonce={titleInvalidNonce}
                   titleSuggestions={titleSuggestions}
                   textDiffs={textDiffs}
                   onReset={() => {
@@ -1272,7 +1253,12 @@ export function WorkflowWorkspace({
                   onAddComment={(commentUrl) => {
                     void addComment(commentUrl);
                   }}
-                  onTopicTitleChange={setDraftTopicTitle}
+                  onTopicTitleChange={(value) => {
+                    setDraftTopicTitle(value);
+                    if (!isTopicTitleMissing(value)) {
+                      setTitleMissing(false);
+                    }
+                  }}
                   onCleanText={() => {
                     void cleanCommentText();
                   }}
@@ -1284,21 +1270,11 @@ export function WorkflowWorkspace({
                   onPickTitle={(title) => {
                     setDraftTopicTitle(title);
                     draftTopicTitleRef.current = title;
+                    if (!isTopicTitleMissing(title)) {
+                      setTitleMissing(false);
+                    }
                     void persistTopicTitle();
                   }}
-                />
-              ) : currentStep === "ANALYZE" ? (
-                <AnalyzeStep
-                  project={selectedProject}
-                  draftContent={draftContent}
-                  draftTopicTitle={draftTopicTitle}
-                  operationLoading={operationLoading}
-                  analysisStale={analysisStale}
-                  onAnalyze={() => {
-                    void analyzeProject();
-                  }}
-                  onTopicTitleChange={setDraftTopicTitle}
-                  onTopicTitleBlur={queueTopicTitleSave}
                 />
               ) : currentStep === "VOICE" ? (
                 <VoiceStep
