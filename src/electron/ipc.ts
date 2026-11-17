@@ -494,7 +494,7 @@ export function registerIpc(
           clearCommentReactionAssets(project.reactions, kinds)
         );
       }
-      return store.saveTimelineProject(
+      return store.saveTimelineProjectAndLoad(
         projectId,
         clearCommentMemesAndSfx(source)
       );
@@ -525,9 +525,13 @@ export function registerIpc(
       if (!source) {
         throw new Error("Chưa có timeline để format.");
       }
-      return store.saveTimelineProject(
+      return store.saveTimelineProjectAndLoad(
         payload.projectId,
-        autoFormat(source, payload.settings ?? source.settings)
+        autoFormat(
+          source,
+          payload.settings ?? source.settings,
+          (project?.content ?? project?.thread)?.comments
+        )
       );
     }
   );
@@ -550,7 +554,7 @@ export function registerIpc(
       if (!source) {
         throw new Error("Chưa có timeline để thêm beep.");
       }
-      return store.saveTimelineProject(
+      return store.saveTimelineProjectAndLoad(
         payload.projectId,
         addBeepClip(source, payload.start, payload.duration)
       );

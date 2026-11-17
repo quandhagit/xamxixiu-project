@@ -190,7 +190,7 @@ export interface DesktopApi {
   ): Promise<ProjectState>;
   saveTimelineProject(
     payload: SaveTimelineProjectPayload
-  ): Promise<ProjectState>;
+  ): Promise<TimelineProject>;
   autoFormatTimeline(
     payload: AutoFormatTimelinePayload
   ): Promise<ProjectState>;

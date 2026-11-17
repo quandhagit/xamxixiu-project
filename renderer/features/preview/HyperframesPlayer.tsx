@@ -2,11 +2,21 @@
 
 import { Maximize2, Minimize2, Pause, Play } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import type {
-  TimelineClip,
-  TimelineProject
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  PointerEvent as ReactPointerEvent
+} from "react";
+import {
+  clipMutesVideoElement,
+  type TimelineClip,
+  type TimelineProject
 } from "../../../src/timeline/project";
+import {
+  canMoveClipOnPreview,
+  clipPositionFromPointer,
+  previewPointerMoved
+} from "../../../src/timeline/clip-position";
 import {
   clipAnimationLabel,
   clipFlyUpProgress,
@@ -111,14 +121,14 @@ function visualStyle(clip: TimelineClip, time: number): CSSProperties {
     motion === "zoom-in" ? clipZoomMultiplier(progress) : 1;
   const shake =
     motion === "shake" ? clipShakeOffsetPercent(progress) : 0;
-  const scale = restScale * zoom;
+  const shakeShift = shake ? ` translateX(${shake}%)` : "";
   return {
     position: "absolute",
-    width: `${scale * 100}%`,
+    width: `${restScale * 100}%`,
     maxHeight: "100%",
-    left: `${left + shake}%`,
+    left: `${left}%`,
     top: `${top}%`,
-    transform: "translate(-50%, -50%)",
+    transform: `translate(-50%, -50%)${shakeShift} scale(${zoom})`,
     objectFit: "contain",
     opacity,
     zIndex: TRACK_Z[clip.trackId] ?? 1
@@ -132,7 +142,12 @@ function PreviewClip({
   playing,
   muted,
   visible,
-  onMedia
+  selected,
+  dragging,
+  onMedia,
+  onMovePointerDown,
+  onMovePointerMove,
+  onMovePointerUp
 }: {
   clip: TimelineClip;
   src: string;
@@ -140,7 +155,12 @@ function PreviewClip({
   playing: boolean;
   muted: boolean;
   visible: boolean;
+  selected?: boolean;
+  dragging?: boolean;
   onMedia?: (element: HTMLMediaElement | null) => void;
+  onMovePointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onMovePointerMove?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onMovePointerUp?: (event: ReactPointerEvent<HTMLElement>) => void;
 }): React.ReactElement {
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
 
@@ -167,7 +187,7 @@ function PreviewClip({
         media.currentTime = Math.min(target, Math.max(0, media.duration - 0.01));
       }
       media.volume = muted ? 0 : Math.max(0, Math.min(1, clip.volume));
-      media.muted = clip.kind === "video" || muted;
+      media.muted = clipMutesVideoElement(clip) || muted;
       if (playing && !muted) {
         void media.play().catch(() => undefined);
       } else {
@@ -180,7 +200,17 @@ function PreviewClip({
     }
     media.addEventListener("loadedmetadata", sync, { once: true });
     return () => media.removeEventListener("loadedmetadata", sync);
-  }, [clip.start, clip.trimIn, clip.volume, clip.kind, muted, playing, time, visible]);
+  }, [
+    clip.start,
+    clip.trimIn,
+    clip.volume,
+    clip.kind,
+    clip.trackId,
+    muted,
+    playing,
+    time,
+    visible
+  ]);
 
   if (clip.kind === "audio") {
     return (
@@ -195,6 +225,28 @@ function PreviewClip({
   }
 
   const hidden = visible ? undefined : "hidden";
+  const movable = visible && canMoveClipOnPreview(clip);
+  const style: CSSProperties = {
+    ...visualStyle(clip, time),
+    cursor: movable ? (dragging ? "grabbing" : "grab") : undefined,
+    boxShadow:
+      selected && visible
+        ? "0 0 0 1px rgba(255,255,255,0.75)"
+        : undefined,
+    touchAction: movable ? "none" : undefined
+  };
+  const moveProps = movable
+    ? {
+        draggable: false as const,
+        onDragStart: (event: ReactDragEvent<HTMLElement>) => {
+          event.preventDefault();
+        },
+        onPointerDown: onMovePointerDown,
+        onPointerMove: onMovePointerMove,
+        onPointerUp: onMovePointerUp,
+        onPointerCancel: onMovePointerUp
+      }
+    : undefined;
   if (clip.kind === "video") {
     return (
       <video
@@ -202,8 +254,9 @@ function PreviewClip({
         className={hidden}
         src={src}
         playsInline
-        muted
-        style={visualStyle(clip, time)}
+        muted={clipMutesVideoElement(clip)}
+        style={style}
+        {...moveProps}
       />
     );
   }
@@ -213,9 +266,29 @@ function PreviewClip({
       className={hidden}
       src={src}
       alt={clip.label}
-      style={visualStyle(clip, time)}
+      style={style}
+      {...moveProps}
     />
   );
+}
+
+interface OverlayDrag {
+  pointerId: number;
+  clipId: string;
+  originX: number;
+  originY: number;
+  startX: number;
+  startY: number;
+  liveX: number;
+  liveY: number;
+  stageWidth: number;
+  stageHeight: number;
+  moved: boolean;
+}
+
+function paintOverlayPosition(element: HTMLElement, x: number, y: number): void {
+  element.style.left = `${50 + x * 50}%`;
+  element.style.top = `${50 - y * 50}%`;
 }
 
 export const HyperframesPlayer = memo(function HyperframesPlayer({
@@ -223,16 +296,25 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   assets,
   currentTime,
   playing,
-  onToggle
+  selectedClipId,
+  onToggle,
+  onSelectClip,
+  onPositionCommit
 }: {
   project?: TimelineProject;
   assets: Record<string, string>;
   currentTime: number;
   playing: boolean;
+  selectedClipId?: string;
   onToggle: () => void;
+  onSelectClip?: (clipId: string) => void;
+  onPositionCommit?: (clipId: string, x: number, y: number) => void;
 }): React.ReactElement {
-  const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+  const mediaRefs = useRef<Record<string, HTMLMediaElement | null>>({});
   const hostRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<OverlayDrag | null>(null);
+  const [draggingId, setDraggingId] = useState<string>();
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
   const [overlayFullscreen, setOverlayFullscreen] = useState(false);
   const clips = project?.clips ?? [];
@@ -294,16 +376,19 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   function handleToggle(): void {
     if (!playing && project) {
       for (const clip of project.clips) {
-        if (clip.kind !== "audio" || !clipActive(clip, currentTime)) {
+        if (
+          (clip.kind !== "audio" && clip.kind !== "video") ||
+          !clipActive(clip, currentTime)
+        ) {
           continue;
         }
-        const audio = audioRefs.current[clip.id];
+        const media = mediaRefs.current[clip.id];
         if (
-          audio &&
+          media &&
           assets[clip.file] &&
-          !mutedByBeep(project, clip, currentTime)
+          !(clip.kind === "audio" && mutedByBeep(project, clip, currentTime))
         ) {
-          void audio.play().catch(() => undefined);
+          void media.play().catch(() => undefined);
         }
       }
     }
@@ -334,6 +419,87 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
     setOverlayFullscreen(true);
   }
 
+  function beginOverlayDrag(
+    event: ReactPointerEvent<HTMLElement>,
+    clip: TimelineClip
+  ): void {
+    if (event.button !== 0 || !canMoveClipOnPreview(clip)) {
+      return;
+    }
+    const frame = frameRef.current;
+    if (!frame) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectClip?.(clip.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = frame.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      clipId: clip.id,
+      originX: event.clientX,
+      originY: event.clientY,
+      startX: clip.x ?? 0,
+      startY: clip.y ?? 0,
+      liveX: clip.x ?? 0,
+      liveY: clip.y ?? 0,
+      stageWidth: rect.width,
+      stageHeight: rect.height,
+      moved: false
+    };
+  }
+
+  function moveOverlayDrag(event: ReactPointerEvent<HTMLElement>): void {
+    const current = dragRef.current;
+    if (!current || event.pointerId !== current.pointerId) {
+      return;
+    }
+    if (
+      !current.moved &&
+      !previewPointerMoved(
+        current.originX,
+        current.originY,
+        event.clientX,
+        event.clientY
+      )
+    ) {
+      return;
+    }
+    if (!current.moved) {
+      current.moved = true;
+      setDraggingId(current.clipId);
+    }
+    const next = clipPositionFromPointer({
+      originX: current.originX,
+      originY: current.originY,
+      startClipX: current.startX,
+      startClipY: current.startY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      stageWidth: current.stageWidth,
+      stageHeight: current.stageHeight
+    });
+    current.liveX = next.x;
+    current.liveY = next.y;
+    paintOverlayPosition(event.currentTarget, next.x, next.y);
+  }
+
+  function endOverlayDrag(event: ReactPointerEvent<HTMLElement>): void {
+    const current = dragRef.current;
+    if (!current || event.pointerId !== current.pointerId) {
+      return;
+    }
+    dragRef.current = null;
+    setDraggingId(undefined);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (current.moved) {
+      onPositionCommit?.(current.clipId, current.liveX, current.liveY);
+    }
+  }
+
   if (!project) {
     return <div className="hidden" />;
   }
@@ -350,6 +516,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
       ) : null}
     <div ref={hostRef} className={previewHostClass(stageMode)}>
       <div
+        ref={frameRef}
         className={previewFrameClass(stageMode)}
         onDoubleClick={() => void toggleFullscreen()}
       >
@@ -370,11 +537,15 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
               playing={playing}
               muted={muted}
               visible={visible}
+              selected={selectedClipId === clip.id}
+              dragging={draggingId === clip.id}
+              onMovePointerDown={(event) => beginOverlayDrag(event, clip)}
+              onMovePointerMove={moveOverlayDrag}
+              onMovePointerUp={endOverlayDrag}
               onMedia={
-                clip.kind === "audio"
+                clip.kind === "audio" || clip.kind === "video"
                   ? (element) => {
-                      audioRefs.current[clip.id] =
-                        element instanceof HTMLAudioElement ? element : null;
+                      mediaRefs.current[clip.id] = element;
                     }
                   : undefined
               }
@@ -382,7 +553,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
           );
         })}
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent p-1.5"
           onDoubleClick={(event) => event.stopPropagation()}
         >
           <div className="pointer-events-auto flex items-center gap-1">

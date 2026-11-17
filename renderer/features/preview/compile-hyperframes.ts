@@ -1,4 +1,5 @@
 import {
+  clipMutesVideoElement,
   clipsOnTrack,
   type TimelineClip,
   type TimelineProject
@@ -100,7 +101,8 @@ function mediaTag(clip: TimelineClip, src: string, trackIndex: number): string {
     return `<audio ${attrs.join(" ")}></audio>`;
   }
   if (clip.kind === "video") {
-    return `<video ${attrs.join(" ")} style="${visualStyle(clip)}" muted playsinline></video>`;
+    const muted = clipMutesVideoElement(clip) ? " muted" : "";
+    return `<video ${attrs.join(" ")} style="${visualStyle(clip)}"${muted} playsinline></video>`;
   }
   return `<img ${attrs.join(" ")} alt="${escapeHtml(clip.label)}" style="${visualStyle(clip)}" />`;
 }

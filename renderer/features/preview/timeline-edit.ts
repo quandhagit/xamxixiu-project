@@ -1,6 +1,5 @@
 import {
   cloneTimelineProject,
-  clipsOnTrack,
   recomputeTotalDuration,
   roundTime,
   type AutoFormatSettings,
@@ -13,54 +12,23 @@ import {
   clearCombo,
   type MemeCombo
 } from "../../../src/timeline/meme-combo";
-
-function canMove(
-  clip: TimelineClip,
-  settings: AutoFormatSettings
-): boolean {
-  return !(settings.preserveLocked && clip.locked);
-}
-
-function clampDuration(
-  duration: number,
-  settings: AutoFormatSettings
-): number {
-  return Math.min(
-    settings.memeMaxDuration,
-    Math.max(settings.memeMinDuration, duration)
-  );
-}
+import {
+  canMoveClipOnPreview,
+  clampClipAxis
+} from "../../../src/timeline/clip-position";
+import {
+  packTimelineScenes,
+  type ScenePackComment
+} from "../../../src/timeline/scene-pack";
 
 export function autoFormat(
   project: TimelineProject,
-  settings: AutoFormatSettings = project.settings ?? DEFAULT_AUTO_FORMAT
+  settings: AutoFormatSettings = project.settings ?? DEFAULT_AUTO_FORMAT,
+  comments?: ScenePackComment[]
 ): TimelineProject {
-  const next = cloneTimelineProject(project);
+  const next = packTimelineScenes(project, settings.sceneGap ?? 0.1, comments);
   next.settings = { ...settings };
-
-  for (const trackId of ["meme", "video"] as const) {
-    const clips = clipsOnTrack(next, trackId);
-    let cursor: number | undefined;
-    for (const clip of clips) {
-      if (!canMove(clip, settings)) {
-        cursor = clip.start + clip.duration;
-        continue;
-      }
-      const duration = clampDuration(clip.duration, settings);
-      const start = cursor === undefined
-        ? clip.start
-        : roundTime(cursor + settings.memeGap);
-      clip.start = start;
-      clip.duration = roundTime(duration);
-      if (!clip.comboId || clip.comboId === "none") {
-        clip.fadeIn = settings.fadeIn;
-      }
-      clip.fadeOut = settings.fadeOut;
-      cursor = clip.start + clip.duration;
-    }
-  }
-
-  return recomputeTotalDuration(next);
+  return next;
 }
 
 export function applyRipple(
@@ -296,5 +264,30 @@ export function setClipScale(
     return project;
   }
   clip.scale = Math.max(0.2, Math.min(1.2, scale));
+  return next;
+}
+
+export function setClipPosition(
+  project: TimelineProject,
+  clipId: string,
+  x: number,
+  y: number
+): TimelineProject {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip || !canMoveClipOnPreview(clip)) {
+    return project;
+  }
+  const nextX = roundTime(clampClipAxis(x));
+  const nextY = roundTime(clampClipAxis(y));
+  if ((clip.x ?? 0) === nextX && (clip.y ?? 0) === nextY) {
+    return project;
+  }
+  const next = cloneTimelineProject(project);
+  const draft = next.clips.find((item) => item.id === clipId);
+  if (!draft) {
+    return project;
+  }
+  draft.x = nextX;
+  draft.y = nextY;
   return next;
 }

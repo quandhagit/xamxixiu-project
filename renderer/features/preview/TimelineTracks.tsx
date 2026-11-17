@@ -2,21 +2,47 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import {
+  AudioLines,
+  Film,
+  Image,
+  Images,
+  Mic,
+  Music2,
+  Smile,
+  Type,
+  Volume2
+} from "lucide-react";
 import type { TimelineProject } from "../../../src/timeline/project";
 import type { VideoTimeline } from "../../../src/types";
 import {
   TRACK_COLORS,
+  TRACK_PIPS,
   clipBarWidth,
   clipCanRemove,
   clipPointerIntent,
   getProjectTracks,
   getTimelineTracks,
+  trackLaneHeight,
+  type TrackId,
   type TimelineTrackClip
 } from "./timeline-tracks";
 
 const LABEL_WIDTH = 108;
-const TRACK_HEIGHT = 36;
-const RULER_HEIGHT = 28;
+const RULER_HEIGHT = 32;
+const CLIP_INSET = 6;
+
+const TRACK_ICONS: Record<TrackId, typeof Image> = {
+  background: Image,
+  "title-card": Type,
+  images: Images,
+  meme: Smile,
+  video: Film,
+  voice: Mic,
+  sfx: Volume2,
+  beep: AudioLines,
+  music: Music2
+};
 const FRAME = 1 / 30;
 const SNAP_PIXELS = 8;
 const MIN_DURATION = 0.05;
@@ -67,11 +93,14 @@ function formatTime(time: number): string {
 
 function clipStyle(
   clip: TimelineTrackClip,
-  pixelsPerSecond: number
+  pixelsPerSecond: number,
+  laneHeight: number
 ): CSSProperties {
   return {
     left: clip.start * pixelsPerSecond,
-    width: clipBarWidth(clip.duration, pixelsPerSecond)
+    width: clipBarWidth(clip.duration, pixelsPerSecond),
+    top: CLIP_INSET / 2,
+    height: Math.max(laneHeight - CLIP_INSET, 18)
   };
 }
 
@@ -193,13 +222,24 @@ function TimelineTracksComponent({
     1
   );
   const canvasWidth = Math.max(duration * pixelsPerSecond, 640);
+  const tracksHeight = tracks.reduce(
+    (sum, track) => sum + trackLaneHeight(track.id),
+    0
+  );
   const ticks = useMemo(() => {
-    const values: number[] = [];
+    const major: number[] = [];
+    const minor: number[] = [];
     const step = duration > 40 ? 5 : duration > 16 ? 2 : 1;
-    for (let time = 0; time <= duration + 0.001; time += step) {
-      values.push(Number(time.toFixed(2)));
+    const minorStep = step / 2;
+    for (let time = 0; time <= duration + 0.001; time += minorStep) {
+      const value = Number(time.toFixed(2));
+      if (Math.abs(value % step) < 0.001) {
+        major.push(value);
+      } else {
+        minor.push(value);
+      }
     }
-    return values;
+    return { major, minor };
   }, [duration]);
 
   if (playheadRef.current) {
@@ -402,20 +442,30 @@ function TimelineTracksComponent({
         >
           <div className="sticky left-0 z-20 shrink-0 bg-sidebar">
             <div
-              className="border-b border-r border-line px-2 py-1.5 text-[11px] uppercase tracking-wide text-ink-3"
+              className="border-b border-r border-line px-2 py-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-3"
               style={{ width: LABEL_WIDTH, height: RULER_HEIGHT }}
             >
               Tracks
             </div>
-            {tracks.map((track) => (
+            {tracks.map((track, index) => {
+              const Icon = TRACK_ICONS[track.id];
+              return (
               <div
                 key={track.id}
-                className="flex items-center border-b border-r border-line px-2 text-[12px] text-ink last:border-b-0"
-                style={{ width: LABEL_WIDTH, height: TRACK_HEIGHT }}
+                className={[
+                  "flex items-center gap-1.5 border-b border-r border-line px-2 text-[11px] text-ink-2 last:border-b-0",
+                  index % 2 === 0 ? "bg-white/[0.03]" : "bg-black/20"
+                ].join(" ")}
+                style={{ width: LABEL_WIDTH, height: trackLaneHeight(track.id) }}
               >
-                {track.label}
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${TRACK_PIPS[track.id]}`}
+                />
+                <Icon className="h-3 w-3 shrink-0 text-ink-3" />
+                <span className="truncate">{track.label}</span>
               </div>
-            ))}
+              );
+            })}
           </div>
           <div
             ref={canvasRef}
@@ -423,25 +473,37 @@ function TimelineTracksComponent({
             style={{ width: canvasWidth }}
           >
             <div
-              className="relative cursor-ew-resize border-b border-line"
+              className="relative cursor-ew-resize border-b border-line bg-black/20"
               style={{ height: RULER_HEIGHT }}
               onClick={(event) => onSeek(timeFromEvent(event))}
             >
-              {ticks.map((time) => (
+              {ticks.minor.map((time) => (
+                <div
+                  key={`m-${time}`}
+                  className="absolute top-0 h-2 w-px bg-line/80"
+                  style={{ left: time * pixelsPerSecond }}
+                />
+              ))}
+              {ticks.major.map((time) => (
                 <div
                   key={time}
-                  className="absolute top-0 h-full border-l border-line pl-1 text-[10px] text-ink-3"
+                  className="absolute top-0 h-full border-l border-line/80 pl-1 text-[10px] tabular-nums text-ink-3"
                   style={{ left: time * pixelsPerSecond }}
                 >
                   {formatTime(time)}
                 </div>
               ))}
             </div>
-            {tracks.map((track) => (
+            {tracks.map((track, index) => {
+              const laneHeight = trackLaneHeight(track.id);
+              return (
               <div
                 key={track.id}
-                className="relative border-b border-line/60 last:border-b-0"
-                style={{ height: TRACK_HEIGHT }}
+                className={[
+                  "relative border-b border-line/40 last:border-b-0",
+                  index % 2 === 0 ? "bg-white/[0.03]" : "bg-black/15"
+                ].join(" ")}
+                style={{ height: laneHeight }}
                 onClick={(event) => onSeek(timeFromEvent(event))}
               >
                 {track.clips.map((clip) => {
@@ -456,10 +518,10 @@ function TimelineTracksComponent({
                       key={clip.id}
                       data-clip-id={clip.id}
                       className={[
-                        "absolute top-1.5",
+                        "absolute",
                         selected ? "z-20" : "z-10"
                       ].join(" ")}
-                      style={clipStyle(clip, pixelsPerSecond)}
+                      style={clipStyle(clip, pixelsPerSecond, laneHeight)}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -481,14 +543,16 @@ function TimelineTracksComponent({
                     >
                       <div
                         className={[
-                          "flex overflow-hidden rounded",
-                          selected ? "ring-1 ring-accent" : ""
+                          "flex h-full overflow-hidden rounded-sm",
+                          selected
+                            ? "ring-2 ring-accent"
+                            : "ring-1 ring-white/10"
                         ].join(" ")}
                       >
                       {timelineProject && onTrimClip && !clip.placeholder ? (
                         <button
                           type="button"
-                          className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-black/20"
+                          className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-black/25"
                           disabled={disabled || clip.locked}
                           onPointerDown={(event) => {
                             beginDrag(event, {
@@ -522,21 +586,21 @@ function TimelineTracksComponent({
                           });
                         }}
                         className={[
-                          "relative min-w-0 flex-1 touch-none truncate px-1.5 text-left text-[10px] font-medium leading-[20px]",
+                          "relative min-w-0 flex-1 touch-none truncate px-1.5 text-left text-[10px] font-medium leading-tight",
                           clip.placeholder
-                            ? "border border-dashed border-line bg-transparent text-ink-3"
-                            : `${TRACK_COLORS[track.id]} text-zinc-950`,
+                            ? "border border-dashed border-white/20 bg-transparent text-ink-3"
+                            : `${TRACK_COLORS[track.id]} bg-gradient-to-b from-white/15 to-transparent`,
                           canDrag
-                            ? "hover:brightness-110"
+                            ? "hover:brightness-125"
                             : "cursor-default opacity-70"
                         ].join(" ")}
                       >
                         {peaks && peaks.length > 0 ? (
-                          <span className="absolute inset-x-1 bottom-0 flex h-2 items-end gap-px opacity-70">
+                          <span className="absolute inset-x-1 bottom-0.5 flex h-2.5 items-end gap-px opacity-70">
                             {peaks.slice(0, 24).map((peak, index) => (
                               <span
                                 key={`${clip.id}-p-${index}`}
-                                className="flex-1 bg-zinc-900/60"
+                                className="flex-1 bg-white/50"
                                 style={{ height: `${Math.max(10, peak * 100)}%` }}
                               />
                             ))}
@@ -547,7 +611,7 @@ function TimelineTracksComponent({
                       {timelineProject && onTrimClip && !clip.placeholder ? (
                         <button
                           type="button"
-                          className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-black/20"
+                          className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-black/25"
                           disabled={disabled || clip.locked}
                           onPointerDown={(event) => {
                             beginDrag(event, {
@@ -564,13 +628,14 @@ function TimelineTracksComponent({
                   );
                 })}
               </div>
-            ))}
+              );
+            })}
             <div
               ref={playheadRef}
-              className="pointer-events-none absolute top-0 z-10 w-px bg-accent"
+              className="pointer-events-none absolute top-0 z-30 w-0.5 bg-accent"
               style={{
                 left: previewTime * pixelsPerSecond,
-                height: RULER_HEIGHT + tracks.length * TRACK_HEIGHT
+                height: RULER_HEIGHT + tracksHeight
               }}
             />
           </div>
@@ -582,6 +647,7 @@ function TimelineTracksComponent({
           className="fixed z-50 min-w-[148px] rounded-md border border-line bg-panel py-1 shadow-lg"
           style={{ left: menu.x, top: menu.y }}
         >
+          {/*
           {onToggleLock && !menu.clip.placeholder ? (
             <button
               type="button"
@@ -595,6 +661,7 @@ function TimelineTracksComponent({
               {menu.clip.locked ? "Mở khóa" : "Khóa"}
             </button>
           ) : null}
+          */}
           {clipCanRemove(menu.clip) ? (
             <button
               type="button"

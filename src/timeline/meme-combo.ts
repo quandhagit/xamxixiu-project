@@ -45,20 +45,20 @@ export interface MemeCombo {
 export const BUILTIN_COMBOS: MemeCombo[] = [
   {
     id: "punch",
-    name: "Punch",
+    name: "Zoom in",
     builtIn: true,
     animation: "zoom-in",
-    animationDuration: 0.18,
+    animationDuration: 0.12,
     scale: 1,
     x: 0,
     y: 0,
-    fadeIn: 0.08,
+    fadeIn: 0.2,
     sfxOffset: 0,
     minDuration: 1.2
   },
   {
     id: "cringe",
-    name: "Cringe",
+    name: "Slide up",
     builtIn: true,
     animation: "slide-up",
     animationDuration: 0.28,
@@ -71,7 +71,7 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
   },
   {
     id: "shock",
-    name: "Shock",
+    name: "Shake",
     builtIn: true,
     animation: "shake",
     animationDuration: 0.25,
@@ -84,7 +84,7 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
   },
   {
     id: "soft",
-    name: "Soft",
+    name: "Fade in",
     builtIn: true,
     animation: "fade-in",
     animationDuration: 0,

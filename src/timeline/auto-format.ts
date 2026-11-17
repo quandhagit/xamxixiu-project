@@ -1,6 +1,5 @@
 import {
   cloneTimelineProject,
-  clipsOnTrack,
   recomputeTotalDuration,
   roundTime,
   type AutoFormatSettings,
@@ -8,65 +7,19 @@ import {
   type TimelineProject,
   DEFAULT_AUTO_FORMAT
 } from "./project.js";
-
-function canMove(
-  clip: TimelineClip,
-  settings: AutoFormatSettings
-): boolean {
-  return !(settings.preserveLocked && clip.locked);
-}
-
-function clampDuration(
-  duration: number,
-  settings: AutoFormatSettings
-): number {
-  return Math.min(
-    settings.memeMaxDuration,
-    Math.max(settings.memeMinDuration, duration)
-  );
-}
+import {
+  packTimelineScenes,
+  type ScenePackComment
+} from "./scene-pack.js";
 
 export function autoFormat(
   project: TimelineProject,
-  settings: AutoFormatSettings = project.settings ?? DEFAULT_AUTO_FORMAT
+  settings: AutoFormatSettings = project.settings ?? DEFAULT_AUTO_FORMAT,
+  comments?: ScenePackComment[]
 ): TimelineProject {
-  const next = cloneTimelineProject(project);
+  const next = packTimelineScenes(project, settings.sceneGap ?? 0.1, comments);
   next.settings = { ...settings };
-
-  for (const trackId of ["meme", "video"] as const) {
-    const clips = clipsOnTrack(next, trackId);
-    let cursor: number | undefined;
-    for (const clip of clips) {
-      if (!canMove(clip, settings)) {
-        cursor = clip.start + clip.duration;
-        continue;
-      }
-      const duration = clampDuration(clip.duration, settings);
-      const start = cursor === undefined
-        ? clip.start
-        : roundTime(cursor + settings.memeGap);
-      clip.start = start;
-      clip.duration = roundTime(duration);
-      if (!clip.comboId || clip.comboId === "none") {
-        clip.fadeIn = settings.fadeIn;
-      }
-      clip.fadeOut = settings.fadeOut;
-      cursor = clip.start + clip.duration;
-    }
-  }
-
-  for (const clip of next.clips) {
-    if (
-      (clip.trackId === "meme" || clip.trackId === "video") &&
-      canMove(clip, settings) &&
-      (!clip.comboId || clip.comboId === "none")
-    ) {
-      clip.fadeIn = settings.fadeIn;
-      clip.fadeOut = settings.fadeOut;
-    }
-  }
-
-  return recomputeTotalDuration(next);
+  return next;
 }
 
 export function applyRipple(

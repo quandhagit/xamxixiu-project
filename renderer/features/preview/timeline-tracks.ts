@@ -69,16 +69,43 @@ export const TRACK_LABELS: Record<TrackId, string> = {
 };
 
 export const TRACK_COLORS: Record<TrackId, string> = {
-  background: "bg-slate-500/80",
-  images: "bg-stone-400/80",
-  "title-card": "bg-blue-400/75",
-  meme: "bg-teal-400/80",
-  video: "bg-indigo-400/80",
-  voice: "bg-amber-400/80",
-  sfx: "bg-emerald-400/80",
-  beep: "bg-rose-400/80",
-  music: "bg-sky-500/75"
+  background: "border-l-[3px] border-slate-400 bg-slate-500/30 text-slate-50",
+  images: "border-l-[3px] border-stone-300 bg-stone-400/25 text-stone-50",
+  "title-card": "border-l-[3px] border-sky-400 bg-sky-500/25 text-sky-50",
+  meme: "border-l-[3px] border-teal-400 bg-teal-500/25 text-teal-50",
+  video: "border-l-[3px] border-indigo-400 bg-indigo-500/25 text-indigo-50",
+  voice: "border-l-[3px] border-amber-400 bg-amber-500/25 text-amber-50",
+  sfx: "border-l-[3px] border-emerald-400 bg-emerald-500/25 text-emerald-50",
+  beep: "border-l-[3px] border-rose-400 bg-rose-500/25 text-rose-50",
+  music: "border-l-[3px] border-violet-400 bg-violet-500/25 text-violet-50"
 };
+
+export const TRACK_PIPS: Record<TrackId, string> = {
+  background: "bg-slate-400",
+  images: "bg-stone-300",
+  "title-card": "bg-sky-400",
+  meme: "bg-teal-400",
+  video: "bg-indigo-400",
+  voice: "bg-amber-400",
+  sfx: "bg-emerald-400",
+  beep: "bg-rose-400",
+  music: "bg-violet-400"
+};
+
+const VISUAL_TRACKS = new Set<TrackId>([
+  "background",
+  "title-card",
+  "images",
+  "meme",
+  "video"
+]);
+
+export const TRACK_LANE_VISUAL = 44;
+export const TRACK_LANE_AUDIO = 32;
+
+export function trackLaneHeight(id: TrackId): number {
+  return VISUAL_TRACKS.has(id) ? TRACK_LANE_VISUAL : TRACK_LANE_AUDIO;
+}
 
 export function isVideoAsset(file: string): boolean {
   return [".mp4", ".mov", ".webm", ".mkv"].some((extension) =>

@@ -6,6 +6,7 @@ import {
   ZOOM_IN_FROM
 } from "../timeline/clip-motion.js";
 import {
+  clipMutesVideoElement,
   clipsOnTrack,
   type TimelineClip,
   type TimelineProject
@@ -109,7 +110,8 @@ function mediaTag(clip: TimelineClip, src: string, trackIndex: number): string {
     return `<audio ${attrs.join(" ")}></audio>`;
   }
   if (clip.kind === "video") {
-    return `<video ${attrs.join(" ")} style="${visualStyle(clip)}" muted playsinline></video>`;
+    const muted = clipMutesVideoElement(clip) ? " muted" : "";
+    return `<video ${attrs.join(" ")} style="${visualStyle(clip)}"${muted} playsinline></video>`;
   }
   return `<img ${attrs.join(" ")} alt="${escapeHtml(clip.label)}" style="${visualStyle(clip)}" />`;
 }
@@ -150,10 +152,10 @@ function gsapFades(
       );
     }
     if (motion === "shake" && duration > 0) {
-      const beat = duration / 4;
+      const beat = duration / 8;
       const amplitude = Math.round(canvasWidth * 0.035);
       lines.push(
-        `tl.fromTo("#${cssEscape(clip.id)}", { x: ${amplitude} }, { x: 0, duration: ${beat}, repeat: 3, yoyo: true }, ${clip.start});`
+        `tl.fromTo("#${cssEscape(clip.id)}", { xPercent: -50, yPercent: -50, x: 0 }, { xPercent: -50, yPercent: -50, x: ${amplitude}, duration: ${beat}, repeat: 7, yoyo: true }, ${clip.start});`
       );
     }
     if (clip.fadeIn > 0) {
@@ -246,6 +248,7 @@ export function createSpikeTimelineProject(): TimelineProject {
     canvas: { width: 1080, height: 1920, fps: 30 },
     totalDuration: 8,
     settings: {
+      sceneGap: 0.1,
       memeGap: 0.1,
       memeMinDuration: 1,
       memeMaxDuration: 4,
@@ -326,7 +329,7 @@ export function createSpikeTimelineProject(): TimelineProject {
         file: "spike/meme-a.mp4",
         fadeIn: 0.3,
         fadeOut: 0.3,
-        volume: 0,
+        volume: 1,
         locked: false,
         label: "Meme A",
         kind: "video"

@@ -1,5 +1,5 @@
 export const DEFAULT_FLY_UP_DURATION = 0.35;
-export const ZOOM_IN_FROM = 1.12;
+export const ZOOM_IN_FROM = 0.72;
 
 export function clipMotionName(clip: {
   trackId?: string;
@@ -123,7 +123,7 @@ export function clipZoomMultiplier(progress: number): number {
 }
 
 export function clipShakeOffsetPercent(progress: number): number {
-  if (progress >= 1) {
+  if (progress <= 0 || progress >= 1) {
     return 0;
   }
   const decay = 1 - progress;

@@ -67,7 +67,7 @@ async function writeCombos(combos: MemeCombo[]): Promise<MemeCombo[]> {
 export async function saveUserCombo(input: unknown): Promise<MemeCombo[]> {
   const combo = normalizeUserCombo(input);
   if (!combo) {
-    throw new Error("Combo không hợp lệ.");
+    throw new Error("Effect không hợp lệ.");
   }
   const current = await loadUserCombos();
   const index = current.findIndex((item) => item.id === combo.id);

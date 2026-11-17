@@ -27,6 +27,10 @@ import {
   resolveTopicTitleVoiceEnabled,
   shouldGenerateTopicTitleVoice
 } from "../../../src/timeline/topic-constants";
+import {
+  previewFilesChanged
+} from "../../../src/timeline/persist";
+import type { TimelineProject } from "../../../src/timeline/project";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
 import { Button } from "../ui/Button";
 import {
@@ -80,6 +84,8 @@ export function WorkflowWorkspace({
     useState<Record<string, string>>({});
   const [previewAssets, setPreviewAssets] =
     useState<Record<string, string>>({});
+  const previewAssetsRef = useRef(previewAssets);
+  previewAssetsRef.current = previewAssets;
   const [url, setUrl] = useState("");
   const [captureCount, setCaptureCount] =
     useState(CAPTURE_COMMENT_TARGET);
@@ -269,8 +275,16 @@ export function WorkflowWorkspace({
       (source): source is string =>
         Boolean(source)
     );
+    const uniqueSources = [...new Set(sources)];
+    const current = previewAssetsRef.current;
+    if (
+      uniqueSources.every((source) => current[source]) &&
+      !previewFilesChanged(Object.keys(current), uniqueSources)
+    ) {
+      return;
+    }
     const entries = await Promise.all(
-      [...new Set(sources)].map(async (source) => {
+      uniqueSources.map(async (source) => {
         try {
           const dataUrl =
             await window.xamxixiu.getPreviewAsset(
@@ -859,33 +873,6 @@ export function WorkflowWorkspace({
     }
   }
 
-  async function rematchAssets(): Promise<void> {
-    if (!selectedProject) {
-      return;
-    }
-    setOperationLoading(true);
-    setError(undefined);
-    try {
-      await window.xamxixiu.matchReactions(
-        selectedProject.id
-      );
-      const project =
-        await window.xamxixiu.createTimeline(
-          selectedProject.id
-        );
-      setSelectedProject(project);
-      await loadPreviewAssets(project);
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Rematch asset thất bại."
-      );
-    } finally {
-      setOperationLoading(false);
-    }
-  }
-
   async function retryAudio(
     target: AudioFailureTarget
   ): Promise<void> {
@@ -1343,8 +1330,14 @@ export function WorkflowWorkspace({
                         setSelectedProject(project);
                         await loadPreviewAssets(project);
                       }}
+                      onTimelineProjectChange={(next: TimelineProject) => {
+                        setSelectedProject((current) =>
+                          current
+                            ? { ...current, timelineProject: next }
+                            : current
+                        );
+                      }}
                       onCreateTimeline={createTimeline}
-                      onRematch={rematchAssets}
                     />
                   </div>
                 ) : null
@@ -1361,16 +1354,18 @@ export function WorkflowWorkspace({
               )}
           </div>
 
-          <WorkflowFooter
-            currentIndex={currentIndex}
-            stepCount={WORKFLOW_STEPS.length}
-            currentStep={currentStep}
-            operationLoading={operationLoading}
-            onBack={previousStep}
-            onNext={() => {
-              void continueWorkflow();
-            }}
-          />
+          {currentStep !== "TIMELINE" ? (
+            <WorkflowFooter
+              currentIndex={currentIndex}
+              stepCount={WORKFLOW_STEPS.length}
+              currentStep={currentStep}
+              operationLoading={operationLoading}
+              onBack={previousStep}
+              onNext={() => {
+                void continueWorkflow();
+              }}
+            />
+          ) : null}
         </section>
       </div>
   );

@@ -46,6 +46,7 @@ export interface TimelineClip {
 }
 
 export interface AutoFormatSettings {
+  sceneGap: number;
   memeGap: number;
   memeMinDuration: number;
   memeMaxDuration: number;
@@ -56,6 +57,7 @@ export interface AutoFormatSettings {
 }
 
 export const DEFAULT_AUTO_FORMAT: AutoFormatSettings = {
+  sceneGap: 0.1,
   memeGap: 0.1,
   memeMinDuration: 1,
   memeMaxDuration: 4,
@@ -146,6 +148,13 @@ export function defaultClipVolume(
     return 0.2512;
   }
   return 1;
+}
+
+export function clipMutesVideoElement(clip: {
+  kind: TimelineClipKind;
+  trackId: TimelineProjectTrackId;
+}): boolean {
+  return clip.kind === "video" && clip.trackId === "background";
 }
 
 export function roundTime(value: number): number {

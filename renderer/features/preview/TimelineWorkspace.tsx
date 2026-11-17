@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Redo2, Undo2 } from "lucide-react";
 import type { Asset } from "../../../src/assets/library";
 import type {
   ExportProgress,
@@ -12,7 +13,6 @@ import type { ProjectState } from "../../../src/project/store";
 import type { VideoTimeline } from "../../../src/types";
 import type { TimelineProject } from "../../../src/timeline/project";
 import {
-  AUTO_FORMAT_PRESETS,
   DEFAULT_AUTO_FORMAT
 } from "../../../src/timeline/project";
 import {
@@ -21,12 +21,13 @@ import {
   moveClip,
   removeClip,
   setClipAnimationDuration,
-  setClipComboLocked,
+  /* setClipComboLocked, */
   setClipFades,
-  setClipLocked,
+  /* setClipLocked, */
+  setClipPosition,
   setClipScale,
   setClipSfxOffset,
-  splitClip,
+  /* splitClip, */
   trimClip
 } from "./timeline-edit";
 import {
@@ -42,6 +43,21 @@ import {
   type MemeCombo
 } from "../../../src/timeline/meme-combo";
 import { cloneTimelineProject } from "../../../src/timeline/project";
+import {
+  emptyTimelineHistory,
+  pushHistory,
+  redoHistory,
+  timelineHotkey,
+  timelineProjectsEqual,
+  undoHistory,
+  type TimelineHistory
+} from "../../../src/timeline/history";
+import {
+  continueEditorBurst,
+  EDITOR_BURST_MS,
+  flushEditorBurst,
+  type EditorBurst
+} from "../../../src/timeline/persist";
 import { HyperframesPlayer } from "./HyperframesPlayer";
 import { computeWaveformPeaks } from "./waveform";
 import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
@@ -77,8 +93,8 @@ interface TimelineWorkspaceProps {
   visible?: boolean;
   loading: boolean;
   onProjectUpdated: (project: ProjectState) => Promise<void> | void;
+  onTimelineProjectChange?: (project: TimelineProject) => void;
   onCreateTimeline: () => Promise<void>;
-  onRematch: () => Promise<void>;
 }
 
 export function TimelineWorkspace({
@@ -91,19 +107,22 @@ export function TimelineWorkspace({
   visible = true,
   loading,
   onProjectUpdated,
-  onCreateTimeline,
-  onRematch
+  onTimelineProjectChange,
+  onCreateTimeline
 }: TimelineWorkspaceProps): React.ReactElement {
   const [library, setLibrary] = useState<Asset[]>([]);
   const [target, setTarget] = useState<TimelineAssetTarget>();
   const [editingTitle, setEditingTitle] = useState<string>();
   const [replacing, setReplacing] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [history, setHistory] = useState<TimelineProject[]>([]);
+  const [history, setHistory] = useState<TimelineHistory>(emptyTimelineHistory);
   const [selectedClipId, setSelectedClipId] = useState<string>();
   const [zoom, setZoom] = useState(64);
   const [voicePeaks, setVoicePeaks] = useState<Record<string, number[]>>({});
   const [formatOpen, setFormatOpen] = useState(false);
+  const [sceneGap, setSceneGap] = useState(
+    timelineProject?.settings.sceneGap ?? DEFAULT_AUTO_FORMAT.sceneGap
+  );
   const [userCombos, setUserCombos] = useState<MemeCombo[]>([]);
   const [exportOutput, setExportOutput] =
     useState<string>();
@@ -116,8 +135,12 @@ export function TimelineWorkspace({
     timelineProject
   );
   const draftRef = useRef(draft);
+  const historyRef = useRef(history);
   const draggingRef = useRef(false);
   const historySnapshotRef = useRef<TimelineProject>();
+  const burstRef = useRef<EditorBurst<TimelineProject>>();
+  const burstTimerRef = useRef<number>();
+  const saveQueueRef = useRef(Promise.resolve());
   const editorProject = draft ?? timelineProject;
   const preview = useTimelinePreview({
     duration: editorProject?.totalDuration ?? timeline?.totalDuration,
@@ -127,6 +150,27 @@ export function TimelineWorkspace({
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    return () => {
+      if (burstTimerRef.current) {
+        window.clearTimeout(burstTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setHistory(emptyTimelineHistory());
+    burstRef.current = undefined;
+    if (burstTimerRef.current) {
+      window.clearTimeout(burstTimerRef.current);
+      burstTimerRef.current = undefined;
+    }
+  }, [projectId]);
 
   useEffect(() => {
     if (draggingRef.current) {
@@ -195,10 +239,14 @@ export function TimelineWorkspace({
           "Cần restart app để sửa topic title trên timeline."
         );
       }
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.updateTopicIntro({
         projectId,
         ...update
       });
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       setError(
@@ -219,11 +267,15 @@ export function TimelineWorkspace({
     setReplacing(true);
     setError(undefined);
     try {
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.replaceTimelineAsset({
         projectId,
         target: selected,
         assetId
       });
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       if (assetId) {
@@ -269,41 +321,96 @@ export function TimelineWorkspace({
   }
 
   function applyDraft(next: TimelineProject): void {
+    if (draftRef.current && timelineProjectsEqual(draftRef.current, next)) {
+      return;
+    }
     draftRef.current = next;
     setDraft(next);
   }
 
-  async function persistEditor(
-    next: TimelineProject,
-    recordHistory = true,
-    reload = true
-  ): Promise<void> {
-    const previous = draftRef.current ?? timelineProject;
-    applyDraft(next);
+  function writeTimeline(next: TimelineProject): void {
+    onTimelineProjectChange?.(next);
     if (typeof window.xamxixiu.saveTimelineProject !== "function") {
       setError("Cần restart app để lưu timeline editor.");
       return;
     }
-    if (recordHistory && previous) {
-      setHistory((current) =>
-        [...current, cloneTimelineProject(previous)].slice(-40)
-      );
-    }
-    try {
-      const project = await window.xamxixiu.saveTimelineProject({
-        projectId,
-        timelineProject: next
+    saveQueueRef.current = saveQueueRef.current
+      .then(async () => {
+        const latest = draftRef.current ?? next;
+        await window.xamxixiu.saveTimelineProject({
+          projectId,
+          timelineProject: latest
+        });
+      })
+      .catch((reason: unknown) => {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Không thể lưu timeline."
+        );
       });
-      if (reload && !draggingRef.current) {
-        await onProjectUpdated(project);
-      }
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Không thể lưu timeline."
-      );
+  }
+
+  function commitBurstIfAny(): void {
+    if (burstTimerRef.current) {
+      window.clearTimeout(burstTimerRef.current);
+      burstTimerRef.current = undefined;
     }
+    const burst = flushEditorBurst(
+      burstRef.current,
+      timelineProjectsEqual
+    );
+    burstRef.current = undefined;
+    if (!burst) {
+      return;
+    }
+    const draft = draftRef.current;
+    if (draft && !timelineProjectsEqual(draft, burst.latest)) {
+      return;
+    }
+    setHistory((current) => pushHistory(current, burst.origin));
+    writeTimeline(burst.latest);
+  }
+
+  function persistEditor(
+    next: TimelineProject,
+    recordHistory = true
+  ): void {
+    commitBurstIfAny();
+    const previous = draftRef.current ?? timelineProject;
+    if (
+      recordHistory &&
+      previous &&
+      timelineProjectsEqual(previous, next)
+    ) {
+      return;
+    }
+    if (recordHistory && previous) {
+      setHistory((current) => pushHistory(current, previous));
+    }
+    applyDraft(next);
+    writeTimeline(next);
+  }
+
+  function persistDraftBurst(next: TimelineProject): void {
+    const origin =
+      burstRef.current?.origin ?? draftRef.current ?? timelineProject;
+    if (!origin) {
+      return;
+    }
+    burstRef.current = continueEditorBurst(
+      burstRef.current,
+      origin,
+      next
+    );
+    applyDraft(next);
+    onTimelineProjectChange?.(next);
+    if (burstTimerRef.current) {
+      window.clearTimeout(burstTimerRef.current);
+    }
+    burstTimerRef.current = window.setTimeout(() => {
+      commitBurstIfAny();
+    }, EDITOR_BURST_MS);
   }
 
   function removeTrackClip(clip: TimelineTrackClip): void {
@@ -315,7 +422,7 @@ export function TimelineWorkspace({
       if (!current) {
         return;
       }
-      void persistEditor(removeClip(current, clip.id));
+      persistEditor(removeClip(current, clip.id));
       return;
     }
     if (!clip.target) {
@@ -329,27 +436,46 @@ export function TimelineWorkspace({
   }
 
   async function undoEdit(): Promise<void> {
-    const previous = history[history.length - 1];
-    if (!previous) {
+    const current = draftRef.current ?? timelineProject;
+    if (!current) {
       return;
     }
-    setHistory((current) => current.slice(0, -1));
-    await persistEditor(previous, false);
+    const result = undoHistory(historyRef.current, current);
+    if (!result) {
+      return;
+    }
+    setHistory(result.history);
+    persistEditor(result.present, false);
   }
 
-  async function runAutoFormat(preset?: keyof typeof AUTO_FORMAT_PRESETS): Promise<void> {
+  async function redoEdit(): Promise<void> {
+    const current = draftRef.current ?? timelineProject;
+    if (!current) {
+      return;
+    }
+    const result = redoHistory(historyRef.current, current);
+    if (!result) {
+      return;
+    }
+    setHistory(result.history);
+    persistEditor(result.present, false);
+  }
+
+  async function runAutoFormat(): Promise<void> {
     setReplacing(true);
     setError(undefined);
     try {
-      if (editorProject && preset) {
-        await persistEditor(editorProject, true);
-      }
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.autoFormatTimeline({
         projectId,
-        settings: preset
-          ? AUTO_FORMAT_PRESETS[preset]
-          : editorProject?.settings ?? DEFAULT_AUTO_FORMAT
+        settings: {
+          ...(editorProject?.settings ?? DEFAULT_AUTO_FORMAT),
+          sceneGap: Math.max(0, sceneGap)
+        }
       });
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       setError(
@@ -364,10 +490,14 @@ export function TimelineWorkspace({
     setReplacing(true);
     setError(undefined);
     try {
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.addBeep({
         projectId,
         start: preview.previewTime
       });
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       setError(
@@ -382,7 +512,11 @@ export function TimelineWorkspace({
     setReplacing(true);
     setError(undefined);
     try {
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.suggestMemes(projectId);
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       setError(
@@ -400,7 +534,11 @@ export function TimelineWorkspace({
       if (typeof window.xamxixiu.clearCommentMemes !== "function") {
         throw new Error("Cần restart app để gỡ hết meme/SFX.");
       }
+      const previous = draftRef.current ?? timelineProject;
       const project = await window.xamxixiu.clearCommentMemes(projectId);
+      if (previous) {
+        setHistory((current) => pushHistory(current, previous));
+      }
       await onProjectUpdated(project);
     } catch (reason: unknown) {
       setError(
@@ -411,92 +549,123 @@ export function TimelineWorkspace({
     }
   }
 
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent): void {
+      const action = timelineHotkey(event);
+      if (!action) {
+        return;
+      }
+      event.preventDefault();
+      if (busy) {
+        return;
+      }
+      if (action === "undo") {
+        void undoEdit();
+      } else {
+        void redoEdit();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [visible, busy, projectId, history, timelineProject]);
+
+  const toolbar = (
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border border-line bg-sidebar px-2 py-1">
+      <button
+        type="button"
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo (Ctrl+Z)"
+        disabled={busy || history.past.length === 0}
+        onClick={() => void undoEdit()}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-2 hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        <Undo2 className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        title="Redo (Ctrl+Y)"
+        aria-label="Redo (Ctrl+Y)"
+        disabled={busy || history.future.length === 0}
+        onClick={() => void redoEdit()}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-2 hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        <Redo2 className="h-3.5 w-3.5" />
+      </button>
+      <span className="text-[11px] text-ink-3">Zoom</span>
+      <input
+        type="range"
+        min={24}
+        max={140}
+        value={zoom}
+        onChange={(event) => setZoom(Number(event.target.value))}
+      />
+      <div className="ml-auto flex flex-wrap items-center gap-1.5">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onClick={() => void suggestTimelineMemes()}
+        >
+          AI chọn meme
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={
+            busy ||
+            !editorProject?.clips.some((clip) =>
+              isBulkClearableOverlayClip(clip)
+            )
+          }
+          onClick={() => void clearTimelineMemes()}
+        >
+          Gỡ hết meme/SFX
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy || !editorProject}
+          onClick={() => setFormatOpen((open) => !open)}
+        >
+          Auto format
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy || !editorProject}
+          onClick={() => void addBeepAtPlayhead()}
+        >
+          Thêm beep
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onClick={() => void onCreateTimeline()}
+        >
+          {loading
+            ? "Đang tạo..."
+            : timeline
+              ? "Tạo lại timeline"
+              : "Create timeline"}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || !timeline}
+          onClick={() => void exportVideo()}
+        >
+          {exporting ? "Đang xuất..." : "Xuất video"}
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line bg-sidebar px-2 py-1.5">
-        <div className="min-w-0">
-          <h3 className="text-sm font-medium text-ink">Timeline</h3>
-          <p className="text-[11px] text-ink-3">
-            Kéo clip, trim mép, khóa, Auto format. Preview phát đúng composition sẽ xuất.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy || history.length === 0}
-            onClick={() => void undoEdit()}
-          >
-            Undo
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => void onRematch()}
-          >
-            Rematch
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy}
-            onClick={() => void suggestTimelineMemes()}
-          >
-            AI chọn meme
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={
-              busy ||
-              !editorProject?.clips.some((clip) =>
-                isBulkClearableOverlayClip(clip)
-              )
-            }
-            onClick={() => void clearTimelineMemes()}
-          >
-            Gỡ hết meme/SFX
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy || !editorProject}
-            onClick={() => setFormatOpen((open) => !open)}
-          >
-            Auto format
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy || !editorProject}
-            onClick={() => void addBeepAtPlayhead()}
-          >
-            Thêm beep
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy}
-            onClick={() => void onCreateTimeline()}
-          >
-            {loading
-              ? "Đang tạo..."
-              : timeline
-                ? "Tạo lại timeline"
-                : "Create timeline"}
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={busy || !timeline}
-            onClick={() => void exportVideo()}
-          >
-            {exporting ? "Đang xuất..." : "Xuất video"}
-          </Button>
-        </div>
-      </div>
-
       {exporting && exportProgress ? (
         <div className="shrink-0 border-b border-line px-2 py-1.5">
           <div className="h-1 overflow-hidden rounded-sm bg-elevated">
@@ -530,26 +699,43 @@ export function TimelineWorkspace({
               assets={previewAssets}
               currentTime={preview.previewTime}
               playing={preview.previewPlaying}
+              selectedClipId={selectedClipId}
               onToggle={preview.togglePreview}
+              onSelectClip={setSelectedClipId}
+              onPositionCommit={(clipId, x, y) => {
+                const current = draftRef.current ?? editorProject;
+                if (!current) {
+                  return;
+                }
+                persistEditor(setClipPosition(current, clipId, x, y));
+              }}
             />
             <div className="min-w-0 flex-1 space-y-2 overflow-y-auto">
               {formatOpen ? (
                 <div className="rounded-lg border border-line bg-panel p-2.5">
                   <p className="text-[12px] font-medium text-ink">Auto format</p>
-                  <p className="mt-1 text-[11px] text-ink-3">
-                    Tính lại khoảng cách meme theo preset. Clip đã khóa được giữ.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <Button size="sm" onClick={() => void runAutoFormat("default")}>
-                      Mặc định
-                    </Button>
-                    <Button size="sm" onClick={() => void runAutoFormat("fast")}>
-                      Nhanh
-                    </Button>
-                    <Button size="sm" onClick={() => void runAutoFormat("slow")}>
-                      Chậm
-                    </Button>
-                  </div>
+                  <label className="mt-2 block text-[11px] text-ink-2">
+                    Khoảng cách scene (s)
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={sceneGap}
+                      disabled={busy}
+                      className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+                      onChange={(event) =>
+                        setSceneGap(Number(event.target.value))
+                      }
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    className="mt-2"
+                    disabled={busy || !editorProject}
+                    onClick={() => void runAutoFormat()}
+                  >
+                    Áp dụng
+                  </Button>
                 </div>
               ) : null}
               {exportOutput ? (
@@ -582,7 +768,9 @@ export function TimelineWorkspace({
                   disabled={busy}
                   userCombos={userCombos}
                   onCombosChange={setUserCombos}
-                  onChange={(next) => void persistEditor(next)}
+                  onChange={(next) => persistEditor(next)}
+                  onDraftChange={persistDraftBurst}
+                  onFlushDraft={commitBurstIfAny}
                   onChoose={(clipTarget) => {
                     if (clipTarget.kind !== "topic-title") {
                       setTarget(clipTarget);
@@ -601,28 +789,19 @@ export function TimelineWorkspace({
                     setEditingTitle(analysis?.topicTitle ?? "");
                   }}
                   onRemove={removeTrackClip}
-                  onSplit={() => {
+                  /* onSplit={() => {
                     if (!editorProject) {
                       return;
                     }
-                    void persistEditor(
+                    persistEditor(
                       splitClip(editorProject, selectedClipId, preview.previewTime)
                     );
-                  }}
+                  }} */
                 />
               ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-2 px-1 text-[11px] text-ink-3">
-            <span>Zoom</span>
-            <input
-              type="range"
-              min={24}
-              max={140}
-              value={zoom}
-              onChange={(event) => setZoom(Number(event.target.value))}
-            />
-          </div>
+          {toolbar}
           <TimelineTracks
             timeline={timeline}
             timelineProject={editorProject}
@@ -661,32 +840,35 @@ export function TimelineWorkspace({
             }}
             onDragEnd={() => {
               draggingRef.current = false;
-              if (historySnapshotRef.current) {
-                setHistory((items) =>
-                  [...items, historySnapshotRef.current!].slice(-40)
-                );
-                historySnapshotRef.current = undefined;
-              }
+              const snapshot = historySnapshotRef.current;
+              historySnapshotRef.current = undefined;
               const next = draftRef.current;
-              if (next) {
-                void persistEditor(next, false, false);
+              if (!next) {
+                return;
               }
+              if (snapshot && !timelineProjectsEqual(snapshot, next)) {
+                setHistory((current) => pushHistory(current, snapshot));
+              }
+              persistEditor(next, false);
             }}
-            onToggleLock={(clipId) => {
+            /* onToggleLock={(clipId) => {
               if (!editorProject) {
                 return;
               }
               const clip = editorProject.clips.find((item) => item.id === clipId);
-              void persistEditor(
+              persistEditor(
                 setClipLocked(editorProject, clipId, !clip?.locked)
               );
-            }}
+            }} */
           />
         </div>
       ) : (
-        <p className="m-2 rounded-lg border border-dashed border-line bg-panel p-6 text-[13px] text-ink-3">
-          Chưa có timeline. Bấm Create timeline sau khi voice đã sẵn sàng.
-        </p>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+          {toolbar}
+          <p className="rounded-lg border border-dashed border-line bg-panel p-6 text-[13px] text-ink-3">
+            Chưa có timeline. Bấm Create timeline sau khi voice đã sẵn sàng.
+          </p>
+        </div>
       )}
 
       <Dialog
@@ -782,9 +964,11 @@ function ClipFadePanel({
   userCombos,
   onCombosChange,
   onChange,
+  onDraftChange,
+  onFlushDraft,
   onChoose,
-  onRemove,
-  onSplit
+  onRemove
+  /* , onSplit */
 }: {
   project: TimelineProject;
   clipId: string;
@@ -792,13 +976,16 @@ function ClipFadePanel({
   userCombos: MemeCombo[];
   onCombosChange: (combos: MemeCombo[]) => void;
   onChange: (project: TimelineProject) => void;
+  onDraftChange?: (project: TimelineProject) => void;
+  onFlushDraft?: () => void;
   onChoose: (target: TimelineAssetTarget) => void;
   onRemove: (clip: TimelineTrackClip) => void;
-  onSplit: () => void;
+  /* onSplit: () => void; */
 }): React.ReactElement | null {
   const trackClip = findTrackClip(project, clipId);
   const clip = project.clips.find((item) => item.id === clipId);
   const [comboName, setComboName] = useState("");
+  const draftChange = onDraftChange ?? onChange;
   if (!trackClip && !clip) {
     return null;
   }
@@ -879,7 +1066,7 @@ function ClipFadePanel({
       ) : null}
       {imageMeme || videoMeme ? (
         <label className="mt-2 block text-[11px] text-ink-2">
-          Combo
+          Effect
           <select
             className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
             disabled={disabled || clip.locked || videoMeme}
@@ -921,8 +1108,9 @@ function ClipFadePanel({
             value={clip.fadeIn}
             disabled={disabled || clip.locked}
             className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+            onBlur={() => onFlushDraft?.()}
             onChange={(event) =>
-              onChange(
+              draftChange(
                 setClipFades(
                   project,
                   clipId,
@@ -942,8 +1130,9 @@ function ClipFadePanel({
             value={clip.fadeOut}
             disabled={disabled || clip.locked}
             className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+            onBlur={() => onFlushDraft?.()}
             onChange={(event) =>
-              onChange(
+              draftChange(
                 setClipFades(
                   project,
                   clipId,
@@ -964,8 +1153,9 @@ function ClipFadePanel({
               value={clipFlyUpDuration(clip)}
               disabled={disabled || clip.locked}
               className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+              onBlur={() => onFlushDraft?.()}
               onChange={(event) =>
-                onChange(
+                draftChange(
                   setClipAnimationDuration(
                     project,
                     clipId,
@@ -975,6 +1165,56 @@ function ClipFadePanel({
               }
             />
           </label>
+        ) : null}
+        {imageMeme || videoMeme || clip.trackId === "images" ? (
+          <>
+            <label>
+              X
+              <input
+                type="number"
+                min={-1}
+                max={1}
+                step={0.05}
+                value={clip.x ?? 0}
+                disabled={disabled || clip.locked}
+                className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+                onBlur={() => onFlushDraft?.()}
+                onChange={(event) =>
+                  draftChange(
+                    setClipPosition(
+                      project,
+                      clipId,
+                      Number(event.target.value),
+                      clip.y ?? 0
+                    )
+                  )
+                }
+              />
+            </label>
+            <label>
+              Y
+              <input
+                type="number"
+                min={-1}
+                max={1}
+                step={0.05}
+                value={clip.y ?? 0}
+                disabled={disabled || clip.locked}
+                className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+                onBlur={() => onFlushDraft?.()}
+                onChange={(event) =>
+                  draftChange(
+                    setClipPosition(
+                      project,
+                      clipId,
+                      clip.x ?? 0,
+                      Number(event.target.value)
+                    )
+                  )
+                }
+              />
+            </label>
+          </>
         ) : null}
         {imageMeme ? (
           <>
@@ -988,8 +1228,9 @@ function ClipFadePanel({
                 value={clip.scale ?? 1}
                 disabled={disabled || clip.locked}
                 className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+                onBlur={() => onFlushDraft?.()}
                 onChange={(event) =>
-                  onChange(
+                  draftChange(
                     setClipScale(project, clipId, Number(event.target.value))
                   )
                 }
@@ -1004,8 +1245,9 @@ function ClipFadePanel({
                 value={clip.sfxOffset ?? 0}
                 disabled={disabled || clip.locked}
                 className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+                onBlur={() => onFlushDraft?.()}
                 onChange={(event) =>
-                  onChange(
+                  draftChange(
                     setClipSfxOffset(
                       project,
                       clipId,
@@ -1022,7 +1264,7 @@ function ClipFadePanel({
         <div className="mt-2 flex flex-wrap gap-1.5">
           <Button
             size="sm"
-            disabled={disabled || clip.locked || !namedCombo}
+            disabled={disabled || clip.locked || !namedCombo || !custom}
             onClick={() => {
               if (namedCombo) {
                 onChange(applyComboToProject(project, clipId, namedCombo));
@@ -1036,8 +1278,9 @@ function ClipFadePanel({
             disabled={disabled || clip.locked}
             onClick={() => onChange(clearComboOnProject(project, clipId))}
           >
-            Gỡ combo
+            Gỡ effect
           </Button>
+          {/*
           <label className="flex items-center gap-1 text-[11px] text-ink-2">
             <input
               type="checkbox"
@@ -1049,8 +1292,9 @@ function ClipFadePanel({
                 )
               }
             />
-            Khóa combo
+            Khóa effect
           </label>
+          */}
         </div>
       ) : null}
       {imageMeme ? (
@@ -1058,7 +1302,7 @@ function ClipFadePanel({
           <input
             value={comboName}
             disabled={disabled || clip.locked}
-            placeholder="Tên combo"
+            placeholder="Tên effect"
             className="min-w-0 flex-1 rounded-md border border-line bg-app px-2 py-1 text-[11px]"
             onChange={(event) => setComboName(event.target.value)}
           />
@@ -1071,6 +1315,7 @@ function ClipFadePanel({
           </Button>
         </div>
       ) : null}
+      {/*
       <Button
         size="sm"
         className="mt-2"
@@ -1079,6 +1324,7 @@ function ClipFadePanel({
       >
         Split tại playhead
       </Button>
+      */}
     </div>
   );
 }

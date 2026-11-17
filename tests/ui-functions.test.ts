@@ -41,9 +41,34 @@ import {
 } from "../src/timeline/auto-format";
 import {
   applyComboToProject,
+  autoFormat as formatTimelineProject,
   clearComboOnProject,
-  setClipSfxOffset
+  moveClip as moveEditorClip,
+  removeClip as removeEditorClip,
+  setClipFades,
+  setClipLocked,
+  setClipPosition,
+  setClipSfxOffset,
+  splitClip,
+  trimClip as trimEditorClip
 } from "../renderer/features/preview/timeline-edit";
+import {
+  emptyTimelineHistory,
+  HISTORY_LIMIT,
+  pushHistory,
+  redoHistory,
+  timelineHotkey,
+  timelineProjectsEqual,
+  undoHistory,
+  type TimelineHistory
+} from "../src/timeline/history";
+import {
+  clipPreviewFiles,
+  comboStampNeeded,
+  continueEditorBurst,
+  flushEditorBurst,
+  previewFilesChanged
+} from "../src/timeline/persist";
 import {
   compileTimelineProject,
   createSpikeTimelineProject
@@ -59,14 +84,20 @@ import {
   clipSlideLeftPercent,
   clipUsesFlyUp,
   clipZoomMultiplier,
-  withAnimationLabel
+  withAnimationLabel,
+  ZOOM_IN_FROM
 } from "../src/timeline/clip-motion";
 import { videoTimelineToProject } from "../src/timeline/from-video-timeline";
 import {
+  clipMutesVideoElement,
   cloneTimelineProject,
   createEmptyTimelineProject,
-  type TimelineClip
+  DEFAULT_AUTO_FORMAT,
+  roundTime,
+  type TimelineClip,
+  type TimelineProject
 } from "../src/timeline/project";
+import { packTimelineScenes } from "../src/timeline/scene-pack";
 import {
   applyCombo,
   assignReactionCombos,
@@ -78,6 +109,11 @@ import {
   preserveComboClips,
   stampComboFromClips
 } from "../src/timeline/meme-combo";
+import {
+  canMoveClipOnPreview,
+  clampClipAxis,
+  clipPositionFromPointer
+} from "../src/timeline/clip-position";
 import { applyMemeSuggestions } from "../src/ai/suggest-memes";
 import { sanitizeAnalysis } from "../src/assets/prompt-catalog";
 import {
@@ -115,7 +151,8 @@ import {
   isVideoAsset,
   targetFromProjectClip,
   TRACK_IDS,
-  TRACK_LABELS
+  TRACK_LABELS,
+  trackLaneHeight
 } from "../renderer/features/preview/timeline-tracks";
 import {
   getPreviewAudioTracks,
@@ -387,6 +424,22 @@ describe("workflow chrome", () => {
       "VOICE",
       "TIMELINE"
     ]);
+  });
+
+  it("hides the workflow footer on the last step and keeps the timeline toolbar above the tracks", () => {
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/WorkflowWorkspace.tsx"),
+      "utf8"
+    );
+    const timeline = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(workspace, /currentStep !== "TIMELINE"/);
+    assert.match(
+      timeline,
+      /\{toolbar\}\s*<TimelineTracks/s
+    );
   });
 
   it("blocks leaving Capture without a topic title and saves capture on next", () => {
@@ -738,6 +791,9 @@ describe("timeline tracks", () => {
     ]);
     assert.equal(TRACK_LABELS.voice, "Voice");
     assert.equal(TRACK_LABELS.beep, "Beep");
+    assert.equal(trackLaneHeight("meme"), 44);
+    assert.equal(trackLaneHeight("images"), 44);
+    assert.equal(trackLaneHeight("voice"), 32);
   });
 
   it("classifies video files and clip labels", () => {
@@ -1318,11 +1374,47 @@ describe("builtin meme combos", () => {
     }
     const punch = getBuiltinCombo("punch");
     assert.equal(punch.animation, "zoom-in");
+    assert.equal(punch.name, "Zoom in");
+    assert.equal(punch.fadeIn, 0.2);
+    assert.equal(punch.animationDuration, 0.12);
+    assert.equal(clipShakeOffsetPercent(0), 0);
+    assert.equal(clipShakeOffsetPercent(1), 0);
+    assert.equal(getBuiltinCombo("cringe").name, "Slide up");
+    assert.equal(getBuiltinCombo("shock").name, "Shake");
+    assert.equal(getBuiltinCombo("soft").name, "Fade in");
+    assert.equal(getBuiltinCombo("none").name, "None");
     const baked = applyCombo({ file: "meme.png" }, punch);
     assert.equal(baked.scale, 1);
     assert.equal(baked.x, 0);
     assert.equal(baked.y, 0);
     assert.equal(baked.sfxOffset, 0);
+  });
+
+  it("zooms in from a smaller scale instead of shrinking the clip", () => {
+    assert.ok(ZOOM_IN_FROM < 1);
+    assert.equal(clipZoomMultiplier(0), ZOOM_IN_FROM);
+    assert.equal(clipZoomMultiplier(1), 1);
+    const project = createSpikeTimelineProject();
+    const meme = project.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(meme);
+    Object.assign(meme, applyCombo(meme, getBuiltinCombo("punch")));
+    const html = compileTimelineProject(project);
+    assert.match(html, new RegExp(`scale: ${ZOOM_IN_FROM}`));
+    assert.match(html, /\{ scale: 1,/);
+  });
+
+  it("keeps video meme audio unmuted while background video stays muted", () => {
+    assert.equal(
+      clipMutesVideoElement({ kind: "video", trackId: "background" }),
+      true
+    );
+    assert.equal(
+      clipMutesVideoElement({ kind: "video", trackId: "video" }),
+      false
+    );
+    const html = compileTimelineProject(createSpikeTimelineProject());
+    assert.match(html, /id="meme-a"[^>]*playsinline/);
+    assert.doesNotMatch(html, /id="meme-a"[^>]* muted/);
   });
 
   it("does not keep stale builtin scale when AI rematches unlocked clips", () => {
@@ -1767,3 +1859,750 @@ describe("clear comment overlays", () => {
     assert.equal(cleared.topicPostSfxId, null);
   });
 });
+
+describe("timeline undo redo", () => {
+  type EditorState = {
+    history: TimelineHistory;
+    present: TimelineProject;
+  };
+
+  function editorState(present = createSpikeTimelineProject()): EditorState {
+    return { history: emptyTimelineHistory(), present };
+  }
+
+  function applyChange(
+    state: EditorState,
+    next: TimelineProject
+  ): EditorState {
+    if (timelineProjectsEqual(state.present, next)) {
+      return state;
+    }
+    return {
+      history: pushHistory(state.history, state.present),
+      present: next
+    };
+  }
+
+  function undo(state: EditorState): EditorState {
+    const result = undoHistory(state.history, state.present);
+    assert.ok(result);
+    return { history: result.history, present: result.present };
+  }
+
+  function redo(state: EditorState): EditorState {
+    const result = redoHistory(state.history, state.present);
+    assert.ok(result);
+    return { history: result.history, present: result.present };
+  }
+
+  it("returns undefined when undo or redo stacks are empty", () => {
+    const present = createSpikeTimelineProject();
+    assert.equal(undoHistory(emptyTimelineHistory(), present), undefined);
+    assert.equal(redoHistory(emptyTimelineHistory(), present), undefined);
+  });
+
+  it("splits at the playhead then undoes and redoes the split", () => {
+    const start = editorState();
+    const original = start.present.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(original);
+    const splitAt = roundTime(original.start + original.duration / 2);
+    const splitId = `meme-b-split-${Math.round(splitAt * 1000)}`;
+    let state = applyChange(
+      start,
+      splitClip(start.present, "meme-b", splitAt)
+    );
+    assert.equal(state.present.clips.filter((clip) => clip.id === "meme-b" || clip.id === splitId).length, 2);
+    const left = state.present.clips.find((clip) => clip.id === "meme-b");
+    const right = state.present.clips.find((clip) => clip.id === splitId);
+    assert.ok(left);
+    assert.ok(right);
+    assert.equal(left.duration, roundTime(splitAt - original.start));
+    assert.equal(right.start, splitAt);
+    assert.equal(right.trimIn, roundTime(original.trimIn + (splitAt - original.start)));
+
+    state = undo(state);
+    assert.equal(state.present.clips.some((clip) => clip.id === splitId), false);
+    const restored = state.present.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(restored);
+    assert.equal(restored.duration, original.duration);
+    assert.equal(restored.id, original.id);
+
+    state = redo(state);
+    const redoneRight = state.present.clips.find((clip) => clip.id === splitId);
+    assert.ok(redoneRight);
+    assert.equal(redoneRight.start, splitAt);
+    assert.equal(redoneRight.trimIn, right.trimIn);
+  });
+
+  it("moves a clip then undoes and redoes the start time", () => {
+    const start = editorState();
+    const original = start.present.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(original);
+    let state = applyChange(
+      start,
+      moveEditorClip(start.present, "meme-b", 3.2)
+    );
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.start,
+      3.2
+    );
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.start,
+      original.start
+    );
+    state = redo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.start,
+      3.2
+    );
+  });
+
+  it("undoes split then move as separate steps and redos both", () => {
+    const start = editorState();
+    const original = start.present.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(original);
+    const splitAt = original.start + 0.5;
+    const splitId = `meme-b-split-${Math.round(splitAt * 1000)}`;
+    let state = applyChange(
+      start,
+      splitClip(start.present, "meme-b", splitAt)
+    );
+    const afterSplit = state.present;
+    state = applyChange(state, moveEditorClip(state.present, splitId, 1.1));
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === splitId)?.start,
+      1.1
+    );
+
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === splitId)?.start,
+      afterSplit.clips.find((clip) => clip.id === splitId)?.start
+    );
+    assert.equal(state.present.clips.some((clip) => clip.id === splitId), true);
+
+    state = undo(state);
+    assert.equal(state.present.clips.some((clip) => clip.id === splitId), false);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.duration,
+      original.duration
+    );
+
+    state = redo(state);
+    assert.equal(state.present.clips.some((clip) => clip.id === splitId), true);
+    state = redo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === splitId)?.start,
+      1.1
+    );
+  });
+
+  it("round-trips trim, remove, lock, fades, combo, beep, and auto-format", () => {
+    let state = editorState();
+    const voice = state.present.clips.find((clip) => clip.id === "voice");
+    assert.ok(voice);
+
+    state = applyChange(
+      state,
+      trimEditorClip(state.present, "voice", "out", voice.start + 2)
+    );
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "voice")?.duration,
+      2
+    );
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "voice")?.duration,
+      voice.duration
+    );
+    state = redo(state);
+
+    state = applyChange(state, removeEditorClip(state.present, "beep"));
+    assert.equal(state.present.clips.some((clip) => clip.id === "beep"), false);
+    state = undo(state);
+    assert.equal(state.present.clips.some((clip) => clip.id === "beep"), true);
+    state = redo(state);
+
+    state = applyChange(state, setClipLocked(state.present, "meme-a", true));
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-a")?.locked,
+      true
+    );
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-a")?.locked,
+      false
+    );
+    state = redo(state);
+
+    state = applyChange(state, setClipFades(state.present, "comment", 0.5, 0.4));
+    const faded = state.present.clips.find((clip) => clip.id === "comment");
+    assert.equal(faded?.fadeIn, 0.5);
+    assert.equal(faded?.fadeOut, 0.4);
+    state = undo(state);
+    const unfaded = state.present.clips.find((clip) => clip.id === "comment");
+    assert.equal(unfaded?.fadeIn, 0.2);
+    assert.equal(unfaded?.fadeOut, 0.2);
+    state = redo(state);
+
+    const punch = getBuiltinCombo("punch");
+    state = applyChange(
+      state,
+      applyComboToProject(state.present, "meme-b", punch)
+    );
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.animation,
+      "zoom-in"
+    );
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.animation,
+      undefined
+    );
+    state = redo(state);
+    state = applyChange(state, clearComboOnProject(state.present, "meme-b"));
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.comboId,
+      "none"
+    );
+    state = undo(state);
+    assert.equal(
+      state.present.clips.find((clip) => clip.id === "meme-b")?.animation,
+      "zoom-in"
+    );
+
+    state = applyChange(state, addBeepClip(state.present, 1.5));
+    assert.equal(state.present.clips.some((clip) => clip.id === "beep-1500"), true);
+    state = undo(state);
+    assert.equal(state.present.clips.some((clip) => clip.id === "beep-1500"), false);
+    state = redo(state);
+
+    const beforeFormat = state.present.clips.map((clip) => ({
+      id: clip.id,
+      start: clip.start,
+      duration: clip.duration
+    }));
+    const formatted = formatTimelineProject(state.present, {
+      ...DEFAULT_AUTO_FORMAT,
+      sceneGap: 1
+    });
+    const formatChanged = !timelineProjectsEqual(state.present, formatted);
+    state = applyChange(state, formatted);
+    const afterFormat = state.present.clips.map((clip) => ({
+      id: clip.id,
+      start: clip.start,
+      duration: clip.duration
+    }));
+    if (formatChanged) {
+      state = undo(state);
+      assert.deepEqual(
+        state.present.clips.map((clip) => ({
+          id: clip.id,
+          start: clip.start,
+          duration: clip.duration
+        })),
+        beforeFormat
+      );
+      state = redo(state);
+      assert.deepEqual(
+        state.present.clips.map((clip) => ({
+          id: clip.id,
+          start: clip.start,
+          duration: clip.duration
+        })),
+        afterFormat
+      );
+    }
+  });
+
+  it("drops the redo stack when a new edit is pushed after undo", () => {
+    let state = applyChange(
+      editorState(),
+      moveEditorClip(createSpikeTimelineProject(), "meme-b", 2)
+    );
+    state = undo(state);
+    assert.equal(state.history.future.length, 1);
+    state = applyChange(state, moveEditorClip(state.present, "meme-b", 4));
+    assert.equal(state.history.future.length, 0);
+    assert.equal(redoHistory(state.history, state.present), undefined);
+  });
+
+  it("caps the past stack at 40 entries", () => {
+    let state = editorState();
+    for (let index = 0; index < HISTORY_LIMIT + 1; index += 1) {
+      state = applyChange(
+        state,
+        moveEditorClip(state.present, "meme-b", 0.1 * (index + 1))
+      );
+    }
+    assert.equal(state.history.past.length, HISTORY_LIMIT);
+  });
+
+  it("does not push a no-op split or an unchanged move", () => {
+    const start = editorState();
+    const meme = start.present.clips.find((clip) => clip.id === "meme-b");
+    assert.ok(meme);
+    const afterEdgeSplit = applyChange(
+      start,
+      splitClip(start.present, "meme-b", meme.start)
+    );
+    assert.equal(afterEdgeSplit.history.past.length, 0);
+    const afterSameMove = applyChange(
+      start,
+      moveEditorClip(start.present, "meme-b", meme.start)
+    );
+    assert.equal(afterSameMove.history.past.length, 0);
+  });
+
+  it("maps Ctrl+Z and Ctrl+Y and ignores input fields and Shift+Z", () => {
+    assert.equal(
+      timelineHotkey({ ctrlKey: true, code: "KeyZ" }),
+      "undo"
+    );
+    assert.equal(
+      timelineHotkey({ ctrlKey: true, code: "KeyY" }),
+      "redo"
+    );
+    assert.equal(timelineHotkey({ ctrlKey: false, code: "KeyZ" }), undefined);
+    assert.equal(
+      timelineHotkey({ ctrlKey: true, shiftKey: true, code: "KeyZ" }),
+      undefined
+    );
+    assert.equal(
+      timelineHotkey({
+        ctrlKey: true,
+        code: "KeyZ",
+        target: { tagName: "INPUT" }
+      }),
+      undefined
+    );
+    assert.equal(
+      timelineHotkey({
+        ctrlKey: true,
+        code: "KeyY",
+        target: { tagName: "TEXTAREA" }
+      }),
+      undefined
+    );
+  });
+});
+
+describe("timeline persist performance", () => {
+  it("treats the same clip files as an unchanged preview set", () => {
+    const project = createSpikeTimelineProject();
+    const files = clipPreviewFiles(project.clips);
+    assert.deepEqual(files, clipPreviewFiles(project.clips));
+    assert.equal(previewFilesChanged(files, files), false);
+    assert.equal(
+      previewFilesChanged(files, [...files, "spike/extra.png"]),
+      true
+    );
+  });
+
+  it("skips combo stamping when only fades change", () => {
+    const previous = createSpikeTimelineProject();
+    const faded = setClipFades(previous, "meme-b", 0.5, 0.4);
+    assert.equal(comboStampNeeded(previous, faded), false);
+    const punched = applyComboToProject(
+      previous,
+      "meme-b",
+      getBuiltinCombo("punch")
+    );
+    assert.equal(comboStampNeeded(previous, punched), true);
+    assert.equal(comboStampNeeded(undefined, previous), true);
+  });
+
+  it("records one burst origin so several fade tweaks undo together", () => {
+    const origin = createSpikeTimelineProject();
+    const first = setClipFades(origin, "comment", 0.4, 0.2);
+    const second = setClipFades(first, "comment", 0.5, 0.3);
+    const burst = continueEditorBurst(
+      continueEditorBurst(undefined, origin, first),
+      origin,
+      second
+    );
+    const flushed = flushEditorBurst(burst, timelineProjectsEqual);
+    assert.ok(flushed);
+    assert.equal(flushed.origin.clips.find((clip) => clip.id === "comment")?.fadeIn, 0.2);
+    assert.equal(flushed.latest.clips.find((clip) => clip.id === "comment")?.fadeIn, 0.5);
+    let history = emptyTimelineHistory();
+    history = pushHistory(history, flushed.origin);
+    const undone = undoHistory(history, flushed.latest);
+    assert.ok(undone);
+    assert.equal(
+      undone.present.clips.find((clip) => clip.id === "comment")?.fadeIn,
+      0.2
+    );
+    assert.equal(
+      flushEditorBurst(
+        continueEditorBurst(undefined, origin, origin),
+        timelineProjectsEqual
+      ),
+      undefined
+    );
+  });
+});
+
+describe("clip preview position", () => {
+  it("maps pointer deltas onto clamped clip x/y", () => {
+    const moved = clipPositionFromPointer({
+      originX: 100,
+      originY: 100,
+      startClipX: 0,
+      startClipY: 0,
+      clientX: 150,
+      clientY: 80,
+      stageWidth: 200,
+      stageHeight: 400
+    });
+    assert.equal(moved.x, 0.5);
+    assert.equal(moved.y, 0.1);
+    assert.equal(clampClipAxis(2), 1);
+    assert.equal(clampClipAxis(-3), -1);
+    const clamped = clipPositionFromPointer({
+      originX: 0,
+      originY: 0,
+      startClipX: 0.9,
+      startClipY: -0.9,
+      clientX: 200,
+      clientY: 400,
+      stageWidth: 100,
+      stageHeight: 100
+    });
+    assert.equal(clamped.x, 1);
+    assert.equal(clamped.y, -1);
+  });
+
+  it("writes x/y for meme video and images and skips locked or audio clips", () => {
+    const project = createSpikeTimelineProject();
+    const meme = setClipPosition(project, "meme-b", 0.25, -0.4);
+    assert.equal(meme.clips.find((clip) => clip.id === "meme-b")?.x, 0.25);
+    assert.equal(meme.clips.find((clip) => clip.id === "meme-b")?.y, -0.4);
+    const video = setClipPosition(project, "meme-a", -0.2, 0.3);
+    assert.equal(video.clips.find((clip) => clip.id === "meme-a")?.x, -0.2);
+    const image = setClipPosition(project, "comment", 0.1, 0.2);
+    assert.equal(image.clips.find((clip) => clip.id === "comment")?.x, 0.1);
+    const locked = setClipLocked(project, "meme-b", true);
+    assert.equal(setClipPosition(locked, "meme-b", 1, 1), locked);
+    assert.equal(setClipPosition(project, "voice", 0.5, 0.5), project);
+    assert.equal(setClipPosition(project, "bg", 0.5, 0.5), project);
+    assert.equal(canMoveClipOnPreview({ trackId: "meme", kind: "image" }), true);
+    assert.equal(canMoveClipOnPreview({ trackId: "voice", kind: "audio" }), false);
+    assert.equal(setClipPosition(meme, "meme-b", 0.25, -0.4), meme);
+  });
+
+  it("marks a punch combo custom after the overlay is moved", () => {
+    const punched = applyComboToProject(
+      createSpikeTimelineProject(),
+      "meme-b",
+      getBuiltinCombo("punch")
+    );
+    const clip = punched.clips.find((item) => item.id === "meme-b");
+    assert.ok(clip);
+    assert.equal(isCustomCombo(clip), false);
+    const moved = setClipPosition(punched, "meme-b", 0.4, 0);
+    const next = moved.clips.find((item) => item.id === "meme-b");
+    assert.ok(next);
+    assert.equal(isCustomCombo(next), true);
+  });
+});
+
+function sceneClip(
+  partial: Pick<TimelineClip, "id" | "trackId" | "start" | "duration"> &
+    Partial<TimelineClip>
+): TimelineClip {
+  return {
+    trimIn: 0,
+    sourceDuration: partial.duration,
+    fadeIn: 0,
+    fadeOut: 0,
+    volume: 1,
+    locked: false,
+    label: partial.id,
+    kind: partial.kind ?? (partial.trackId === "voice" ? "audio" : "image"),
+    file: `${partial.id}.bin`,
+    ...partial
+  };
+}
+
+function twoCommentProject(): TimelineProject {
+  const project = createEmptyTimelineProject();
+  project.clips = [
+    sceneClip({
+      id: "bg",
+      trackId: "background",
+      start: 0,
+      duration: 20,
+      kind: "image"
+    }),
+    sceneClip({
+      id: "img-0",
+      trackId: "images",
+      start: 0,
+      duration: 3,
+      commentIndex: 0
+    }),
+    sceneClip({
+      id: "voice-0",
+      trackId: "voice",
+      start: 0.2,
+      duration: 2,
+      commentIndex: 0,
+      kind: "audio"
+    }),
+    sceneClip({
+      id: "img-1",
+      trackId: "images",
+      start: 5,
+      duration: 3,
+      commentIndex: 1
+    }),
+    sceneClip({
+      id: "voice-1",
+      trackId: "voice",
+      start: 5.2,
+      duration: 2,
+      commentIndex: 1,
+      kind: "audio"
+    })
+  ];
+  return project;
+}
+
+describe("scene auto format", () => {
+  it("packs comment scenes with the requested gap and keeps voice offset", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 1);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    const voice1 = packed.clips.find((clip) => clip.id === "voice-1");
+    assert.ok(img0 && voice0 && img1 && voice1);
+    assert.equal(img0.start, 0);
+    assert.equal(voice0.start, 0.2);
+    const scene0End = Math.max(
+      img0.start + img0.duration,
+      voice0.start + voice0.duration
+    );
+    assert.equal(img1.start, roundTime(scene0End + 1));
+    assert.equal(roundTime(voice1.start - img1.start), 0.2);
+  });
+
+  it("keeps after-topic overlays with the topic scene", () => {
+    const project = createEmptyTimelineProject();
+    project.clips = [
+      sceneClip({
+        id: "topic-img",
+        trackId: "images",
+        start: 0,
+        duration: 2,
+        commentIndex: null
+      }),
+      sceneClip({
+        id: "topic-voice",
+        trackId: "voice",
+        start: 0.1,
+        duration: 1.4,
+        commentIndex: null,
+        kind: "audio"
+      }),
+      sceneClip({
+        id: "topic-meme",
+        trackId: "meme",
+        start: 1.5,
+        duration: 1,
+        commentIndex: TOPIC_POST_COMMENT_INDEX
+      }),
+      sceneClip({
+        id: "img-0",
+        trackId: "images",
+        start: 4,
+        duration: 2,
+        commentIndex: 0
+      })
+    ];
+    const packed = packTimelineScenes(project, 1);
+    const voice = packed.clips.find((clip) => clip.id === "topic-voice");
+    const meme = packed.clips.find((clip) => clip.id === "topic-meme");
+    const comment = packed.clips.find((clip) => clip.id === "img-0");
+    assert.ok(voice && meme && comment);
+    assert.equal(meme.start - voice.start, 1.4);
+    const topicEnd = meme.start + meme.duration;
+    assert.equal(comment.start, roundTime(topicEnd + 1));
+  });
+
+  it("stretches background to the packed duration", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 1);
+    const background = packed.clips.find((clip) => clip.id === "bg");
+    assert.ok(background);
+    assert.equal(background.start, 0);
+    assert.equal(background.duration, packed.totalDuration);
+  });
+
+  it("places scenes back-to-back when the gap is 0", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 0);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    assert.ok(img0 && img1 && voice0);
+    const scene0End = Math.max(
+      img0.start + img0.duration,
+      voice0.start + voice0.duration
+    );
+    assert.equal(img1.start, scene0End);
+  });
+
+  it("packs a parent and reply back-to-back inside one thread", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 1, [
+      {},
+      { parentCommentIndex: 0 }
+    ]);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    const voice1 = packed.clips.find((clip) => clip.id === "voice-1");
+    assert.ok(img0 && voice0 && img1 && voice1);
+    assert.equal(img0.start, 0);
+    assert.equal(img1.start, 3);
+    assert.equal(img0.start + img0.duration, img1.start + img1.duration);
+    assert.equal(roundTime(voice1.start - img1.start), 0.2);
+  });
+
+  it("keeps the parent image visible through the reply", () => {
+    const project = createEmptyTimelineProject();
+    project.clips = [
+      sceneClip({
+        id: "img-0",
+        trackId: "images",
+        start: 0,
+        duration: 6,
+        commentIndex: 0
+      }),
+      sceneClip({
+        id: "voice-0",
+        trackId: "voice",
+        start: 0.2,
+        duration: 2,
+        commentIndex: 0,
+        kind: "audio"
+      }),
+      sceneClip({
+        id: "img-1",
+        trackId: "images",
+        start: 3,
+        duration: 3,
+        commentIndex: 1
+      }),
+      sceneClip({
+        id: "voice-1",
+        trackId: "voice",
+        start: 3.2,
+        duration: 2,
+        commentIndex: 1,
+        kind: "audio"
+      })
+    ];
+    const packed = packTimelineScenes(project, 1, [
+      {},
+      { parentCommentIndex: 0 }
+    ]);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    const voice1 = packed.clips.find((clip) => clip.id === "voice-1");
+    assert.ok(img0 && voice0 && img1 && voice1);
+    assert.equal(img1.start, 3);
+    assert.equal(img0.duration, 6);
+    assert.equal(img1.duration, 3);
+    assert.equal(img0.start + img0.duration, img1.start + img1.duration);
+    assert.equal(roundTime(voice0.start - img0.start), 0.2);
+    assert.equal(roundTime(voice1.start - img1.start), 0.2);
+    assert.equal(voice0.duration, 2);
+  });
+
+  it("restores a parent image that was packed before the reply instead of over it", () => {
+    const project = createEmptyTimelineProject();
+    project.clips = [
+      sceneClip({
+        id: "img-0",
+        trackId: "images",
+        start: 0,
+        duration: 6,
+        commentIndex: 0
+      }),
+      sceneClip({
+        id: "voice-0",
+        trackId: "voice",
+        start: 0.2,
+        duration: 2,
+        commentIndex: 0,
+        kind: "audio"
+      }),
+      sceneClip({
+        id: "img-1",
+        trackId: "images",
+        start: 6,
+        duration: 3,
+        commentIndex: 1
+      }),
+      sceneClip({
+        id: "voice-1",
+        trackId: "voice",
+        start: 6.2,
+        duration: 2,
+        commentIndex: 1,
+        kind: "audio"
+      })
+    ];
+    const packed = packTimelineScenes(project, 1, [
+      {},
+      { parentCommentIndex: 0 }
+    ]);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const voice1 = packed.clips.find((clip) => clip.id === "voice-1");
+    assert.ok(img0 && img1 && voice0 && voice1);
+    assert.equal(img1.start, 3);
+    assert.equal(img0.duration, 6);
+    assert.equal(img1.duration, 3);
+    assert.equal(img0.start + img0.duration, img1.start + img1.duration);
+    assert.equal(roundTime(voice1.start - img1.start), 0.2);
+    const again = packTimelineScenes(packed, 1, [
+      {},
+      { parentCommentIndex: 0 }
+    ]);
+    const img0Again = again.clips.find((clip) => clip.id === "img-0");
+    const img1Again = again.clips.find((clip) => clip.id === "img-1");
+    assert.ok(img0Again && img1Again);
+    assert.equal(img1Again.start, 3);
+    assert.equal(img0Again.duration, 6);
+  });
+
+  it("keeps sceneGap between two root comments", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 0.5, [{}, {}]);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    assert.ok(img0 && voice0 && img1);
+    const thread0End = Math.max(
+      img0.start + img0.duration,
+      voice0.start + voice0.duration
+    );
+    assert.equal(img1.start, roundTime(thread0End + 0.5));
+  });
+
+  it("treats a reply shown as root as its own scene", () => {
+    const packed = packTimelineScenes(twoCommentProject(), 1, [{}, {}]);
+    const img0 = packed.clips.find((clip) => clip.id === "img-0");
+    const voice0 = packed.clips.find((clip) => clip.id === "voice-0");
+    const img1 = packed.clips.find((clip) => clip.id === "img-1");
+    assert.ok(img0 && voice0 && img1);
+    const thread0End = Math.max(
+      img0.start + img0.duration,
+      voice0.start + voice0.duration
+    );
+    assert.equal(img1.start, roundTime(thread0End + 1));
+  });
+});
+

@@ -22,6 +22,7 @@ import { normalizeTopicTitle } from "../timeline/topic-constants.js";
 import type { TimelineProject } from "../timeline/project.js";
 import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
 import { stampComboFromClips } from "../timeline/meme-combo.js";
+import { comboStampNeeded } from "../timeline/persist.js";
 import { createDefaultAnalysis } from "../ai/default-analysis.js";
 
 export interface ProjectSummary {
@@ -589,29 +590,40 @@ export class ProjectStore {
   async saveTimelineProject(
     projectId: string,
     timelineProject: TimelineProject
-  ): Promise<ProjectState> {
+  ): Promise<TimelineProject> {
     const directory = this.getProjectDirectory(projectId);
+    const previous = await this.readTimelineProject(directory);
     await atomicWriteJson(
       path.join(directory, "timeline-project.json"),
       timelineProject
     );
-    const reactionsFile = path.join(directory, "reactions.json");
-    const reactions = await readJson<MatchedReaction[]>(reactionsFile);
-    if (Array.isArray(reactions)) {
-      await atomicWriteJson(
-        reactionsFile,
-        stampComboFromClips(reactions, timelineProject.clips)
-      );
+    if (comboStampNeeded(previous, timelineProject)) {
+      const reactionsFile = path.join(directory, "reactions.json");
+      const reactions = await readJson<MatchedReaction[]>(reactionsFile);
+      if (Array.isArray(reactions)) {
+        await atomicWriteJson(
+          reactionsFile,
+          stampComboFromClips(reactions, timelineProject.clips)
+        );
+      }
+      const analysisFile = path.join(directory, "analysis.json");
+      const analysis = await readJson<ThreadAnalysis>(analysisFile);
+      if (analysis?.reactions) {
+        analysis.reactions = stampComboFromClips(
+          analysis.reactions,
+          timelineProject.clips
+        );
+        await atomicWriteJson(analysisFile, analysis);
+      }
     }
-    const analysisFile = path.join(directory, "analysis.json");
-    const analysis = await readJson<ThreadAnalysis>(analysisFile);
-    if (analysis?.reactions) {
-      analysis.reactions = stampComboFromClips(
-        analysis.reactions,
-        timelineProject.clips
-      );
-      await atomicWriteJson(analysisFile, analysis);
-    }
+    return timelineProject;
+  }
+
+  async saveTimelineProjectAndLoad(
+    projectId: string,
+    timelineProject: TimelineProject
+  ): Promise<ProjectState> {
+    await this.saveTimelineProject(projectId, timelineProject);
     const project = await this.getProject(projectId);
     if (!project) {
       throw new Error(`Project could not be loaded: ${projectId}`);
