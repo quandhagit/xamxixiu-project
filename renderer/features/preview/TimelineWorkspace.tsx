@@ -137,9 +137,9 @@ export function TimelineWorkspace({
   const draftRef = useRef(draft);
   const historyRef = useRef(history);
   const draggingRef = useRef(false);
-  const historySnapshotRef = useRef<TimelineProject>();
-  const burstRef = useRef<EditorBurst<TimelineProject>>();
-  const burstTimerRef = useRef<number>();
+  const historySnapshotRef = useRef<TimelineProject | undefined>(undefined);
+  const burstRef = useRef<EditorBurst<TimelineProject> | undefined>(undefined);
+  const burstTimerRef = useRef<number | undefined>(undefined);
   const saveQueueRef = useRef(Promise.resolve());
   const editorProject = draft ?? timelineProject;
   const preview = useTimelinePreview({
@@ -1028,6 +1028,9 @@ function ClipFadePanel({
   const namedCombo = findCombo(clip.comboId, userCombos);
 
   async function saveCurrentCombo(): Promise<void> {
+    if (!clip) {
+      return;
+    }
     const combo = comboFromClip(clip, comboName);
     if (!combo || typeof window.xamxixiu.saveMemeCombo !== "function") {
       return;
