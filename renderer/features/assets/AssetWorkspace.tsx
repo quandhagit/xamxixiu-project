@@ -21,7 +21,6 @@ interface Props {
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
   onSaved: (project: ProjectState) => void;
-  onRematch: () => Promise<void>;
 }
 
 const ANIMATIONS: ReactionAnimation[] = [
@@ -45,8 +44,7 @@ export function AssetWorkspace({
   reactions,
   backgroundAssetId,
   musicAssetId,
-  onSaved,
-  onRematch
+  onSaved
 }: Props): React.ReactElement {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [draft, setDraft] = useState(reactions);
@@ -161,8 +159,6 @@ export function AssetWorkspace({
           </p>
         </div>
         <div className="flex gap-2">
-          <button type="button" disabled={saving} onClick={() => void onRematch()}
-            className="rounded-lg border border-white/20 px-4 py-2 text-xs">Rematch</button>
           <button type="button" disabled={!dirty || saving} onClick={() => void save()}
             className="rounded-lg bg-cyan-400 px-4 py-2 text-xs font-semibold text-cyan-950 disabled:opacity-50">
             {saving ? "Saving..." : "Save"}

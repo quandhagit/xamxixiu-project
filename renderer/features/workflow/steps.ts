@@ -1,7 +1,6 @@
 export const WORKFLOW_STEPS = [
   "INPUT",
   "CAPTURE",
-  "ANALYZE",
   "VOICE",
   "TIMELINE"
 ] as const;

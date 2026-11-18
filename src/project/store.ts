@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -18,6 +19,11 @@ import type { Asset } from "../assets/scanner.js";
 import type { AssetAssignmentSelections } from "../timeline/replace-asset.js";
 import { buildTimeline } from "../timeline/builder.js";
 import { normalizeTopicTitle } from "../timeline/topic-constants.js";
+import type { TimelineProject } from "../timeline/project.js";
+import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
+import { stampComboFromClips } from "../timeline/meme-combo.js";
+import { comboStampNeeded } from "../timeline/persist.js";
+import { createDefaultAnalysis } from "../ai/default-analysis.js";
 
 export interface ProjectSummary {
   id: string;
@@ -35,6 +41,7 @@ export interface ProjectState extends ProjectSummary {
   analysis?: ThreadAnalysis;
   reactions?: MatchedReaction[];
   timeline?: VideoTimeline;
+  timelineProject?: TimelineProject;
   audioFiles: string[];
   audioFailures: AudioFailure[];
 }
@@ -71,21 +78,38 @@ async function readJson<T>(
   }
 }
 
+const jsonWriteChains = new Map<string, Promise<void>>();
+
 async function atomicWriteJson(
   file: string,
   value: unknown
 ): Promise<void> {
-  const temporary = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(
-    temporary,
-    JSON.stringify(value, null, 2),
-    "utf-8"
-  );
+  const previous = jsonWriteChains.get(file) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    await fs.writeFile(
+      temporary,
+      JSON.stringify(value, null, 2),
+      "utf-8"
+    );
+    try {
+      await fs.rename(temporary, file);
+    } catch {
+      try {
+        await fs.copyFile(temporary, file);
+      } finally {
+        await fs.rm(temporary, { force: true });
+      }
+    }
+  });
+  jsonWriteChains.set(file, next);
   try {
-    await fs.rename(temporary, file);
-  } catch {
-    await fs.copyFile(temporary, file);
-    await fs.rm(temporary, { force: true });
+    await next;
+  } finally {
+    if (jsonWriteChains.get(file) === next) {
+      jsonWriteChains.delete(file);
+    }
   }
 }
 
@@ -217,7 +241,8 @@ export class ProjectStore {
       ),
       timeline: await readJson<VideoTimeline>(
         path.join(directory, "timeline.json")
-      )
+      ),
+      timelineProject: await this.readTimelineProject(directory)
     };
   }
 
@@ -274,6 +299,21 @@ export class ProjectStore {
     });
   }
 
+  async ensureAnalysis(projectId: string): Promise<ThreadAnalysis> {
+    const directory = this.getProjectDirectory(projectId);
+    const analysisFile = path.join(directory, "analysis.json");
+    const existing = await readJson<ThreadAnalysis>(analysisFile);
+    const content =
+      (await readJson<ContentData>(path.join(directory, "content.json"))) ??
+      (await readJson<ThreadData>(path.join(directory, "thread.json")));
+    if (!content) {
+      throw new Error("Project content is missing");
+    }
+    const analysis = createDefaultAnalysis(content, existing ?? undefined);
+    await atomicWriteJson(analysisFile, analysis);
+    return analysis;
+  }
+
   async saveVoiceAssignment(
     projectId: string,
     target: AudioFailureTarget,
@@ -289,12 +329,7 @@ export class ProjectStore {
       directory,
       "analysis.json"
     );
-    const analysis =
-      await readJson<ThreadAnalysis>(analysisFile);
-
-    if (!analysis) {
-      throw new Error("Project analysis is missing");
-    }
+    const analysis = await this.ensureAnalysis(projectId);
 
     if (target === "topic") {
       analysis.topicVoiceId = voiceId;
@@ -403,6 +438,30 @@ export class ProjectStore {
         }
         analysis.topicMemeId = id ?? null;
       }
+      if ("topicPostMemeId" in selections) {
+        const id = selections.topicPostMemeId;
+        if (
+          id &&
+          !assets.some(
+            (asset) => asset.id === id && asset.type === "meme"
+          )
+        ) {
+          throw new Error(`Unknown meme asset: ${id}`);
+        }
+        analysis.topicPostMemeId = id ?? null;
+      }
+      if ("topicPostSfxId" in selections) {
+        const id = selections.topicPostSfxId;
+        if (
+          id &&
+          !assets.some(
+            (asset) => asset.id === id && asset.type === "sfx"
+          )
+        ) {
+          throw new Error(`Unknown sfx asset: ${id}`);
+        }
+        analysis.topicPostSfxId = id ?? null;
+      }
       if ("topicIntroEnabled" in selections) {
         analysis.topicIntroEnabled =
           selections.topicIntroEnabled !== false;
@@ -426,26 +485,35 @@ export class ProjectStore {
     return project;
   }
 
+  async writeReactions(
+    projectId: string,
+    reactions: MatchedReaction[]
+  ): Promise<void> {
+    await atomicWriteJson(
+      path.join(this.getProjectDirectory(projectId), "reactions.json"),
+      reactions
+    );
+  }
+
   async saveTopicIntro(
     projectId: string,
     update: {
       topicTitle?: string;
       enabled?: boolean;
+      topicTitleVoiceMode?: ThreadAnalysis["topicTitleVoiceMode"];
     }
   ): Promise<ProjectState> {
     if (
       update.topicTitle === undefined &&
-      update.enabled === undefined
+      update.enabled === undefined &&
+      update.topicTitleVoiceMode === undefined
     ) {
       throw new Error("Invalid topic intro payload");
     }
 
     const directory = this.getProjectDirectory(projectId);
     const analysisFile = path.join(directory, "analysis.json");
-    const analysis = await readJson<ThreadAnalysis>(analysisFile);
-    if (!analysis) {
-      throw new Error("Project analysis is missing");
-    }
+    const analysis = await this.ensureAnalysis(projectId);
 
     if (update.topicTitle !== undefined) {
       if (typeof update.topicTitle !== "string") {
@@ -456,8 +524,19 @@ export class ProjectStore {
     if (update.enabled !== undefined) {
       analysis.topicIntroEnabled = update.enabled;
     }
+    if (update.topicTitleVoiceMode !== undefined) {
+      analysis.topicTitleVoiceMode = update.topicTitleVoiceMode;
+    }
 
     await atomicWriteJson(analysisFile, analysis);
+    if (update.topicTitle !== undefined) {
+      const contentFile = path.join(directory, "content.json");
+      const content = await readJson<ContentData>(contentFile);
+      if (content) {
+        content.topicTitle = analysis.topicTitle;
+        await atomicWriteJson(contentFile, content);
+      }
+    }
     if (await pathIsFile(path.join(directory, "timeline.json"))) {
       return this.rebuildTimeline(projectId);
     }
@@ -472,12 +551,120 @@ export class ProjectStore {
   async rebuildTimeline(
     projectId: string
   ): Promise<ProjectState> {
+    await this.ensureAnalysis(projectId);
     const directory = this.getProjectDirectory(projectId);
     const timeline = await buildTimeline(directory);
     await atomicWriteJson(
       path.join(directory, "timeline.json"),
       timeline
     );
+    const previous = await readJson<TimelineProject>(
+      path.join(directory, "timeline-project.json")
+    );
+    await atomicWriteJson(
+      path.join(directory, "timeline-project.json"),
+      videoTimelineToProject(timeline, previous)
+    );
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project could not be loaded: ${projectId}`);
+    }
+    return project;
+  }
+
+  private async readTimelineProject(
+    directory: string
+  ): Promise<TimelineProject | undefined> {
+    const saved = await readJson<TimelineProject>(
+      path.join(directory, "timeline-project.json")
+    );
+    if (saved) {
+      return saved;
+    }
+    const timeline = await readJson<VideoTimeline>(
+      path.join(directory, "timeline.json")
+    );
+    return timeline ? videoTimelineToProject(timeline) : undefined;
+  }
+
+  async saveTimelineProject(
+    projectId: string,
+    timelineProject: TimelineProject
+  ): Promise<TimelineProject> {
+    const directory = this.getProjectDirectory(projectId);
+    const previous = await this.readTimelineProject(directory);
+    await atomicWriteJson(
+      path.join(directory, "timeline-project.json"),
+      timelineProject
+    );
+    if (comboStampNeeded(previous, timelineProject)) {
+      const reactionsFile = path.join(directory, "reactions.json");
+      const reactions = await readJson<MatchedReaction[]>(reactionsFile);
+      if (Array.isArray(reactions)) {
+        await atomicWriteJson(
+          reactionsFile,
+          stampComboFromClips(reactions, timelineProject.clips)
+        );
+      }
+      const analysisFile = path.join(directory, "analysis.json");
+      const analysis = await readJson<ThreadAnalysis>(analysisFile);
+      if (analysis?.reactions) {
+        analysis.reactions = stampComboFromClips(
+          analysis.reactions,
+          timelineProject.clips
+        );
+        await atomicWriteJson(analysisFile, analysis);
+      }
+    }
+    return timelineProject;
+  }
+
+  async saveTimelineProjectAndLoad(
+    projectId: string,
+    timelineProject: TimelineProject
+  ): Promise<ProjectState> {
+    await this.saveTimelineProject(projectId, timelineProject);
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project could not be loaded: ${projectId}`);
+    }
+    return project;
+  }
+
+  async saveAnalysis(
+    projectId: string,
+    analysis: ThreadAnalysis
+  ): Promise<ProjectState> {
+    const directory = this.getProjectDirectory(projectId);
+    await atomicWriteJson(
+      path.join(directory, "analysis.json"),
+      analysis
+    );
+    const project = await this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project could not be loaded: ${projectId}`);
+    }
+    return project;
+  }
+
+  async saveContentTopicTitle(
+    projectId: string,
+    topicTitle: string
+  ): Promise<ProjectState> {
+    const directory = this.getProjectDirectory(projectId);
+    const contentFile = path.join(directory, "content.json");
+    const content = await readJson<ContentData>(contentFile);
+    if (!content) {
+      throw new Error("Project content is missing");
+    }
+    content.topicTitle = normalizeTopicTitle(topicTitle);
+    await atomicWriteJson(contentFile, content);
+    const analysisFile = path.join(directory, "analysis.json");
+    const analysis = await readJson<ThreadAnalysis>(analysisFile);
+    if (analysis) {
+      analysis.topicTitle = content.topicTitle;
+      await atomicWriteJson(analysisFile, analysis);
+    }
     const project = await this.getProject(projectId);
     if (!project) {
       throw new Error(`Project could not be loaded: ${projectId}`);

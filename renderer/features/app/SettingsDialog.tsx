@@ -39,7 +39,6 @@ const EMPTY_SETTINGS: AppSettings = {
 type TabId =
   | "deepseek"
   | "vbee"
-  | "capcut"
   | "threads"
   | "abbreviations";
 
@@ -57,11 +56,6 @@ const TABS: Array<{
     id: "vbee",
     label: "Vbee",
     hint: "Voice, webhook"
-  },
-  {
-    id: "capcut",
-    label: "CapCut",
-    hint: "Thư mục drafts"
   },
   {
     id: "threads",
@@ -148,7 +142,6 @@ export function SettingsDialog({
   const [showSecrets, setShowSecrets] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [choosingDirectory, setChoosingDirectory] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const setError = useErrorToast();
   const [status, setStatus] = useState<string>();
@@ -285,25 +278,6 @@ export function SettingsDialog({
       ...current,
       [field]: value
     }));
-  }
-
-  async function chooseDirectory(): Promise<void> {
-    setChoosingDirectory(true);
-    setError(undefined);
-    try {
-      const directory = await window.xamxixiu.chooseSettingsDirectory();
-      if (directory) {
-        update("capcutDraftsDir", directory);
-      }
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Không chọn được thư mục."
-      );
-    } finally {
-      setChoosingDirectory(false);
-    }
   }
 
   async function openLogin(): Promise<void> {
@@ -627,37 +601,6 @@ export function SettingsDialog({
                     setShowSecrets((current) => !current)
                   }
                 />
-              </section>
-            ) : null}
-
-            {activeTab === "capcut" ? (
-              <section className="mx-auto max-w-2xl space-y-4">
-                <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
-                  CapCut
-                </h4>
-                <Field
-                  label="Thư mục drafts"
-                  hint="CapCut chỉ hiện project nằm trong thư mục drafts của nó. Để trống khi lưu sẽ dùng thư mục mặc định."
-                >
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="text"
-                      value={settings.capcutDraftsDir}
-                      disabled={disabled}
-                      onChange={(event) =>
-                        update("capcutDraftsDir", event.target.value)
-                      }
-                      className={fieldClassName}
-                    />
-                    <Button
-                      disabled={disabled || choosingDirectory}
-                      onClick={() => void chooseDirectory()}
-                      className="shrink-0"
-                    >
-                      Chọn
-                    </Button>
-                  </div>
-                </Field>
               </section>
             ) : null}
 

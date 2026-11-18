@@ -15,6 +15,8 @@ export interface AssetAssignmentSelections {
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
   topicMemeId?: string | null;
+  topicPostMemeId?: string | null;
+  topicPostSfxId?: string | null;
   topicIntroEnabled?: boolean;
 }
 
@@ -103,6 +105,61 @@ function pickFallbackSfx(
   );
 }
 
+function applyTopicPostReplacement(
+  reactions: MatchedReaction[],
+  analysis: ThreadAnalysis | undefined,
+  assets: Asset[],
+  target: Extract<TimelineAssetTarget, { commentIndex: number }>,
+  assetId: string | null
+): TimelineAssetReplacement {
+  const currentMeme = analysis?.topicPostMemeId
+    ? assets.find((asset) => asset.id === analysis.topicPostMemeId)
+    : undefined;
+
+  if (target.kind === "sfx") {
+    if (!assetId) {
+      return {
+        reactions,
+        selections: { topicPostSfxId: null }
+      };
+    }
+    if (currentMeme?.mediaKind === "video") {
+      throw new Error("Video memes cannot use SFX");
+    }
+    requireAsset(assets, assetId, "sfx");
+    return {
+      reactions,
+      selections: { topicPostSfxId: assetId }
+    };
+  }
+
+  if (!assetId) {
+    if (currentMeme?.mediaKind === "video" && target.kind === "meme") {
+      return { reactions };
+    }
+    if (currentMeme?.mediaKind !== "video" && target.kind === "video") {
+      return { reactions };
+    }
+    return {
+      reactions,
+      selections: {
+        topicPostMemeId: null,
+        ...(target.kind === "video" ? { topicPostSfxId: null } : {})
+      }
+    };
+  }
+
+  const mediaKind = target.kind === "video" ? "video" : "image";
+  requireAsset(assets, assetId, "meme", mediaKind);
+  return {
+    reactions,
+    selections: {
+      topicPostMemeId: assetId,
+      ...(mediaKind === "video" ? { topicPostSfxId: null } : {})
+    }
+  };
+}
+
 function usedSfxIds(
   reactions: MatchedReaction[],
   commentIndex: number
@@ -175,8 +232,18 @@ export function applyTimelineAssetReplacement(
     };
   }
 
-  if (!Number.isInteger(target.commentIndex) || target.commentIndex < 0) {
+  if (!Number.isInteger(target.commentIndex) || target.commentIndex < -1) {
     throw new Error("Invalid comment index");
+  }
+
+  if (target.commentIndex === -1) {
+    return applyTopicPostReplacement(
+      reactions,
+      analysis,
+      assets,
+      target,
+      assetId
+    );
   }
 
   const reaction = ensureReaction(

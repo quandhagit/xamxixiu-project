@@ -7,6 +7,7 @@ import {
   findAsset,
   isSampleAsset
 } from "./library.js";
+import { memeCategoryForEmotion } from "../timeline/meme-combo.js";
 
 export interface PromptAsset {
   id: string;
@@ -105,9 +106,13 @@ function sanitizeReaction(
   let sfxCategory = reaction.sfxCategory ?? null;
 
   if (memeAssetId) {
-    if (!meme || usedMemeIds.has(meme.id)) {
+    if (!meme) {
       memeAssetId = null;
-      memeCategory = null;
+      memeCategory =
+        memeCategory ?? memeCategoryForEmotion(reaction.emotion);
+    } else if (usedMemeIds.has(meme.id)) {
+      memeAssetId = null;
+      memeCategory = memeCategory ?? meme.category;
     } else {
       memeAssetId = meme.id;
       usedMemeIds.add(meme.id);
@@ -141,8 +146,16 @@ function sanitizeReaction(
     !sfxAssetId &&
     !sfxCategory
   ) {
-    memeAssetId = null;
-    memeCategory = null;
+    const fallbackSfx = assets.find(
+      (asset) => asset.type === "sfx" && isSelectableAsset(asset)
+    );
+    if (fallbackSfx) {
+      sfxAssetId = fallbackSfx.id;
+      sfxCategory = fallbackSfx.category;
+    } else {
+      memeAssetId = null;
+      memeCategory = null;
+    }
   }
 
   return {

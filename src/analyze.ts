@@ -7,8 +7,6 @@ import {
 import { isDirectCli } from "./cli.js";
 import type {
   ThreadAnalysis,
-  ReactionEmotion,
-  ReactionEvent,
   ThreadData
 } from "./types.js";
 import {
@@ -24,21 +22,7 @@ import {
   toPromptAsset,
   topicMemeAssets
 } from "./assets/prompt-catalog.js";
-
-const EMOTIONS: ReactionEmotion[] = [
-  "happy",
-  "laughing",
-  "sad",
-  "angry",
-  "shocked",
-  "surprised",
-  "confused",
-  "shy",
-  "cringe",
-  "scared",
-  "agree",
-  "neutral"
-];
+import { applyMiddleCommentTransitionSfx } from "./ai/meme-rules.js";
 
 const VOICE_OPTIONS = VOICE_POOL.map(
   (voice) => ({
@@ -47,86 +31,6 @@ const VOICE_OPTIONS = VOICE_POOL.map(
     style: voice.style
   })
 );
-
-function hasMemeOrVideo(
-  reaction: Pick<
-    ReactionEvent,
-    "memeAssetId" | "memeCategory"
-  >
-): boolean {
-  return Boolean(
-    reaction.memeAssetId || reaction.memeCategory
-  );
-}
-
-function applyMiddleCommentTransitionSfx(
-  analysis: ThreadAnalysis,
-  includedIndexes: number[],
-  transitionSfxIds: string[]
-): void {
-  if (includedIndexes.length < 3) {
-    return;
-  }
-
-  const first = includedIndexes[0];
-  const last =
-    includedIndexes[includedIndexes.length - 1];
-  const reactionsByIndex = new Map(
-    analysis.reactions.map((reaction) => [
-      reaction.commentIndex,
-      reaction
-    ])
-  );
-  let transitionCursor = 0;
-
-  function nextTransitionSfxId(): string | null {
-    if (transitionSfxIds.length === 0) {
-      return null;
-    }
-    const id = transitionSfxIds[
-      transitionCursor % transitionSfxIds.length
-    ];
-    transitionCursor += 1;
-    return id;
-  }
-
-  for (const commentIndex of includedIndexes) {
-    if (
-      commentIndex === first ||
-      commentIndex === last
-    ) {
-      continue;
-    }
-
-    const existing =
-      reactionsByIndex.get(commentIndex);
-
-    if (!existing) {
-      analysis.reactions.push({
-        commentIndex,
-        emotion: "neutral",
-        memeAssetId: null,
-        memeCategory: null,
-        sfxAssetId: nextTransitionSfxId(),
-        sfxCategory: "transition",
-        animation: "none",
-        duration: 1
-      });
-      continue;
-    }
-
-    if (!hasMemeOrVideo(existing)) {
-      existing.memeAssetId = null;
-      existing.memeCategory = null;
-      existing.sfxCategory = "transition";
-      existing.sfxAssetId =
-        existing.sfxAssetId &&
-        transitionSfxIds.includes(existing.sfxAssetId)
-          ? existing.sfxAssetId
-          : nextTransitionSfxId();
-    }
-  }
-}
 
 const SYSTEM_PROMPT = `
 You are a short-form video editor analyzing a Threads post and its comments.
@@ -656,6 +560,11 @@ export async function runAnalyze(
     "analysis.json"
   );
 
+  const existingAnalysis = await fs
+    .readFile(outputPath, "utf-8")
+    .then((text) => JSON.parse(text) as ThreadAnalysis)
+    .catch(() => undefined);
+
   let threadContent: string;
   try {
     threadContent = await fs.readFile(
@@ -901,12 +810,26 @@ Rules for intensity:
     );
   }
 
+  const preservedTitle = (
+    thread.topicTitle?.trim() ||
+    existingAnalysis?.topicTitle?.trim() ||
+    ""
+  );
+  if (preservedTitle) {
+    analysis.topicTitle = preservedTitle;
+  }
   const topicTitle = analysis.topicTitle?.trim();
   if (topicTitle) {
     analysis.topicTitle =
       topicTitle.length > TOPIC_TITLE_MAX_LENGTH
         ? `${topicTitle.slice(0, TOPIC_TITLE_MAX_LENGTH - 3).trimEnd()}...`
         : topicTitle;
+  } else {
+    analysis.topicTitle = "";
+  }
+  if (existingAnalysis?.topicTitleVoiceMode) {
+    analysis.topicTitleVoiceMode =
+      existingAnalysis.topicTitleVoiceMode;
   }
 
   analysis.reactions = (analysis.reactions ?? []).map((reaction) => ({

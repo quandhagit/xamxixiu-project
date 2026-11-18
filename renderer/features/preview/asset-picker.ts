@@ -1,6 +1,7 @@
 import type { Asset } from "../../../src/assets/library";
 import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
 import type { ProjectState } from "../../../src/project/store";
+import { isTopicPostIndex } from "../../../src/timeline/topic-constants";
 
 export function assetsForTarget(
   assets: Asset[],
@@ -41,16 +42,22 @@ export function pickerTitle(target: TimelineAssetTarget): string {
   if (target.kind === "music") {
     return "Chọn music";
   }
+  const afterTopic =
+    "commentIndex" in target && isTopicPostIndex(target.commentIndex);
   if (target.kind === "sfx") {
-    return "Chọn sound effect";
+    return afterTopic ? "Chọn sound effect · sau topic" : "Chọn sound effect";
   }
   if (target.kind === "video") {
-    return `Chọn video meme${"commentIndex" in target ? ` · comment #${target.commentIndex}` : ""}`;
+    return afterTopic
+      ? "Chọn video meme · sau topic"
+      : `Chọn video meme${"commentIndex" in target ? ` · comment #${target.commentIndex}` : ""}`;
   }
   if (target.kind === "topic-meme") {
     return "Chọn topic meme";
   }
-  return `Chọn meme · comment #${target.commentIndex}`;
+  return afterTopic
+    ? "Chọn meme · sau topic"
+    : `Chọn meme · comment #${target.commentIndex}`;
 }
 
 export function selectedAssetId(
@@ -69,6 +76,12 @@ export function selectedAssetId(
   }
   if (target.kind === "topic-meme") {
     return analysis?.topicMemeId ?? undefined;
+  }
+  if ("commentIndex" in target && isTopicPostIndex(target.commentIndex)) {
+    if (target.kind === "sfx") {
+      return analysis?.topicPostSfxId ?? undefined;
+    }
+    return analysis?.topicPostMemeId ?? undefined;
   }
   const reaction = reactions?.find(
     (item) => item.commentIndex === target.commentIndex

@@ -8,6 +8,14 @@ import type {
   ReactionEmotion,
   ThreadAnalysis
 } from "../types.js";
+import {
+  comboFromEmotion,
+  comboToReactionAnimation,
+  findCombo,
+  getBuiltinCombo,
+  isBuiltInComboId
+} from "../timeline/meme-combo.js";
+import { pickScoredAsset } from "./score-asset.js";
 
 export interface MatchedReaction {
   commentIndex: number;
@@ -16,6 +24,8 @@ export interface MatchedReaction {
   sfx: Asset | null;
   animation: ReactionAnimation;
   duration: number;
+  comboId?: string;
+  comboLocked?: boolean;
 }
 
 function selectableOfType(
@@ -35,10 +45,14 @@ function tagOverlap(left: Asset, right: Asset): number {
 function pickUnusedAsset(
   candidates: Asset[],
   usedIds: Set<string>,
-  allowReuse: boolean
+  allowReuse: boolean,
+  query?: string
 ): Asset | null {
   if (candidates.length === 0) {
     return null;
+  }
+  if (query?.trim()) {
+    return pickScoredAsset(candidates, usedIds, query, allowReuse);
   }
 
   const unused = candidates.filter(
@@ -69,6 +83,7 @@ function pickRequestedAsset(options: {
   assets: Asset[];
   usedIds: Set<string>;
   allowReuse: boolean;
+  query?: string;
 }): Asset | null {
   const pool = selectableOfType(options.assets, options.type);
   const requested = options.requestedId
@@ -93,44 +108,62 @@ function pickRequestedAsset(options: {
     const sameCategory = sameKind.filter(
       (asset) => asset.category === requested.category
     );
-    return pickUnusedAsset(tagged, options.usedIds, false) ??
-      pickUnusedAsset(sameCategory, options.usedIds, false) ??
-      pickUnusedAsset(sameKind, options.usedIds, false);
+    return pickUnusedAsset(tagged, options.usedIds, false, options.query) ??
+      pickUnusedAsset(sameCategory, options.usedIds, false, options.query) ??
+      pickUnusedAsset(sameKind, options.usedIds, false, options.query);
   }
 
-  if (options.requestedId) {
-    return null;
+  if (options.category) {
+    const byCategory = pickUnusedAsset(
+      pool.filter((asset) => asset.category === options.category),
+      options.usedIds,
+      options.allowReuse,
+      options.query
+    );
+    if (byCategory) {
+      return byCategory;
+    }
   }
 
-  if (!options.category) {
+  if (!options.requestedId && !options.category) {
     return null;
   }
 
   return pickUnusedAsset(
-    pool.filter((asset) => asset.category === options.category),
+    pool,
     options.usedIds,
-    options.allowReuse
+    options.allowReuse,
+    options.query
   );
 }
 
 export function matchReactions(
   analysis: ThreadAnalysis,
-  assets: Asset[]
+  assets: Asset[],
+  previous: MatchedReaction[] = []
 ): MatchedReaction[] {
   const usedMemeIds = new Set<string>();
   const usedSfxIds = new Set<string>();
+  const previousByIndex = new Map(
+    previous.map((item) => [item.commentIndex, item])
+  );
+  let previousPunch = false;
 
   return analysis.reactions.map((reaction) => {
+    const query = [reaction.emotion, reaction.memeCategory, reaction.sfxCategory]
+      .filter((value) => value && value !== "neutral")
+      .join(" ");
     let meme = pickRequestedAsset({
       requestedId: reaction.memeAssetId,
       category: reaction.memeCategory,
       type: "meme",
       assets,
       usedIds: usedMemeIds,
-      allowReuse: false
+      allowReuse: false,
+      query
     });
 
-    const sfx = meme?.mediaKind === "video"
+    let sfx = meme?.mediaKind === "video"
       ? null
       : pickRequestedAsset({
         requestedId: reaction.sfxAssetId,
@@ -138,11 +171,51 @@ export function matchReactions(
         type: "sfx",
         assets,
         usedIds: usedSfxIds,
-        allowReuse: true
+        allowReuse: true,
+        query
       });
 
     if (meme?.mediaKind === "image" && !sfx) {
+      sfx = pickUnusedAsset(
+        selectableOfType(assets, "sfx"),
+        usedSfxIds,
+        true,
+        query
+      );
+    }
+    if (meme?.mediaKind === "image" && !sfx) {
       meme = null;
+    }
+
+    const prior = previousByIndex.get(reaction.commentIndex);
+    const keepCombo =
+      Boolean(prior?.comboLocked && prior.comboId) &&
+      meme?.mediaKind !== "video";
+    const requestedComboId = reaction.comboId;
+    const namedCombo =
+      !keepCombo &&
+      requestedComboId &&
+      requestedComboId !== "none" &&
+      isBuiltInComboId(requestedComboId)
+        ? getBuiltinCombo(requestedComboId)
+        : undefined;
+    const chosen = keepCombo
+      ? (findCombo(prior?.comboId) ?? getBuiltinCombo("none"))
+      : namedCombo ?? comboFromEmotion(reaction.emotion, {
+          isVideo: meme?.mediaKind === "video" || !meme,
+          previousPunch
+        });
+    const comboId = keepCombo
+      ? (prior?.comboId ?? "none")
+      : meme
+        ? chosen.id
+        : "none";
+    const applied =
+      comboId === "none" ? getBuiltinCombo("none") : chosen;
+    if (comboId === "punch") {
+      previousPunch = true;
+    } else if (meme) {
+      previousPunch = false;
     }
 
     return {
@@ -150,8 +223,10 @@ export function matchReactions(
       emotion: reaction.emotion,
       meme,
       sfx,
-      animation: "none",
-      duration: 1
+      animation: comboToReactionAnimation(applied.animation),
+      duration: Math.max(1, applied.minDuration),
+      comboId,
+      comboLocked: prior?.comboLocked
     };
   });
 }

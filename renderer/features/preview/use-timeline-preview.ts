@@ -17,8 +17,9 @@ import {
 import type { VideoTimeline } from "../../../src/types";
 
 interface UseTimelinePreviewOptions {
-  timeline: VideoTimeline | undefined;
-  assets: Record<string, string>;
+  timeline?: VideoTimeline;
+  duration?: number;
+  assets?: Record<string, string>;
   active?: boolean;
 }
 
@@ -43,7 +44,8 @@ export function playingIfActive(
 
 export function useTimelinePreview({
   timeline,
-  assets,
+  duration,
+  assets = {},
   active = true
 }: UseTimelinePreviewOptions): UseTimelinePreviewResult {
   const [previewTime, setPreviewTime] =
@@ -54,6 +56,7 @@ export function useTimelinePreview({
     useRef<HTMLVideoElement>(null);
   const previewAudioRefs =
     useRef<PreviewAudioRefs>({});
+  const totalDuration = duration ?? timeline?.totalDuration;
   const previewAudioTracks = useMemo(
     () => (timeline ? getPreviewAudioTracks(timeline) : []),
     [timeline]
@@ -73,19 +76,19 @@ export function useTimelinePreview({
   }, [active]);
 
   useEffect(() => {
-    if (!timeline) {
+    if (!totalDuration) {
       setPreviewTime(0);
       setPreviewPlaying(false);
       return;
     }
-    if (previewTime > timeline.totalDuration) {
+    if (previewTime > totalDuration) {
       setPreviewTime(0);
       setPreviewPlaying(false);
     }
-  }, [previewTime, timeline]);
+  }, [previewTime, totalDuration]);
 
   useEffect(() => {
-    if (!previewPlaying || !timeline) {
+    if (!previewPlaying || !totalDuration) {
       return;
     }
     let frame = 0;
@@ -94,12 +97,12 @@ export function useTimelinePreview({
       const delta = (now - last) / 1000;
       last = now;
       setPreviewTime((time) => {
-        if (time >= timeline.totalDuration) {
+        if (time >= totalDuration) {
           setPreviewPlaying(false);
           return 0;
         }
         const next = time + delta;
-        if (next >= timeline.totalDuration) {
+        if (next >= totalDuration) {
           setPreviewPlaying(false);
           return 0;
         }
@@ -109,9 +112,12 @@ export function useTimelinePreview({
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [previewPlaying, timeline]);
+  }, [previewPlaying, totalDuration]);
 
   useEffect(() => {
+    if (!timeline) {
+      return;
+    }
     const video = previewVideoRef.current;
     if (!video) {
       return;
@@ -134,6 +140,9 @@ export function useTimelinePreview({
   }, [previewPlaying, previewTime, timeline]);
 
   useEffect(() => {
+    if (!timeline) {
+      return;
+    }
     const cleanups: Array<() => void> = [];
 
     for (const track of previewAudioTracks) {

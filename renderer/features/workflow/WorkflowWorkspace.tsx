@@ -22,12 +22,16 @@ import {
 } from "../app/ErrorToast";
 import {
   TOPIC_TITLE_CARD_FILE,
+  isTopicTitleMissing,
   normalizeTopicTitle,
+  resolveTopicTitleVoiceEnabled,
   shouldGenerateTopicTitleVoice
 } from "../../../src/timeline/topic-constants";
 import {
-  isAnalysisStale
-} from "../../../src/comments/analysis-stale";
+  previewFilesChanged
+} from "../../../src/timeline/persist";
+import type { TimelineProject } from "../../../src/timeline/project";
+import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
 import { Button } from "../ui/Button";
 import {
   formatProjectId,
@@ -38,7 +42,6 @@ import {
   WORKFLOW_STEPS,
   type WorkflowStep
 } from "./steps";
-import { AnalyzeStep } from "./AnalyzeStep";
 import { CaptureStep } from "./CaptureStep";
 import { InputStep } from "./InputStep";
 import {
@@ -81,6 +84,8 @@ export function WorkflowWorkspace({
     useState<Record<string, string>>({});
   const [previewAssets, setPreviewAssets] =
     useState<Record<string, string>>({});
+  const previewAssetsRef = useRef(previewAssets);
+  previewAssetsRef.current = previewAssets;
   const [url, setUrl] = useState("");
   const [captureCount, setCaptureCount] =
     useState(CAPTURE_COMMENT_TARGET);
@@ -92,6 +97,14 @@ export function WorkflowWorkspace({
     useState(false);
   const [draftTopicTitle, setDraftTopicTitle] =
     useState("");
+  const [titleMissing, setTitleMissing] =
+    useState(false);
+  const [titleInvalidNonce, setTitleInvalidNonce] =
+    useState(0);
+  const [titleSuggestions, setTitleSuggestions] =
+    useState<string[]>([]);
+  const [textDiffs, setTextDiffs] =
+    useState<SpeechTextDiff[]>([]);
   const setError = useErrorToast();
   const pendingVoiceSave = useRef(
     Promise.resolve()
@@ -111,10 +124,13 @@ export function WorkflowWorkspace({
 
   useEffect(() => {
     setDraftTopicTitle(
-      selectedProject?.analysis?.topicTitle ?? ""
+      selectedProject?.content?.topicTitle ??
+        selectedProject?.analysis?.topicTitle ??
+        ""
     );
   }, [
     selectedProject?.id,
+    selectedProject?.content?.topicTitle,
     selectedProject?.analysis?.topicTitle
   ]);
 
@@ -228,21 +244,21 @@ export function WorkflowWorkspace({
   async function loadPreviewAssets(
     project: ProjectState
   ): Promise<void> {
-    if (!project.timeline) {
+    if (!project.timeline && !project.timelineProject) {
       setPreviewAssets({});
       return;
     }
     const sources = [
-      project.timeline.backgroundFile,
-      project.timeline.musicFile,
-      project.timeline.topicIntro?.case === "long"
+      project.timeline?.backgroundFile,
+      project.timeline?.musicFile,
+      project.timeline?.topicIntro?.case === "long"
         ? project.timeline.topicIntro.titleVoiceFile
         : undefined,
-      project.timeline.topicIntro?.openSfxFile,
-      project.timeline.topicIntro?.titleCardFile,
-      project.timeline.topicIntro?.memeFile,
+      project.timeline?.topicIntro?.openSfxFile,
+      project.timeline?.topicIntro?.titleCardFile,
+      project.timeline?.topicIntro?.memeFile,
       TOPIC_TITLE_CARD_FILE,
-      ...project.timeline.scenes.flatMap(
+      ...project.timeline?.scenes.flatMap(
         (scene) =>
           (scene.blocks ?? [scene]).flatMap(
             (block) => [
@@ -253,13 +269,22 @@ export function WorkflowWorkspace({
               )
             ]
           )
-      )
+      ) ?? [],
+      ...(project.timelineProject?.clips.map((clip) => clip.file) ?? [])
     ].filter(
       (source): source is string =>
         Boolean(source)
     );
+    const uniqueSources = [...new Set(sources)];
+    const current = previewAssetsRef.current;
+    if (
+      uniqueSources.every((source) => current[source]) &&
+      !previewFilesChanged(Object.keys(current), uniqueSources)
+    ) {
+      return;
+    }
     const entries = await Promise.all(
-      [...new Set(sources)].map(async (source) => {
+      uniqueSources.map(async (source) => {
         try {
           const dataUrl =
             await window.xamxixiu.getPreviewAsset(
@@ -426,44 +451,51 @@ export function WorkflowWorkspace({
     }
   }
 
-  async function persistTopicTitle(): Promise<
+  async function persistTopicTitle(
+    projectState = selectedProject
+  ): Promise<
     ProjectState | undefined
   > {
-    if (!selectedProject?.analysis) {
+    if (!projectState) {
       return undefined;
     }
 
     const next = normalizeTopicTitle(
       draftTopicTitleRef.current
     );
-    const current =
-      selectedProject.analysis.topicTitle ?? "";
-    if (next === current) {
-      return selectedProject;
+    const contentTitle = projectState.content?.topicTitle ?? "";
+    const analysisTitle = projectState.analysis?.topicTitle ?? "";
+    if (next === contentTitle && next === analysisTitle) {
+      return projectState;
     }
 
-    if (
-      typeof window.xamxixiu.updateTopicIntro !==
-      "function"
-    ) {
-      setError(
-        "Cần restart app để sửa topic title."
-      );
-      return undefined;
-    }
-
-    const project =
-      await window.xamxixiu.updateTopicIntro({
-        projectId: selectedProject.id,
+    if (projectState.analysis) {
+      if (typeof window.xamxixiu.updateTopicIntro !== "function") {
+        setError("Cần restart app để sửa topic title.");
+        return undefined;
+      }
+      const project = await window.xamxixiu.updateTopicIntro({
+        projectId: projectState.id,
         topicTitle: next
       });
-    setSelectedProject(project);
-    setDraftTopicTitle(
-      project.analysis?.topicTitle ?? next
-    );
-    if (project.timeline) {
-      await loadPreviewAssets(project);
+      setSelectedProject(project);
+      setDraftTopicTitle(project.analysis?.topicTitle ?? next);
+      if (project.timeline) {
+        await loadPreviewAssets(project);
+      }
+      return project;
     }
+
+    if (typeof window.xamxixiu.saveContentTopicTitle !== "function") {
+      setError("Cần restart app để lưu topic title ở bước Capture.");
+      return undefined;
+    }
+    const project = await window.xamxixiu.saveContentTopicTitle(
+      projectState.id,
+      next
+    );
+    setSelectedProject(project);
+    setDraftTopicTitle(project.content?.topicTitle ?? next);
     return project;
   }
 
@@ -494,7 +526,12 @@ export function WorkflowWorkspace({
     const project =
       await window.xamxixiu.updateContent({
         projectId: selectedProject.id,
-        content: draftContent,
+        content: {
+          ...draftContent,
+          topicTitle: normalizeTopicTitle(
+            draftTopicTitleRef.current
+          )
+        },
         imageOrder: imageSlots
       });
     const saved =
@@ -670,11 +707,31 @@ export function WorkflowWorkspace({
 
     setError(undefined);
     if (currentStep === "CAPTURE") {
-      setCurrentStep("ANALYZE");
-      return;
-    }
-    if (currentStep === "ANALYZE") {
-      setCurrentStep("VOICE");
+      if (isTopicTitleMissing(draftTopicTitleRef.current)) {
+        setTitleMissing(true);
+        setTitleInvalidNonce((value) => value + 1);
+        return;
+      }
+      setTitleMissing(false);
+      setOperationLoading(true);
+      try {
+        const saved = await persistDraft();
+        if (!saved) {
+          return;
+        }
+        setSelectedProject(saved);
+        setDraftContent(saved.content ?? draftContent);
+        await persistTopicTitle(saved);
+        setCurrentStep("VOICE");
+      } catch (reason: unknown) {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "Không thể lưu capture."
+        );
+      } finally {
+        setOperationLoading(false);
+      }
       return;
     }
     setOperationLoading(true);
@@ -748,39 +805,6 @@ export function WorkflowWorkspace({
     }
   }
 
-  async function analyzeProject(): Promise<void> {
-    if (!selectedProject) {
-      return;
-    }
-
-    setError(undefined);
-    setOperationLoading(true);
-
-    try {
-      let project = selectedProject;
-      if (draftContent) {
-        const saved = await persistDraft();
-
-        if (saved) {
-          project = saved;
-        }
-      }
-      setSelectedProject(
-        await window.xamxixiu.analyzeProject(
-          project.id
-        )
-      );
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Analyze thất bại."
-      );
-    } finally {
-      setOperationLoading(false);
-    }
-  }
-
   async function generateAllAudio(): Promise<void> {
     if (!selectedProject) {
       return;
@@ -843,33 +867,6 @@ export function WorkflowWorkspace({
         reason instanceof Error
           ? reason.message
           : "Tạo timeline thất bại."
-      );
-    } finally {
-      setOperationLoading(false);
-    }
-  }
-
-  async function rematchAssets(): Promise<void> {
-    if (!selectedProject) {
-      return;
-    }
-    setOperationLoading(true);
-    setError(undefined);
-    try {
-      await window.xamxixiu.matchReactions(
-        selectedProject.id
-      );
-      const project =
-        await window.xamxixiu.createTimeline(
-          selectedProject.id
-        );
-      setSelectedProject(project);
-      await loadPreviewAssets(project);
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Rematch asset thất bại."
       );
     } finally {
       setOperationLoading(false);
@@ -1006,26 +1003,141 @@ export function WorkflowWorkspace({
     }
   }
 
+  async function cleanCommentText(): Promise<void> {
+    if (!selectedProject || !draftContent) {
+      return;
+    }
+    setOperationLoading(true);
+    setError(undefined);
+    try {
+      const texts = [
+        draftContent.text,
+        ...draftContent.comments.map((comment) => comment.text)
+      ];
+      const diffs = await window.xamxixiu.cleanCommentText({
+        projectId: selectedProject.id,
+        texts
+      });
+      setTextDiffs(
+        diffs.map((diff) => ({
+          ...diff,
+          index: diff.index - 1
+        }))
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Làm sạch text thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  function acceptTextDiff(index: number): void {
+    if (!draftContent) {
+      return;
+    }
+    const diff = textDiffs.find((item) => item.index === index);
+    if (!diff) {
+      return;
+    }
+    if (index === -1) {
+      setDraftContent({ ...draftContent, text: diff.after });
+    } else {
+      setDraftContent({
+        ...draftContent,
+        comments: draftContent.comments.map((comment, commentIndex) =>
+          commentIndex === index ? { ...comment, text: diff.after } : comment
+        )
+      });
+    }
+    setTextDiffs((current) => current.filter((item) => item.index !== index));
+  }
+
+  function rejectTextDiff(index: number): void {
+    setTextDiffs((current) => current.filter((item) => item.index !== index));
+  }
+
+  async function suggestTitles(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    setOperationLoading(true);
+    setError(undefined);
+    try {
+      if (draftContent) {
+        await persistDraft();
+      }
+      setTitleSuggestions(
+        await window.xamxixiu.suggestTopicTitles(selectedProject.id)
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Gợi ý title thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function assignProjectVoices(): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    setOperationLoading(true);
+    setError(undefined);
+    try {
+      if (draftContent) {
+        await persistDraft();
+      }
+      await persistTopicTitle();
+      setSelectedProject(
+        await window.xamxixiu.assignVoices(selectedProject.id)
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "AI chọn voice thất bại."
+      );
+    } finally {
+      setOperationLoading(false);
+    }
+  }
+
+  async function updateTitleVoiceMode(
+    mode: "auto" | "on" | "off"
+  ): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    try {
+      const project = await window.xamxixiu.updateTopicIntro({
+        projectId: selectedProject.id,
+        topicTitleVoiceMode: mode
+      });
+      setSelectedProject(project);
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không lưu được tùy chọn title voice."
+      );
+    }
+  }
+
   const topicText =
     draftContent?.text ??
     selectedProject?.content?.text ??
     selectedProject?.thread?.text;
-  const skipTopicTitleVoice =
-    Boolean(topicText) &&
-    !shouldGenerateTopicTitleVoice(topicText);
-  const commentsForAnalysis =
-    draftContent ??
-    selectedProject?.content ??
-    selectedProject?.thread;
-  const analysisStale = Boolean(
-    commentsForAnalysis &&
-      selectedProject?.analysis &&
-      isAnalysisStale(
-        commentsForAnalysis,
-        selectedProject.analysis
-      )
+  const skipTopicTitleVoice = !resolveTopicTitleVoiceEnabled(
+    selectedProject?.analysis,
+    topicText
   );
-
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
         <WorkflowSidebar
@@ -1092,6 +1204,11 @@ export function WorkflowWorkspace({
                   addCommentLoading={addCommentLoading}
                   operationLoading={operationLoading}
                   hasProject={Boolean(selectedProject)}
+                  draftTopicTitle={draftTopicTitle}
+                  titleInvalid={titleMissing}
+                  titleInvalidNonce={titleInvalidNonce}
+                  titleSuggestions={titleSuggestions}
+                  textDiffs={textDiffs}
                   onReset={() => {
                     void resetContent();
                   }}
@@ -1123,19 +1240,28 @@ export function WorkflowWorkspace({
                   onAddComment={(commentUrl) => {
                     void addComment(commentUrl);
                   }}
-                />
-              ) : currentStep === "ANALYZE" ? (
-                <AnalyzeStep
-                  project={selectedProject}
-                  draftContent={draftContent}
-                  draftTopicTitle={draftTopicTitle}
-                  operationLoading={operationLoading}
-                  analysisStale={analysisStale}
-                  onAnalyze={() => {
-                    void analyzeProject();
+                  onTopicTitleChange={(value) => {
+                    setDraftTopicTitle(value);
+                    if (!isTopicTitleMissing(value)) {
+                      setTitleMissing(false);
+                    }
                   }}
-                  onTopicTitleChange={setDraftTopicTitle}
-                  onTopicTitleBlur={queueTopicTitleSave}
+                  onCleanText={() => {
+                    void cleanCommentText();
+                  }}
+                  onAcceptDiff={acceptTextDiff}
+                  onRejectDiff={rejectTextDiff}
+                  onSuggestTitles={() => {
+                    void suggestTitles();
+                  }}
+                  onPickTitle={(title) => {
+                    setDraftTopicTitle(title);
+                    draftTopicTitleRef.current = title;
+                    if (!isTopicTitleMissing(title)) {
+                      setTitleMissing(false);
+                    }
+                    void persistTopicTitle();
+                  }}
                 />
               ) : currentStep === "VOICE" ? (
                 <VoiceStep
@@ -1144,6 +1270,10 @@ export function WorkflowWorkspace({
                   draftTopicTitle={draftTopicTitle}
                   audioAssets={audioAssets}
                   skipTopicTitleVoice={skipTopicTitleVoice}
+                  titleVoiceMode={
+                    selectedProject?.analysis?.topicTitleVoiceMode ?? "auto"
+                  }
+                  defaultTitleVoiceEnabled={shouldGenerateTopicTitleVoice(topicText)}
                   operationLoading={operationLoading}
                   onGenerateAll={() => {
                     void generateAllAudio();
@@ -1177,6 +1307,12 @@ export function WorkflowWorkspace({
                   onRetryAudio={(target) => {
                     void retryAudio(target);
                   }}
+                  onTitleVoiceModeChange={(mode) => {
+                    void updateTitleVoiceMode(mode);
+                  }}
+                  onAssignVoices={() => {
+                    void assignProjectVoices();
+                  }}
                 />
               ) : currentStep === "TIMELINE" ? (
                 selectedProject ? (
@@ -1184,6 +1320,7 @@ export function WorkflowWorkspace({
                     <TimelineWorkspace
                       projectId={selectedProject.id}
                       timeline={selectedProject.timeline}
+                      timelineProject={selectedProject.timelineProject}
                       previewAssets={previewAssets}
                       analysis={selectedProject.analysis}
                       reactions={selectedProject.reactions}
@@ -1193,8 +1330,14 @@ export function WorkflowWorkspace({
                         setSelectedProject(project);
                         await loadPreviewAssets(project);
                       }}
+                      onTimelineProjectChange={(next: TimelineProject) => {
+                        setSelectedProject((current) =>
+                          current
+                            ? { ...current, timelineProject: next }
+                            : current
+                        );
+                      }}
                       onCreateTimeline={createTimeline}
-                      onRematch={rematchAssets}
                     />
                   </div>
                 ) : null
@@ -1211,16 +1354,18 @@ export function WorkflowWorkspace({
               )}
           </div>
 
-          <WorkflowFooter
-            currentIndex={currentIndex}
-            stepCount={WORKFLOW_STEPS.length}
-            currentStep={currentStep}
-            operationLoading={operationLoading}
-            onBack={previousStep}
-            onNext={() => {
-              void continueWorkflow();
-            }}
-          />
+          {currentStep !== "TIMELINE" ? (
+            <WorkflowFooter
+              currentIndex={currentIndex}
+              stepCount={WORKFLOW_STEPS.length}
+              currentStep={currentStep}
+              operationLoading={operationLoading}
+              onBack={previousStep}
+              onNext={() => {
+                void continueWorkflow();
+              }}
+            />
+          ) : null}
         </section>
       </div>
   );

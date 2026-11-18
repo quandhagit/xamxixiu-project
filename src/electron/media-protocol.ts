@@ -5,6 +5,7 @@ import {
   stat
 } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import type { AssetLibrary } from "../assets/library.js";
 
 const MIME_TYPES: Record<string, string> = {
@@ -111,17 +112,15 @@ export async function handleAssetMediaRequest(
   }
 
   const { start, end, status } = range;
-  const stream = createReadStream(asset.file, { start, end });
-  const abort = (): void => {
-    stream.destroy();
-  };
-  if (request.signal.aborted) {
-    abort();
-  } else {
-    request.signal.addEventListener("abort", abort, { once: true });
+  const body = fileRangeBody(asset.file, start, end, request.signal);
+  if (!body) {
+    return new Response(null, {
+      status: 499,
+      headers: corsHeaders
+    });
   }
 
-  return new Response(stream as unknown as BodyInit, {
+  return new Response(body, {
     status,
     headers: {
       ...corsHeaders,
@@ -131,4 +130,31 @@ export async function handleAssetMediaRequest(
         : {})
     }
   });
+}
+
+function fileRangeBody(
+  file: string,
+  start: number,
+  end: number,
+  signal: AbortSignal
+): ReadableStream<Uint8Array> | undefined {
+  if (signal.aborted) {
+    return undefined;
+  }
+  const stream = createReadStream(file, { start, end });
+  stream.on("error", () => {
+    if (!stream.destroyed) {
+      stream.destroy();
+    }
+  });
+  const abort = (): void => {
+    if (!stream.destroyed) {
+      stream.destroy();
+    }
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  stream.once("close", () => {
+    signal.removeEventListener("abort", abort);
+  });
+  return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
 }
