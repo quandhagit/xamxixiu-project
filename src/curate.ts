@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  getDeepseek,
-  getDeepseekModel
-} from "./ai/deepseek.js";
+  getAiLabel,
+  getChatClient,
+  getChatModel
+} from "./ai/client.js";
 import { isDirectCli } from "./cli.js";
 import type { ThreadData } from "./types.js";
 import {
@@ -94,16 +95,17 @@ async function requestWithRetry(
   prompt: string
 ): Promise<string> {
   const maxAttempts = 3;
+  const label = getAiLabel();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       console.log(
-        `DeepSeek request ${attempt}/${maxAttempts}...`
+        `${label} request ${attempt}/${maxAttempts}...`
       );
 
       const response =
-        await getDeepseek().chat.completions.create({
-          model: getDeepseekModel(),
+        await getChatClient().chat.completions.create({
+          model: getChatModel(),
           messages: [
             {
               role: "system",
@@ -117,7 +119,7 @@ async function requestWithRetry(
 
       if (!text) {
         throw new Error(
-          "DeepSeek returned an empty response."
+          `${label} returned an empty response.`
         );
       }
 
@@ -139,7 +141,7 @@ async function requestWithRetry(
       const delay = attempt * 3000;
 
       console.log(
-        `DeepSeek temporarily unavailable. Retrying in ${delay / 1000}s...`
+        `${label} temporarily unavailable. Retrying in ${delay / 1000}s...`
       );
       await new Promise((resolve) =>
         setTimeout(resolve, delay)
@@ -147,7 +149,7 @@ async function requestWithRetry(
     }
   }
 
-  throw new Error("DeepSeek request failed after retries.");
+  throw new Error(`${label} request failed after retries.`);
 }
 
 export async function runCurate(
@@ -215,10 +217,10 @@ ${JSON.stringify(
   try {
     raw = JSON.parse(cleaned);
   } catch {
-    console.error("DeepSeek returned invalid JSON:");
+    console.error(`${getAiLabel()} returned invalid JSON:`);
     console.error(text);
     throw new Error(
-      "Failed to parse DeepSeek response as JSON."
+      `Failed to parse ${getAiLabel()} response as JSON.`
     );
   }
 

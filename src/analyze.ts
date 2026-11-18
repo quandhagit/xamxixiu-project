@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  getDeepseek,
-  getDeepseekModel
-} from "./ai/deepseek.js";
+  getAiLabel,
+  getChatClient,
+  getChatModel
+} from "./ai/client.js";
 import { isDirectCli } from "./cli.js";
 import type {
   ThreadAnalysis,
@@ -716,7 +717,8 @@ Rules for intensity:
   and be no longer than 80 characters.
 `;
 
-  console.log("Analyzing thread with DeepSeek...");
+  const label = getAiLabel();
+  console.log(`Analyzing thread with ${label}...`);
 
   async function generateWithRetry(
     prompt: string
@@ -726,11 +728,11 @@ Rules for intensity:
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         console.log(
-          `DeepSeek request ${attempt}/${maxAttempts}...`
+          `${label} request ${attempt}/${maxAttempts}...`
         );
 
-        return await getDeepseek().chat.completions.create({
-          model: getDeepseekModel(),
+        return await getChatClient().chat.completions.create({
+          model: getChatModel(),
           messages: [
             {
               role: "system",
@@ -762,7 +764,7 @@ Rules for intensity:
         const delay = attempt * 3000;
 
         console.log(
-          `DeepSeek temporarily unavailable. Retrying in ${delay / 1000}s...`
+          `${label} temporarily unavailable. Retrying in ${delay / 1000}s...`
         );
 
         await new Promise((resolve) =>
@@ -772,7 +774,7 @@ Rules for intensity:
     }
 
     throw new Error(
-      "DeepSeek request failed after retries."
+      `${label} request failed after retries.`
     );
   }
 
@@ -783,7 +785,7 @@ Rules for intensity:
 
   if (!text) {
     throw new Error(
-      "DeepSeek returned an empty response."
+      `${label} returned an empty response.`
     );
   }
 
@@ -801,12 +803,12 @@ Rules for intensity:
     ) as ThreadAnalysis;
   } catch {
     console.error(
-      "DeepSeek returned invalid JSON:"
+      `${label} returned invalid JSON:`
     );
     console.error(text);
 
     throw new Error(
-      "Failed to parse DeepSeek response as JSON."
+      `Failed to parse ${label} response as JSON.`
     );
   }
 

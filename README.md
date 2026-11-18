@@ -10,7 +10,7 @@
 - Node.js 20 trở lên
 - Yarn Classic 1.x
 - FFmpeg trên PATH, hoặc chạy `yarn fetch:binaries` để tải ffmpeg/ffprobe/Chromium vào `vendor/` (bản cài Windows đã nhúng sẵn)
-- Tài khoản và API key DeepSeek
+- Tài khoản DeepSeek hoặc Gemini (cấu hình API key trong Settings)
 - Tài khoản Vbee TTS
 - Cloudflared chỉ khi không dùng binary đi kèm app (`vendor/cloudflared.exe` hoặc bản cài)
 
@@ -44,11 +44,6 @@ Copy-Item .env.example .env
 Điền các giá trị sau:
 
 ```env
-AI_PROVIDER=deepseek
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
-
 VBEE_ACCESS_TOKEN=your_vbee_access_token
 VBEE_APP_ID=your_vbee_app_id
 VBEE_WEBHOOK_URL=https://your-public-domain/webhooks/vbee
@@ -57,7 +52,7 @@ VBEE_WEBHOOK_PORT=3001
 
 Không commit `.env` vì file này chứa secret.
 
-Trong app desktop, bấm **Settings** trên header để điền DeepSeek API key, model, Vbee access token, app id và webhook port. Giá trị đã lưu nằm trong thư mục dữ liệu của app và được ưu tiên hơn `.env`.
+Trong app desktop, bấm **Settings** trên header để chọn AI (DeepSeek hoặc Gemini), điền API key và model, cùng Vbee access token, app id và webhook port. Cấu hình AI chỉ lưu trên máy trong Settings, không dùng file `.env`. Giá trị Vbee đã lưu được ưu tiên hơn `.env`.
 
 App tự chạy `cloudflared` đi kèm và tự tạo URL webhook. Không cần cài Cloudflared hay điền `VBEE_WEBHOOK_URL` khi dùng giao diện. `CLOUDFLARED_PATH` chỉ cần khi muốn dùng một binary khác.
 
@@ -97,7 +92,7 @@ Lệnh này cũng chạy:
      máy (`speech-abbreviations.json` trong thư mục dữ liệu của app) và chỉ
      áp dụng cho lần capture sau; danh sách khởi đầu nằm ở
      `src/comments/speech-abbreviations.ts`.
-   - Bấm **AI chọn comment** để DeepSeek giữ khoảng `CURATE_KEEP_MIN`-
+   - Bấm **AI chọn comment** để AI giữ khoảng `CURATE_KEEP_MIN`-
      `CURATE_KEEP_MAX` comment (mặc định 8-12) và **sắp xếp lại thứ tự**
      cho video mượt. Reply luôn đi liền sau comment cha; comment bị loại
      được dồn xuống cuối. Comment bị loại hiện lý do và lọc được bằng
@@ -105,7 +100,7 @@ Lệnh này cũng chạy:
      tay, hoặc kéo thả để đổi lại thứ tự. Quyết định giữ/loại của bạn không
      bị AI ghi đè khi chạy lại. Chỉnh các giới hạn ở
      `src/comments/comment-constants.ts`.
-4. Bấm **Next** để sang **Analyze**. DeepSeek sẽ phân tích tone, chủ đề, emotion và chọn voice.
+4. Bấm **Next** để sang **Analyze**. AI sẽ phân tích tone, chủ đề, emotion và chọn voice.
 5. Bấm **Next** để tạo audio bằng Vbee.
 6. Nếu voice lỗi, các comment khác vẫn tiếp tục chạy. Item lỗi sẽ có nút **Retry**.
 7. Bấm **Next** tại **Voice** để match meme/SFX rồi tạo timeline. Chọn lại
@@ -264,10 +259,9 @@ yarn create-capcut-project `
 - Kiểm tra Cloudflared đang forward đến đúng port. App dùng binary đi kèm; nếu muốn bản khác thì set `CLOUDFLARED_PATH`.
 - Kiểm tra `VBEE_WEBHOOK_URL` có đuôi `/webhooks/vbee`.
 
-### DeepSeek không chạy
+### AI không chạy
 
-- Kiểm tra `DEEPSEEK_API_KEY`.
-- Kiểm tra `DEEPSEEK_BASE_URL` và `DEEPSEEK_MODEL`.
+- Mở **Settings > AI**, chọn DeepSeek hoặc Gemini, rồi điền API key, Base URL và model.
 - Xem log trong terminal đang chạy Electron.
 
 ### Threads không capture được

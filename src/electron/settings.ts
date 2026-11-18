@@ -5,6 +5,7 @@ import { app } from "electron";
 import os from "node:os";
 
 import type {
+  AiProvider,
   AppSettings
 } from "./ipc-types.js";
 
@@ -23,12 +24,20 @@ function defaultCapCutDraftsDirectory(): string {
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
+const DEFAULT_GEMINI_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta/openai/";
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const DEFAULT_PORT = "3001";
+const DEFAULT_AI_PROVIDER: AiProvider = "deepseek";
 
 const ENV_KEYS = {
+  aiProvider: "AI_PROVIDER",
   deepseekApiKey: "DEEPSEEK_API_KEY",
   deepseekBaseUrl: "DEEPSEEK_BASE_URL",
   deepseekModel: "DEEPSEEK_MODEL",
+  geminiApiKey: "GEMINI_API_KEY",
+  geminiBaseUrl: "GEMINI_BASE_URL",
+  geminiModel: "GEMINI_MODEL",
   vbeeAccessToken: "VBEE_ACCESS_TOKEN",
   vbeeAppId: "VBEE_APP_ID",
   vbeeWebhookPort: "VBEE_WEBHOOK_PORT",
@@ -48,11 +57,13 @@ function readEnv(name: string): string {
 
 export function settingsFromEnv(): AppSettings {
   return {
-    deepseekApiKey: readEnv("DEEPSEEK_API_KEY"),
-    deepseekBaseUrl:
-      readEnv("DEEPSEEK_BASE_URL") || DEFAULT_BASE_URL,
-    deepseekModel:
-      readEnv("DEEPSEEK_MODEL") || DEFAULT_MODEL,
+    aiProvider: DEFAULT_AI_PROVIDER,
+    deepseekApiKey: "",
+    deepseekBaseUrl: DEFAULT_BASE_URL,
+    deepseekModel: DEFAULT_MODEL,
+    geminiApiKey: "",
+    geminiBaseUrl: DEFAULT_GEMINI_BASE_URL,
+    geminiModel: DEFAULT_GEMINI_MODEL,
     vbeeAccessToken: readEnv("VBEE_ACCESS_TOKEN"),
     vbeeAppId: readEnv("VBEE_APP_ID"),
     vbeeWebhookPort:
@@ -72,6 +83,32 @@ function readField(
     : fallback;
 }
 
+function normalizeAiProvider(
+  value: unknown,
+  fallback: AiProvider
+): AiProvider {
+  const raw =
+    typeof value === "string"
+      ? value.trim().toLowerCase()
+      : fallback;
+  return raw === "gemini" ? "gemini" : "deepseek";
+}
+
+function assertHttpUrl(value: string, label: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} không hợp lệ.`);
+  }
+
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error(
+      `${label} phải bắt đầu bằng http hoặc https.`
+    );
+  }
+}
+
 function isMissingFile(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -86,6 +123,10 @@ export function normalizeSettings(
   fallback: AppSettings = settingsFromEnv()
 ): AppSettings {
   return {
+    aiProvider: normalizeAiProvider(
+      input.aiProvider,
+      fallback.aiProvider
+    ),
     deepseekApiKey: readField(
       input.deepseekApiKey,
       fallback.deepseekApiKey
@@ -100,6 +141,20 @@ export function normalizeSettings(
         input.deepseekModel,
         fallback.deepseekModel
       ) || DEFAULT_MODEL,
+    geminiApiKey: readField(
+      input.geminiApiKey,
+      fallback.geminiApiKey
+    ),
+    geminiBaseUrl:
+      readField(
+        input.geminiBaseUrl,
+        fallback.geminiBaseUrl
+      ) || DEFAULT_GEMINI_BASE_URL,
+    geminiModel:
+      readField(
+        input.geminiModel,
+        fallback.geminiModel
+      ) || DEFAULT_GEMINI_MODEL,
     vbeeAccessToken: readField(
       input.vbeeAccessToken,
       fallback.vbeeAccessToken
@@ -135,21 +190,8 @@ export async function assertValidSettings(
     );
   }
 
-  let baseUrl: URL;
-  try {
-    baseUrl = new URL(settings.deepseekBaseUrl);
-  } catch {
-    throw new Error("DeepSeek base URL không hợp lệ.");
-  }
-
-  if (
-    baseUrl.protocol !== "https:" &&
-    baseUrl.protocol !== "http:"
-  ) {
-    throw new Error(
-      "DeepSeek base URL phải bắt đầu bằng http hoặc https."
-    );
-  }
+  assertHttpUrl(settings.deepseekBaseUrl, "DeepSeek base URL");
+  assertHttpUrl(settings.geminiBaseUrl, "Gemini base URL");
 
   if (
     settings.capcutDraftsDir &&

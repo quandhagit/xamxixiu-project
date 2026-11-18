@@ -7,6 +7,7 @@ import {
   useState
 } from "react";
 import type {
+  AiProvider,
   AppSettings
 } from "../../../src/electron/ipc-types";
 import {
@@ -22,14 +23,20 @@ import type {
 } from "../../../src/comments/speech-abbreviations";
 import { Button } from "../ui/Button";
 import { fieldClassName } from "../ui/Input";
+import { Select } from "../ui/Select";
 import { Textarea } from "../ui/Textarea";
 import { cn } from "../ui/cn";
 import { useErrorToast } from "./ErrorToast";
 
 const EMPTY_SETTINGS: AppSettings = {
+  aiProvider: "deepseek",
   deepseekApiKey: "",
   deepseekBaseUrl: "https://api.deepseek.com",
   deepseekModel: "deepseek-chat",
+  geminiApiKey: "",
+  geminiBaseUrl:
+    "https://generativelanguage.googleapis.com/v1beta/openai/",
+  geminiModel: "gemini-2.5-flash",
   vbeeAccessToken: "",
   vbeeAppId: "",
   vbeeWebhookPort: "3001",
@@ -37,7 +44,7 @@ const EMPTY_SETTINGS: AppSettings = {
 };
 
 type TabId =
-  | "deepseek"
+  | "ai"
   | "vbee"
   | "threads"
   | "abbreviations";
@@ -48,9 +55,9 @@ const TABS: Array<{
   hint: string;
 }> = [
   {
-    id: "deepseek",
-    label: "DeepSeek",
-    hint: "API key, model"
+    id: "ai",
+    label: "AI",
+    hint: "Chọn nhà cung cấp, API key"
   },
   {
     id: "vbee",
@@ -137,7 +144,7 @@ export function SettingsDialog({
   onClose: () => void;
 }): React.ReactElement | null {
   const [activeTab, setActiveTab] =
-    useState<TabId>("deepseek");
+    useState<TabId>("ai");
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS);
   const [showSecrets, setShowSecrets] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -195,7 +202,7 @@ export function SettingsDialog({
     let cancelled = false;
     setError(undefined);
     setStatus(undefined);
-    setActiveTab("deepseek");
+    setActiveTab("ai");
 
     if (!window.xamxixiu?.getSettings) {
       setSettings(EMPTY_SETTINGS);
@@ -273,7 +280,10 @@ export function SettingsDialog({
     return null;
   }
 
-  function update(field: keyof AppSettings, value: string): void {
+  function update<K extends keyof AppSettings>(
+    field: K,
+    value: AppSettings[K]
+  ): void {
     setSettings((current) => ({
       ...current,
       [field]: value
@@ -499,48 +509,112 @@ export function SettingsDialog({
           </nav>
 
           <div className="min-w-0 flex-1 overflow-y-auto p-4">
-            {activeTab === "deepseek" ? (
+            {activeTab === "ai" ? (
               <section className="mx-auto max-w-2xl space-y-4">
                 <h4 className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
-                  DeepSeek
+                  AI
                 </h4>
-                <Field label="API key">
-                  <input
-                    type={secretType}
-                    autoComplete="off"
-                    value={settings.deepseekApiKey}
+                <Field label="AI sử dụng">
+                  <Select
+                    value={settings.aiProvider}
                     disabled={disabled}
-                    onChange={(event) =>
-                      update("deepseekApiKey", event.target.value)
-                    }
-                    className={inputClassName}
-                  />
+                    className="mt-2"
+                    onChange={(event) => {
+                      const next: AiProvider =
+                        event.target.value === "gemini"
+                          ? "gemini"
+                          : "deepseek";
+                      update("aiProvider", next);
+                    }}
+                  >
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="gemini">Gemini</option>
+                  </Select>
                 </Field>
-                <Field
-                  label="Base URL"
-                  hint="Để trống khi lưu sẽ dùng https://api.deepseek.com."
-                >
-                  <input
-                    type="url"
-                    value={settings.deepseekBaseUrl}
-                    disabled={disabled}
-                    onChange={(event) =>
-                      update("deepseekBaseUrl", event.target.value)
-                    }
-                    className={inputClassName}
-                  />
-                </Field>
-                <Field label="Model" hint="Mặc định deepseek-chat.">
-                  <input
-                    type="text"
-                    value={settings.deepseekModel}
-                    disabled={disabled}
-                    onChange={(event) =>
-                      update("deepseekModel", event.target.value)
-                    }
-                    className={inputClassName}
-                  />
-                </Field>
+                {settings.aiProvider === "gemini" ? (
+                  <>
+                    <Field label="API key">
+                      <input
+                        type={secretType}
+                        autoComplete="off"
+                        value={settings.geminiApiKey}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("geminiApiKey", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                    <Field
+                      label="Base URL"
+                      hint="Để trống khi lưu sẽ dùng https://generativelanguage.googleapis.com/v1beta/openai/."
+                    >
+                      <input
+                        type="url"
+                        value={settings.geminiBaseUrl}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("geminiBaseUrl", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                    <Field
+                      label="Model"
+                      hint="Mặc định gemini-2.5-flash."
+                    >
+                      <input
+                        type="text"
+                        value={settings.geminiModel}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("geminiModel", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Field label="API key">
+                      <input
+                        type={secretType}
+                        autoComplete="off"
+                        value={settings.deepseekApiKey}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("deepseekApiKey", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                    <Field
+                      label="Base URL"
+                      hint="Để trống khi lưu sẽ dùng https://api.deepseek.com."
+                    >
+                      <input
+                        type="url"
+                        value={settings.deepseekBaseUrl}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("deepseekBaseUrl", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                    <Field label="Model" hint="Mặc định deepseek-chat.">
+                      <input
+                        type="text"
+                        value={settings.deepseekModel}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          update("deepseekModel", event.target.value)
+                        }
+                        className={inputClassName}
+                      />
+                    </Field>
+                  </>
+                )}
                 <SecretToggle
                   shown={showSecrets}
                   onToggle={() =>
