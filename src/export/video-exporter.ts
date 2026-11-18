@@ -19,6 +19,17 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+const VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".mov",
+  ".webm",
+  ".mkv",
+  ".avi",
+  ".m4v"
+]);
+
+const probeCache = new Map<string, MediaProbe>();
+
 interface StagedInput {
   file: string;
   index: number;
@@ -31,6 +42,14 @@ interface SizedLayer {
   height: number;
   x: number;
   y: number;
+  preScaled?: boolean;
+}
+
+export interface VisualFilterLayer {
+  item: Pick<CompileItem, "start" | "duration" | "opacity">;
+  width: number;
+  height: number;
+  preScaled?: boolean;
 }
 
 interface ProbeResult {
@@ -74,18 +93,34 @@ async function readTimeline(
   }
 }
 
+async function probeCacheKey(file: string): Promise<string> {
+  const stat = await fs.stat(file);
+  return `${file}:${stat.mtimeMs}:${stat.size}`;
+}
+
 async function probeMedia(file: string): Promise<MediaProbe> {
-  try {
-    const metadata = await sharp(file).metadata();
-    if (metadata.width && metadata.height) {
-      return {
-        width: metadata.width,
-        height: metadata.height,
-        hasAudio: false
-      };
+  const cacheKey = await probeCacheKey(file);
+  const cached = probeCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const extension = path.extname(file).toLowerCase();
+  if (!VIDEO_EXTENSIONS.has(extension)) {
+    try {
+      const metadata = await sharp(file).metadata();
+      if (metadata.width && metadata.height) {
+        const imageProbe = {
+          width: metadata.width,
+          height: metadata.height,
+          hasAudio: false
+        };
+        probeCache.set(cacheKey, imageProbe);
+        return imageProbe;
+      }
+    } catch {
+      // Fall through to ffprobe for odd still formats.
     }
-  } catch {
-    // Fall through to ffprobe for video files.
   }
 
   const { stdout } = await execFileAsync(
@@ -114,7 +149,7 @@ async function probeMedia(file: string): Promise<MediaProbe> {
       `Không đọc được kích thước media: ${file}`
     );
   }
-  return {
+  const result = {
     width: stream.width,
     height: stream.height,
     hasAudio:
@@ -122,6 +157,8 @@ async function probeMedia(file: string): Promise<MediaProbe> {
         (item) => item.codec_type === "audio"
       ) === true
   };
+  probeCache.set(cacheKey, result);
+  return result;
 }
 
 function targetWidth(
@@ -152,17 +189,23 @@ function overlayPosition(
   };
 }
 
-async function stageFile(
+async function preScaleStill(
   source: string,
   directory: string,
-  name: string
+  name: string,
+  width: number,
+  height: number
 ): Promise<string> {
-  await fs.access(source);
   const destination = path.join(
     directory,
-    `${name}${path.extname(source)}`
+    `${name}.png`
   );
-  await fs.copyFile(source, destination);
+  await sharp(source)
+    .resize(width, height, {
+      fit: "fill"
+    })
+    .png()
+    .toFile(destination);
   return destination;
 }
 
@@ -287,8 +330,14 @@ function runFfmpeg(
   });
 }
 
-function visualFilters(
-  layer: SizedLayer,
+export function overlayPixelFormat(
+  opacity?: number
+): "yuv420p" | "yuva420p" {
+  return (opacity ?? 1) < 1 ? "yuva420p" : "yuv420p";
+}
+
+export function visualFilters(
+  layer: VisualFilterLayer,
   fps: number
 ): string {
   const start = seconds(layer.item.start);
@@ -296,11 +345,17 @@ function visualFilters(
     `fps=${fps}`,
     "setpts=PTS-STARTPTS",
     `trim=0:${seconds(layer.item.duration)}`,
-    "setpts=PTS-STARTPTS",
-    `scale=${layer.width}:${layer.height}:flags=lanczos`,
-    "format=yuva420p",
-    "setsar=1"
+    "setpts=PTS-STARTPTS"
   ];
+  if (!layer.preScaled) {
+    parts.push(
+      `scale=${layer.width}:${layer.height}:flags=lanczos`
+    );
+  }
+  parts.push(
+    `format=${overlayPixelFormat(layer.item.opacity)}`,
+    "setsar=1"
+  );
   if ((layer.item.opacity ?? 1) < 1) {
     parts.push(
       `colorchannelmixer=aa=${layer.item.opacity}`
@@ -380,22 +435,32 @@ async function buildGraph(
 
   async function addInput(
     file: string,
-    extraArgs: string[],
-    name: string
+    extraArgs: string[]
   ): Promise<StagedInput> {
-    const staged = await stageFile(
-      file,
-      stagingDirectory,
-      name
-    );
+    await fs.access(file);
     const input: StagedInput = {
-      file: staged,
+      file,
       index: nextIndex
     };
     nextIndex += 1;
-    inputArgs.push(...extraArgs, "-i", staged);
+    inputArgs.push(...extraArgs, "-i", file);
     return input;
   }
+
+  type PreparedVisual = {
+    item: CompileItem;
+    extraArgs: string[];
+    file: string;
+    width: number;
+    height: number;
+    x: number;
+    y: number;
+    preScaled: boolean;
+    attachAudio: boolean;
+  };
+
+  const visualJobs: Array<Promise<PreparedVisual>> = [];
+  const pendingAudio: CompileItem[] = [];
 
   for (const track of spec.tracks) {
     if (track.type === "text") {
@@ -411,10 +476,7 @@ async function buildGraph(
       }
       const name = `${track.name}-${itemIndex}`;
       if (track.type === "audio") {
-        audioItems.push({
-          item,
-          input: await addInput(item.path, [], name)
-        });
+        pendingAudio.push(item);
         continue;
       }
       if (track.name === "background") {
@@ -436,24 +498,22 @@ async function buildGraph(
                 "-t",
                 seconds(duration)
               ];
-        const input = await addInput(
-          item.path,
-          extraArgs,
-          name
-        );
-        layers.push({
+        visualJobs.push(Promise.resolve({
           item: {
             ...item,
             scale: undefined,
             x: 0,
             y: 0
           },
-          input,
+          extraArgs,
+          file: item.path,
           width: spec.width,
           height: spec.height,
           x: 0,
-          y: 0
-        });
+          y: 0,
+          preScaled: false,
+          attachAudio: false
+        }));
         continue;
       }
       const extraArgs =
@@ -472,48 +532,82 @@ async function buildGraph(
               "-t",
               seconds(item.duration)
             ];
-      const input = await addInput(
-        item.path,
-        extraArgs,
-        name
-      );
-      const native = await probeMedia(item.path);
-      const width = even(
-        targetWidth(item, native.width, spec.width)
-      );
-      const height = even(
-        width * (native.height / native.width)
-      );
-      const position = overlayPosition(
-        item,
-        width,
-        height,
-        spec.width,
-        spec.height
-      );
-      if (item.type === "video" && native.hasAudio) {
-        audioItems.push({
-          item: {
-            ...item,
-            volume: 1
-          },
-          input
-        });
-      }
-      layers.push({
-        item,
-        input,
-        width,
-        height,
-        ...position
+      visualJobs.push((async () => {
+        const native = await probeMedia(item.path as string);
+        const width = even(
+          targetWidth(item, native.width, spec.width)
+        );
+        const height = even(
+          width * (native.height / native.width)
+        );
+        const position = overlayPosition(
+          item,
+          width,
+          height,
+          spec.width,
+          spec.height
+        );
+        const isPhoto = item.type !== "video";
+        const file = isPhoto
+          ? await preScaleStill(
+              item.path as string,
+              stagingDirectory,
+              name,
+              width,
+              height
+            )
+          : item.path as string;
+        return {
+          item,
+          extraArgs,
+          file,
+          width,
+          height,
+          ...position,
+          preScaled: isPhoto,
+          attachAudio: item.type === "video" && native.hasAudio
+        };
+      })());
+    }
+  }
+
+  const preparedLayers = await Promise.all(visualJobs);
+  for (const prepared of preparedLayers) {
+    const input = await addInput(
+      prepared.file,
+      prepared.extraArgs
+    );
+    if (prepared.attachAudio) {
+      audioItems.push({
+        item: {
+          ...prepared.item,
+          volume: 1
+        },
+        input
       });
     }
+    layers.push({
+      item: prepared.item,
+      input,
+      width: prepared.width,
+      height: prepared.height,
+      x: prepared.x,
+      y: prepared.y,
+      preScaled: prepared.preScaled
+    });
+  }
+
+  for (const item of pendingAudio) {
+    audioItems.push({
+      item,
+      input: await addInput(item.path as string, [])
+    });
   }
 
   const filters: string[] = [
     `color=c=black:s=${spec.width}x${spec.height}:d=${seconds(
       duration
-    )}:r=${spec.fps},format=yuva420p[base]`
+    )}:r=${spec.fps},format=yuv420p[base]`
   ];
 
   let lastLabel = "base";
@@ -522,9 +616,9 @@ async function buildGraph(
     const outputLabel = `ov${index}`;
     if (layer.item.ref === "background") {
       filters.push(
-        `[${layer.input.index}:v]fps=${spec.fps},setpts=PTS-STARTPTS,scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${spec.width}:${spec.height},setsar=1,trim=0:${seconds(
+        `[${layer.input.index}:v]fps=${spec.fps},setpts=PTS-STARTPTS,scale=${spec.width}:${spec.height}:force_original_aspect_ratio=increase:flags=bilinear,crop=${spec.width}:${spec.height},setsar=1,trim=0:${seconds(
           layer.item.duration
-        )},setpts=PTS-STARTPTS,format=yuva420p[${scaledLabel}]`
+        )},setpts=PTS-STARTPTS,format=yuv420p[${scaledLabel}]`
       );
       filters.push(
         `[${lastLabel}][${scaledLabel}]overlay=0:0:format=auto[${outputLabel}]`
@@ -622,9 +716,9 @@ export async function exportTimelineVideo(
       "-c:v",
       "libx264",
       "-preset",
-      "medium",
+      "veryfast",
       "-crf",
-      "18",
+      "20",
       "-pix_fmt",
       "yuv420p",
       "-r",

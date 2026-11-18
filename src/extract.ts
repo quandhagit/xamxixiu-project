@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import type {
   ThreadComment,
   ThreadData
@@ -6,6 +6,27 @@ import type {
 
 export type ExtractedComment = ThreadComment;
 export type ExtractedThread = ThreadData;
+
+export interface ProfileLinkSnapshot {
+  href: string;
+  text: string;
+}
+
+export interface PressableCardSnapshot {
+  index: number;
+  profileLinks: ProfileLinkSnapshot[];
+  dirAutoTexts: string[];
+  buttonAriaLabels: string[];
+  innerText: string;
+  selfLeft: number;
+  levels: Array<Array<{ index: number; left: number }>>;
+}
+
+export interface ParsedPressableComment {
+  author: string;
+  text: string;
+  likes: number;
+}
 
 /**
  * The thread column. The right rail (Quotes excerpts, follow
@@ -24,17 +45,13 @@ export const PRESSABLE_SELECTOR =
 export async function extractThread(
   page: Page
 ): Promise<ExtractedThread> {
-  const containers =
-    page.locator(PRESSABLE_SELECTOR);
-
-  const count =
-    await containers.count();
+  const cards = await snapshotPressableCards(page);
 
   console.log(
-    `Found ${count} pressable containers`
+    `Found ${cards.length} pressable containers`
   );
 
-  if (count === 0) {
+  if (cards.length === 0) {
     throw new Error(
       "Could not find any Threads containers"
     );
@@ -48,24 +65,18 @@ export async function extractThread(
     parentContainerIndex?: number;
   }> = [];
 
-  for (let i = 0; i < count; i++) {
-    const container =
-      containers.nth(i);
-    const content =
-      await readPressableComment(container);
+  for (const card of cards) {
+    const content = parsePressableComment(card);
 
     if (!content) {
       continue;
     }
 
     const parentContainerIndex =
-      await extractParentContainerIndex(
-        container,
-        PRESSABLE_SELECTOR
-      );
+      parentIndexFromSnapshot(card);
 
     results.push({
-      index: i,
+      index: card.index,
       author: content.author,
       text: content.text,
       likes: content.likes,
@@ -153,90 +164,26 @@ export async function extractThread(
 export async function extractPressableComment(
   page: Page,
   containerIndex: number
-): Promise<{
-  author: string;
-  text: string;
-  likes: number;
-} | undefined> {
-  const containers =
-    page.locator(PRESSABLE_SELECTOR);
-  const count =
-    await containers.count();
+): Promise<ParsedPressableComment | undefined> {
+  const cards = await snapshotPressableCards(page);
+  const card = cards.find(
+    (item) => item.index === containerIndex
+  );
 
-  if (
-    containerIndex < 0 ||
-    containerIndex >= count
-  ) {
+  if (!card) {
     return undefined;
   }
 
-  return readPressableComment(
-    containers.nth(containerIndex)
-  );
+  return parsePressableComment(card);
 }
 
 export async function readPressableComment(
-  container: ReturnType<Page["locator"]>
-): Promise<{
-  author: string;
-  text: string;
-  likes: number;
-} | undefined> {
-  const profileLinks =
-    container.locator(
-      'a[role="link"][href^="/@"]'
-    );
-  const linkCount =
-    await profileLinks.count();
-  let author = "";
-
-  for (let i = 0; i < linkCount; i++) {
-    const link = profileLinks.nth(i);
-    const href =
-      (await link.getAttribute("href")) ?? "";
-
-    // Avatar links share this href but have no text. The
-    // timestamp link points at /post/ and must not win.
-    if (!/^\/@[^/]+\/?$/.test(href)) {
-      continue;
-    }
-
-    const text =
-      (await link.innerText())
-        .trim()
-        .split("\n")[0]
-        ?.trim() ?? "";
-
-    if (!text) {
-      continue;
-    }
-
-    author = text;
-    break;
-  }
-
-  if (!author) {
-    return undefined;
-  }
-
-  const text =
-    await extractContentText(
-      container,
-      author
-    );
-
-  if (!text) {
-    return undefined;
-  }
-
-  const likes =
-    await extractLikes(container);
-
-  return {
-    author,
-    text,
-    likes
-  };
+  container: Locator
+): Promise<ParsedPressableComment | undefined> {
+  const snapshot = await snapshotPressableCard(container);
+  return snapshot
+    ? parsePressableComment(snapshot)
+    : undefined;
 }
 
 const REPLY_INDENT_PX = 16;
@@ -278,61 +225,22 @@ export function chooseParentIndex(
   return undefined;
 }
 
+export function parentIndexFromSnapshot(
+  snapshot: PressableCardSnapshot
+): number | undefined {
+  return chooseParentIndex(
+    snapshot.index,
+    snapshot.selfLeft,
+    snapshot.levels
+  );
+}
+
 export async function extractParentContainerIndex(
-  container: ReturnType<Page["locator"]>,
+  container: Locator,
   selector: string
 ): Promise<number | undefined> {
-  const snapshot = await container.evaluate(
-    (element, pressableSelector) => {
-      const all = Array.from(
-        document.querySelectorAll(pressableSelector)
-      );
-      const selfIndex = all.indexOf(element);
-
-      if (selfIndex < 0) {
-        return undefined;
-      }
-
-      const levels: Array<
-        Array<{ index: number; left: number }>
-      > = [];
-      let node = element.parentElement;
-
-      for (
-        let depth = 0;
-        depth < 8 && node;
-        depth += 1
-      ) {
-        const members: Array<{
-          index: number;
-          left: number;
-        }> = [];
-        const found =
-          node.querySelectorAll(pressableSelector);
-
-        for (let i = 0; i < found.length; i += 1) {
-          const index = all.indexOf(found[i]);
-
-          if (index < 0) {
-            continue;
-          }
-
-          members.push({
-            index,
-            left: found[i].getBoundingClientRect().left
-          });
-        }
-
-        levels.push(members);
-        node = node.parentElement;
-      }
-
-      return {
-        selfIndex,
-        selfLeft: element.getBoundingClientRect().left,
-        levels
-      };
-    },
+  const snapshot = await snapshotPressableCard(
+    container,
     selector
   );
 
@@ -340,40 +248,193 @@ export async function extractParentContainerIndex(
     return undefined;
   }
 
-  return chooseParentIndex(
-    snapshot.selfIndex,
-    snapshot.selfLeft,
-    snapshot.levels
+  return parentIndexFromSnapshot(snapshot);
+}
+
+export async function snapshotPressableCards(
+  page: Page
+): Promise<PressableCardSnapshot[]> {
+  return page.evaluate(
+    (pressableSelector) => {
+      const all = Array.from(
+        document.querySelectorAll(pressableSelector)
+      );
+
+      const isVisible = (node: Element): boolean => {
+        if (!(node instanceof HTMLElement)) {
+          return false;
+        }
+
+        const style = window.getComputedStyle(node);
+
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden"
+        ) {
+          return false;
+        }
+
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      return all.map((element, index) => {
+        const profileLinks = Array.from(
+          element.querySelectorAll(
+            'a[role="link"][href^="/@"]'
+          )
+        ).map((link) => ({
+          href: link.getAttribute("href") ?? "",
+          text: (link as HTMLElement).innerText ?? ""
+        }));
+
+        const dirAutoTexts = Array.from(
+          element.querySelectorAll('[dir="auto"]')
+        )
+          .filter((node) => isVisible(node))
+          .map(
+            (node) => (node as HTMLElement).innerText ?? ""
+          );
+
+        const buttonAriaLabels = Array.from(
+          element.querySelectorAll("button")
+        )
+          .map(
+            (button) => button.getAttribute("aria-label") ?? ""
+          )
+          .filter(Boolean);
+
+        const levels: Array<
+          Array<{ index: number; left: number }>
+        > = [];
+        let node = element.parentElement;
+
+        for (
+          let depth = 0;
+          depth < 8 && node;
+          depth += 1
+        ) {
+          const members: Array<{
+            index: number;
+            left: number;
+          }> = [];
+          const found = node.querySelectorAll(
+            pressableSelector
+          );
+
+          for (let i = 0; i < found.length; i += 1) {
+            const memberIndex = all.indexOf(found[i]);
+
+            if (memberIndex < 0) {
+              continue;
+            }
+
+            members.push({
+              index: memberIndex,
+              left: found[i].getBoundingClientRect().left
+            });
+          }
+
+          levels.push(members);
+          node = node.parentElement;
+        }
+
+        return {
+          index,
+          profileLinks,
+          dirAutoTexts,
+          buttonAriaLabels,
+          innerText:
+            (element as HTMLElement).innerText ?? "",
+          selfLeft: element.getBoundingClientRect().left,
+          levels
+        };
+      });
+    },
+    PRESSABLE_SELECTOR
   );
 }
 
-async function extractContentText(
-  container: ReturnType<Page["locator"]>,
-  author: string
-): Promise<string> {
-  const candidates =
-    container.locator(
-      '[dir="auto"]'
-    );
+async function snapshotPressableCard(
+  container: Locator,
+  selector = PRESSABLE_SELECTOR
+): Promise<PressableCardSnapshot | undefined> {
+  const index = await container.evaluate(
+    (element, pressableSelector) => Array.from(
+      document.querySelectorAll(pressableSelector)
+    ).indexOf(element),
+    selector
+  );
 
-  const count =
-    await candidates.count();
+  if (index < 0) {
+    return undefined;
+  }
 
-  const texts: string[] = [];
+  const cards = await snapshotPressableCards(
+    container.page()
+  );
+  return cards.find((card) => card.index === index);
+}
 
-  for (let i = 0; i < count; i++) {
-    const candidate =
-      candidates.nth(i);
+export function parsePressableComment(
+  snapshot: PressableCardSnapshot
+): ParsedPressableComment | undefined {
+  const author = authorFromSnapshot(snapshot);
 
-    if (!(await candidate.isVisible())) {
+  if (!author) {
+    return undefined;
+  }
+
+  const text = contentTextFromSnapshot(
+    snapshot,
+    author
+  );
+
+  if (!text) {
+    return undefined;
+  }
+
+  return {
+    author,
+    text,
+    likes: likesFromSnapshot(snapshot)
+  };
+}
+
+function authorFromSnapshot(
+  snapshot: PressableCardSnapshot
+): string {
+  for (const link of snapshot.profileLinks) {
+    // Avatar links share this href but have no text. The
+    // timestamp link points at /post/ and must not win.
+    if (!/^\/@[^/]+\/?$/.test(link.href)) {
       continue;
     }
 
-    const rawText =
-      await candidate.innerText();
-
     const text =
-      normalizeText(rawText);
+      link.text
+        .trim()
+        .split("\n")[0]
+        ?.trim() ?? "";
+
+    if (!text) {
+      continue;
+    }
+
+    return text;
+  }
+
+  return "";
+}
+
+function contentTextFromSnapshot(
+  snapshot: PressableCardSnapshot,
+  author: string
+): string {
+  const texts: string[] = [];
+
+  for (const rawText of snapshot.dirAutoTexts) {
+    const text = normalizeText(rawText);
 
     if (!text) {
       continue;
@@ -391,6 +452,37 @@ async function extractContentText(
   }
 
   return selectContentText(texts);
+}
+
+function likesFromSnapshot(
+  snapshot: PressableCardSnapshot
+): number {
+  for (const ariaLabel of snapshot.buttonAriaLabels) {
+    const match = ariaLabel.match(
+      /([\d,.]+)\s*(?:likes?|likes)/i
+    );
+
+    if (!match) {
+      continue;
+    }
+
+    return parseNumber(match[1]);
+  }
+
+  const lines = snapshot.innerText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const value = parseDisplayNumber(line);
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return 0;
 }
 
 function normalizeText(
@@ -627,63 +719,6 @@ function cleanContentText(
     );
 
   return result.trim();
-}
-
-async function extractLikes(
-  container: ReturnType<Page["locator"]>
-): Promise<number> {
-  const buttons =
-    container.locator("button");
-
-  const count =
-    await buttons.count();
-
-  for (let i = 0; i < count; i++) {
-    const button =
-      buttons.nth(i);
-
-    const ariaLabel =
-      await button.getAttribute(
-        "aria-label"
-      );
-
-    if (!ariaLabel) {
-      continue;
-    }
-
-    const match =
-      ariaLabel.match(
-        /([\d,.]+)\s*(?:likes?|likes)/i
-      );
-
-    if (!match) {
-      continue;
-    }
-
-    return parseNumber(
-      match[1]
-    );
-  }
-
-  const text =
-    await container.innerText();
-
-  const lines =
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-  for (const line of lines) {
-    const value =
-      parseDisplayNumber(line);
-
-    if (value !== null) {
-      return value;
-    }
-  }
-
-  return 0;
 }
 
 function parseDisplayNumber(

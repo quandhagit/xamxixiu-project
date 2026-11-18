@@ -11,10 +11,10 @@ export type ExportEngine = "hyperframes" | "ffmpeg";
 
 export function getExportEngine(): ExportEngine {
   const value = process.env.XAMXIXIU_EXPORT_ENGINE?.trim().toLowerCase();
-  if (value === "ffmpeg") {
-    return "ffmpeg";
+  if (value === "hyperframes") {
+    return "hyperframes";
   }
-  return "hyperframes";
+  return "ffmpeg";
 }
 
 export const SPIKE_DECISION = {

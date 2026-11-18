@@ -10,15 +10,18 @@ import {
 } from "./browser.js";
 
 import {
-  extractParentContainerIndex,
   extractPressableComment,
+  parentIndexFromSnapshot,
+  parsePressableComment,
   PRESSABLE_SELECTOR,
-  readPressableComment,
+  snapshotPressableCards,
   THREAD_COLUMN_SELECTOR
 } from "./extract.js";
 
 import {
-  processImage
+  createImageProcessor,
+  processImage,
+  type ImageProcessor
 } from "./process-image.js";
 
 import {
@@ -48,7 +51,10 @@ export interface CaptureResult {
 
 const MAX_SCROLL_ROUNDS = 40;
 const MAX_STALLED_ROUNDS = 5;
-const SCROLL_WAIT_MS = 1500;
+const SCROLL_WAIT_MS = 600;
+const POST_GOTO_TIMEOUT_MS = 8000;
+const SCROLL_TOP_WAIT_MS = 400;
+const POLL_WAIT_MS = 400;
 
 interface HarvestedComment {
   key: string;
@@ -68,30 +74,94 @@ async function findContainerIndexByContent(
   matches: (author: string, text: string) => boolean,
   expected: number
 ): Promise<number | undefined> {
-  const containers = page.locator(PRESSABLE_SELECTOR);
-  const count = await containers.count();
-  const order = [
-    expected,
-    ...Array.from({ length: count }, (_, i) => i).filter(
-      (i) => i !== expected
+  const cards = await snapshotPressableCards(page);
+  const parsed = cards.map((card) => ({
+    index: card.index,
+    content: parsePressableComment(card)
+  }));
+  const expectedCard = parsed.find(
+    (card) => card.index === expected
+  );
+
+  if (
+    expectedCard?.content &&
+    matches(
+      expectedCard.content.author,
+      expectedCard.content.text
     )
-  ];
+  ) {
+    return expected;
+  }
 
-  for (const i of order) {
-    if (i < 0 || i >= count) {
-      continue;
-    }
-
-    const content = await readPressableComment(
-      containers.nth(i)
-    ).catch(() => undefined);
-
-    if (content && matches(content.author, content.text)) {
-      return i;
+  for (const card of parsed) {
+    if (
+      card.content &&
+      matches(card.content.author, card.content.text)
+    ) {
+      return card.index;
     }
   }
 
   return undefined;
+}
+
+async function waitForThreadCards(page: Page): Promise<void> {
+  await page.waitForSelector(PRESSABLE_SELECTOR, {
+    timeout: POST_GOTO_TIMEOUT_MS
+  });
+}
+
+async function waitForFirstCardText(
+  page: Page,
+  timeoutMs: number
+): Promise<void> {
+  await page
+    .waitForFunction(
+      (selector) => {
+        const element = document.querySelector(selector);
+        return (
+          !!element &&
+          ((element as HTMLElement).innerText?.trim().length ??
+            0) > 0
+        );
+      },
+      PRESSABLE_SELECTOR,
+      { timeout: timeoutMs }
+    )
+    .catch(() => undefined);
+}
+
+async function viewportSignature(page: Page): Promise<string> {
+  return page.evaluate((selector) => {
+    const cards = Array.from(
+      document.querySelectorAll(selector)
+    );
+    const first = (cards[0] as HTMLElement | undefined)
+      ?.innerText
+      .slice(0, 80) ?? "";
+    const last = (
+      cards.at(-1) as HTMLElement | undefined
+    )?.innerText.slice(0, 80) ?? "";
+    return `${cards.length}|${first}|${last}`;
+  }, PRESSABLE_SELECTOR);
+}
+
+async function waitForViewportChange(
+  page: Page,
+  previous: string,
+  timeoutMs: number
+): Promise<void> {
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const next = await viewportSignature(page);
+
+    if (next !== previous) {
+      return;
+    }
+
+    await page.waitForTimeout(50);
+  }
 }
 
 /**
@@ -170,32 +240,50 @@ function commentKey(author: string, text: string): string {
  * capturing afterwards, harvest (extract + screenshot) every container that
  * is rendered at each scroll step, de-duplicating by author + text.
  */
+function enqueueProcessedImage(
+  processor: ImageProcessor,
+  rawPath: string,
+  processedDir: string
+): void {
+  processor.enqueue(
+    rawPath,
+    path.join(processedDir, path.basename(rawPath)),
+    { deleteInput: true }
+  );
+}
+
+/**
+ * Threads unmounts off-screen containers while scrolling, so the whole
+ * thread is never in the DOM at once. Instead of scrolling first and
+ * capturing afterwards, harvest (extract + screenshot) every container that
+ * is rendered at each scroll step, de-duplicating by author + text.
+ */
 async function harvestThread(
   page: Page,
   rawDir: string,
+  processedDir: string,
+  processor: ImageProcessor,
   commentTarget: number
 ): Promise<ThreadData> {
-  const containers = page.locator(PRESSABLE_SELECTOR);
-
   await page.evaluate(() => {
     window.scrollTo(0, 0);
   });
-  await page.waitForTimeout(800);
+  await waitForFirstCardText(page, SCROLL_TOP_WAIT_MS);
 
-  const post = await readPressableComment(containers.first());
+  const openingCards = await snapshotPressableCards(page);
+  const post = openingCards[0]
+    ? parsePressableComment(openingCards[0])
+    : undefined;
 
   if (!post) {
     throw new Error("Could not extract any Threads content");
   }
 
   const postKey = commentKey(post.author, post.text);
+  const topicPath = path.join(rawDir, "topic.png");
 
-  await screenshotContainer(
-    page,
-    0,
-    path.join(rawDir, "topic.png"),
-    124
-  );
+  await screenshotContainer(page, 0, topicPath, 124);
+  enqueueProcessedImage(processor, topicPath, processedDir);
 
   const harvested: HarvestedComment[] = [];
   const seen = new Set<string>([postKey]);
@@ -209,37 +297,22 @@ async function harvestThread(
     round++
   ) {
     const before = harvested.length;
-    const count = await containers.count();
-    const keys: Array<string | undefined> = [];
-    const parents: Array<number | undefined> = [];
-    const contents: Array<
-      Awaited<ReturnType<typeof readPressableComment>>
-    > = [];
-
-    for (let i = 0; i < count; i++) {
-      const content = await readPressableComment(
-        containers.nth(i)
-      ).catch(() => undefined);
-
-      contents.push(content);
-      keys.push(
-        content
-          ? commentKey(content.author, content.text)
-          : undefined
-      );
-      parents.push(
-        content
-          ? await extractParentContainerIndex(
-            containers.nth(i),
-            PRESSABLE_SELECTOR
-          ).catch(() => undefined)
-          : undefined
-      );
-    }
+    const cards = await snapshotPressableCards(page);
+    const contents = cards.map((card) =>
+      parsePressableComment(card)
+    );
+    const keys = contents.map((content) =>
+      content
+        ? commentKey(content.author, content.text)
+        : undefined
+    );
+    const parents = cards.map((card) =>
+      parentIndexFromSnapshot(card)
+    );
 
     for (
       let i = 0;
-      i < count &&
+      i < cards.length &&
         harvested.length < commentTarget;
       i++
     ) {
@@ -279,37 +352,31 @@ async function harvestThread(
       const filename = `comment-${String(
         harvested.length + 1
       ).padStart(2, "0")}.png`;
+      const rawPath = path.join(rawDir, filename);
 
       try {
-        // Make sure the DOM did not shift since the read pass.
-        const check = await readPressableComment(
-          containers.nth(i)
-        );
-
-        if (
-          !check ||
-          commentKey(check.author, check.text) !== key
-        ) {
-          continue;
-        }
-
         await screenshotContainer(
           page,
-          i,
-          path.join(rawDir, filename),
+          cards[i].index,
+          rawPath,
           0,
           () =>
             findContainerIndexByContent(
               page,
               (author, text) =>
                 commentKey(author, text) === key,
-              i
+              cards[i].index
             )
         );
       } catch {
         continue;
       }
 
+      enqueueProcessedImage(
+        processor,
+        rawPath,
+        processedDir
+      );
       seen.add(key);
       harvested.push({
         key,
@@ -329,10 +396,15 @@ async function harvestThread(
       break;
     }
 
+    const beforeScroll = await viewportSignature(page);
     await page.evaluate(() => {
       window.scrollBy(0, window.innerHeight * 0.9);
     });
-    await page.waitForTimeout(SCROLL_WAIT_MS);
+    await waitForViewportChange(
+      page,
+      beforeScroll,
+      SCROLL_WAIT_MS
+    );
 
     // Click "view more" style buttons if the thread lazy-loads via buttons.
     const moreButton = page
@@ -342,8 +414,13 @@ async function harvestThread(
       .first();
 
     if (await moreButton.isVisible().catch(() => false)) {
+      const beforeMore = await viewportSignature(page);
       await moreButton.click().catch(() => undefined);
-      await page.waitForTimeout(SCROLL_WAIT_MS);
+      await waitForViewportChange(
+        page,
+        beforeMore,
+        SCROLL_WAIT_MS
+      );
     }
   }
 
@@ -426,6 +503,7 @@ export async function captureThread(
   commentLimit?: number
 ): Promise<CaptureResult> {
   const context = await createContext();
+  const processor = createImageProcessor();
 
   try {
     console.log("\nOpening Threads...\n");
@@ -435,7 +513,7 @@ export async function captureThread(
       url
     );
 
-    await page.waitForTimeout(3000);
+    await waitForThreadCards(page);
 
     const timestamp = new Date()
       .toISOString()
@@ -453,8 +531,15 @@ export async function captureThread(
       projectDir,
       "raw"
     );
+    const processedDir = path.join(
+      projectDir,
+      "processed"
+    );
 
     await fs.mkdir(rawDir, {
+      recursive: true
+    });
+    await fs.mkdir(processedDir, {
       recursive: true
     });
 
@@ -463,8 +548,11 @@ export async function captureThread(
     const thread = await harvestThread(
       page,
       rawDir,
+      processedDir,
+      processor,
       normalizeCaptureCount(commentLimit)
     );
+    await processor.drain();
 
     // Save thread.json
     const threadPath = path.join(
@@ -488,6 +576,7 @@ export async function captureThread(
       rawDir
     };
   } finally {
+    await processor.drain().catch(() => undefined);
     await context.close();
   }
 }
@@ -639,7 +728,7 @@ export async function captureComment(
       input.url
     );
 
-    await page.waitForTimeout(3000);
+    await waitForThreadCards(page);
 
     for (const code of replyCodesFromUrl(page.url())) {
       if (!codes.includes(code)) {
@@ -653,7 +742,7 @@ export async function captureComment(
           timeout: 10000
         })
         .catch(() => undefined);
-      await page.waitForTimeout(2000);
+      await waitForThreadCards(page);
 
       for (const code of replyCodesFromUrl(page.url())) {
         if (!codes.includes(code)) {
@@ -671,7 +760,7 @@ export async function captureComment(
       containerIndex < 0 && attempt < 6;
       attempt++
     ) {
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(POLL_WAIT_MS);
 
       for (const code of replyCodesFromUrl(page.url())) {
         if (!codes.includes(code)) {
