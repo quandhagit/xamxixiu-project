@@ -36,7 +36,7 @@ const EMPTY_SETTINGS: AppSettings = {
   geminiApiKey: "",
   geminiBaseUrl:
     "https://generativelanguage.googleapis.com/v1beta/openai/",
-  geminiModel: "gemini-2.5-flash",
+  geminiModel: "gemini-3.8-flash-high",
   vbeeAccessToken: "",
   vbeeAppId: "",
   vbeeWebhookPort: "3001",
@@ -561,7 +561,7 @@ export function SettingsDialog({
                     </Field>
                     <Field
                       label="Model"
-                      hint="Mặc định gemini-2.5-flash."
+                      hint="Mặc định gemini-3.8-flash-high."
                     >
                       <input
                         type="text"

@@ -5,7 +5,7 @@ import { getDeepseek, getDeepseekModel } from "./deepseek.js";
 
 const DEFAULT_GEMINI_BASE_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash-high";
 
 let geminiCached:
   | {

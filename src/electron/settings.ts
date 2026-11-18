@@ -26,7 +26,7 @@ const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-chat";
 const DEFAULT_GEMINI_BASE_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash-high";
 const DEFAULT_PORT = "3001";
 const DEFAULT_AI_PROVIDER: AiProvider = "deepseek";
 
