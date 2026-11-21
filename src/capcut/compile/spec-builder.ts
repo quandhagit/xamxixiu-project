@@ -43,8 +43,8 @@ export function absoluteAsset(file: string): string {
   return path.resolve(file);
 }
 
-function mediaType(file: string): "video" | "photo" {
-  return [".mp4", ".mov", ".webm", ".mkv"].includes(
+export function mediaType(file: string): "video" | "photo" {
+  return [".mp4", ".mov", ".webm", ".mkv", ".gif"].includes(
     path.extname(file).toLowerCase()
   )
     ? "video"

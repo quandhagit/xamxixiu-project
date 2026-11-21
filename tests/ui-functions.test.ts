@@ -135,7 +135,9 @@ import {
   type PressableCardSnapshot
 } from "../src/extract";
 import { getExportEngine } from "../src/hyperframes/engine";
+import { mediaType } from "../src/capcut/compile/spec-builder";
 import {
+  isAnimatedVisual,
   overlayPixelFormat,
   visualFilters
 } from "../src/export/video-exporter";
@@ -1482,6 +1484,13 @@ describe("video visual filters", () => {
     assert.ok(filters.includes("colorchannelmixer=aa=0.5"));
     assert.equal(overlayPixelFormat(0.5), "yuva420p");
   });
+
+  it("treats gif overlays as animated instead of stills", () => {
+    assert.equal(mediaType("memes/dance.gif"), "video");
+    assert.equal(mediaType("memes/still.png"), "photo");
+    assert.equal(isAnimatedVisual("overlays-12.gif"), true);
+    assert.equal(isAnimatedVisual("comment-01.png"), false);
+  });
 });
 
 describe("builtin meme combos", () => {
@@ -1671,7 +1680,7 @@ describe("AI meme suggestions", () => {
         (reaction) =>
           !reaction.memeAssetId ||
           library.find((item) => item.id === reaction.memeAssetId)?.mediaKind !==
-            "video"
+          "video"
       ),
       true
     );
@@ -1890,7 +1899,7 @@ describe("clear comment overlays", () => {
           sfxAssetId: null,
           sfxCategory: null,
           comboId: "shock",
-          animation: "shake",
+          animation: "shake-3",
           duration: 1
         }
       ]

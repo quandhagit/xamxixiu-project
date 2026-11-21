@@ -25,8 +25,13 @@ const VIDEO_EXTENSIONS = new Set([
   ".webm",
   ".mkv",
   ".avi",
-  ".m4v"
+  ".m4v",
+  ".gif"
 ]);
+
+export function isAnimatedVisual(file: string): boolean {
+  return VIDEO_EXTENSIONS.has(path.extname(file).toLowerCase());
+}
 
 const probeCache = new Map<string, MediaProbe>();
 
@@ -481,7 +486,8 @@ async function buildGraph(
       }
       if (track.name === "background") {
         const extraArgs =
-          item.type === "photo"
+          item.type === "photo" &&
+          !isAnimatedVisual(item.path)
             ? [
                 "-loop",
                 "1",
@@ -516,22 +522,23 @@ async function buildGraph(
         }));
         continue;
       }
-      const extraArgs =
-        item.type === "video"
-          ? [
-              "-stream_loop",
-              "-1",
-              "-t",
-              seconds(item.duration)
-            ]
-          : [
-              "-loop",
-              "1",
-              "-framerate",
-              String(spec.fps),
-              "-t",
-              seconds(item.duration)
-            ];
+      const animated = isAnimatedVisual(item.path as string) ||
+        item.type === "video";
+      const extraArgs = animated
+        ? [
+            "-stream_loop",
+            "-1",
+            "-t",
+            seconds(item.duration)
+          ]
+        : [
+            "-loop",
+            "1",
+            "-framerate",
+            String(spec.fps),
+            "-t",
+            seconds(item.duration)
+          ];
       visualJobs.push((async () => {
         const native = await probeMedia(item.path as string);
         const width = even(
@@ -547,7 +554,7 @@ async function buildGraph(
           spec.width,
           spec.height
         );
-        const isPhoto = item.type !== "video";
+        const isPhoto = !animated;
         const file = isPhoto
           ? await preScaleStill(
               item.path as string,
