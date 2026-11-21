@@ -1,15 +1,16 @@
-import { getDeepseek, getDeepseekModel } from "./deepseek.js";
+import { getAiLabel, getChatClient, getChatModel } from "./client.js";
 
 export async function generateJsonWithRetry(
   prompt: string,
   system = "Return only valid JSON."
 ): Promise<string> {
   const maxAttempts = 3;
+  const label = getAiLabel();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const response = await getDeepseek().chat.completions.create({
-        model: getDeepseekModel(),
+      const response = await getChatClient().chat.completions.create({
+        model: getChatModel(),
         messages: [
           { role: "system", content: system },
           { role: "user", content: prompt }
@@ -17,7 +18,7 @@ export async function generateJsonWithRetry(
       });
       const text = response.choices[0]?.message.content?.trim();
       if (!text) {
-        throw new Error("DeepSeek returned an empty response.");
+        throw new Error(`${label} returned an empty response.`);
       }
       return text
         .replace(/^```json\s*/i, "")
@@ -40,13 +41,15 @@ export async function generateJsonWithRetry(
     }
   }
 
-  throw new Error("DeepSeek request failed after retries.");
+  throw new Error(`${label} request failed after retries.`);
 }
 
 export function parseModelJson<T>(text: string): T {
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new Error("Failed to parse DeepSeek response as JSON.");
+    throw new Error(
+      `Failed to parse ${getAiLabel()} response as JSON.`
+    );
   }
 }

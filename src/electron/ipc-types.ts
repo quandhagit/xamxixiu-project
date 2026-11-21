@@ -117,10 +117,16 @@ export interface DeleteAssetResult {
   projectReferences: string[];
 }
 
+export type AiProvider = "deepseek" | "gemini";
+
 export interface AppSettings {
+  aiProvider: AiProvider;
   deepseekApiKey: string;
   deepseekBaseUrl: string;
   deepseekModel: string;
+  geminiApiKey: string;
+  geminiBaseUrl: string;
+  geminiModel: string;
   vbeeAccessToken: string;
   vbeeAppId: string;
   vbeeWebhookPort: string;

@@ -1,5 +1,3 @@
-import "dotenv/config";
-
 import OpenAI from "openai";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";

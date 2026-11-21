@@ -246,16 +246,20 @@ const TRANSLATIONS: Array<
     () => "Chưa cấu hình DeepSeek API key."
   ],
   [
-    /^DeepSeek returned an empty response\.?$/,
-    () => "DeepSeek trả về phản hồi rỗng."
+    /^GEMINI_API_KEY is not configured$/,
+    () => "Chưa cấu hình Gemini API key."
   ],
   [
-    /^DeepSeek request failed after retries\.?$/,
-    () => "Yêu cầu tới DeepSeek thất bại sau nhiều lần thử."
+    /^(DeepSeek|Gemini) returned an empty response\.?$/,
+    (m) => `${m[1]} trả về phản hồi rỗng.`
   ],
   [
-    /^Failed to parse DeepSeek response as JSON\.?$/,
-    () => "Không đọc được phản hồi JSON từ DeepSeek."
+    /^(DeepSeek|Gemini) request failed after retries\.?$/,
+    (m) => `Yêu cầu tới ${m[1]} thất bại sau nhiều lần thử.`
+  ],
+  [
+    /^Failed to parse (DeepSeek|Gemini) response as JSON\.?$/,
+    (m) => `Không đọc được phản hồi JSON từ ${m[1]}.`
   ],
   [
     /^No content\.json or thread\.json in (.+)$/,
