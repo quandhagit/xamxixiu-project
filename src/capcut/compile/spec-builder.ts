@@ -43,45 +43,45 @@ export function absoluteAsset(file: string): string {
   return path.resolve(file);
 }
 
-function mediaType(file: string): "video" | "photo" {
-  return [".mp4", ".mov", ".webm", ".mkv"].includes(
+export function mediaType(file: string): "video" | "photo" {
+  return [".mp4", ".mov", ".webm", ".mkv", ".gif"].includes(
     path.extname(file).toLowerCase()
   )
     ? "video"
     : "photo";
 }
 
-async function addSceneItems(
+function addSceneItems(
   scene: TimelineScene,
   sceneStart: number,
   imageItems: CompileItem[],
-  overlayItems: CompileItem[],
-  voiceItems: CompileItem[],
-  sfxItems: CompileItem[],
+  overlayJobs: Array<Promise<CompileItem>>,
+  voiceJobs: Array<Promise<CompileItem>>,
+  sfxJobs: Array<Promise<CompileItem>>,
   preserveVideoMemeDuration: boolean
-): Promise<void> {
+): void {
   for (const block of getSceneBlocks(scene)) {
-    await addBlockItems(
+    addBlockItems(
       block,
       sceneStart,
       imageItems,
-      overlayItems,
-      voiceItems,
-      sfxItems,
+      overlayJobs,
+      voiceJobs,
+      sfxJobs,
       preserveVideoMemeDuration
     );
   }
 }
 
-async function addBlockItems(
+function addBlockItems(
   block: TimelineCommentBlock,
   sceneStart: number,
   imageItems: CompileItem[],
-  overlayItems: CompileItem[],
-  voiceItems: CompileItem[],
-  sfxItems: CompileItem[],
+  overlayJobs: Array<Promise<CompileItem>>,
+  voiceJobs: Array<Promise<CompileItem>>,
+  sfxJobs: Array<Promise<CompileItem>>,
   preserveVideoMemeDuration: boolean
-): Promise<void> {
+): void {
   imageItems.push({
     path: absoluteAsset(block.imageFile),
     start: sceneStart + block.imageStart,
@@ -98,15 +98,17 @@ async function addBlockItems(
       ? { y: block.imageY }
       : {})
   });
-  voiceItems.push({
-    path: absoluteAsset(block.audioFile),
-    start: sceneStart + block.audioStart,
-    duration: await safeAudioDuration(
+  voiceJobs.push(
+    safeAudioDuration(
       block.audioDuration,
       absoluteAsset(block.audioFile)
-    ),
-    ref: `voice-comment-${block.commentIndex}`
-  });
+    ).then((duration) => ({
+      path: absoluteAsset(block.audioFile),
+      start: sceneStart + block.audioStart,
+      duration,
+      ref: `voice-comment-${block.commentIndex}`
+    }))
+  );
 
   for (const [index, overlay] of block.overlays.entries()) {
     const item: CompileItem = {
@@ -135,26 +137,33 @@ async function addBlockItems(
           }
         : {})
     };
+    if (overlay.type === "sfx") {
+      sfxJobs.push(
+        safeAudioDuration(
+          overlay.duration,
+          absoluteAsset(overlay.file)
+        ).then((duration) => {
+          const sfxItem = { ...item, duration };
+          delete sfxItem.type;
+          return sfxItem;
+        })
+      );
+      continue;
+    }
     if (
       overlay.type === "meme" &&
       item.type === "video" &&
       !preserveVideoMemeDuration
     ) {
-      item.duration = await safeVideoDuration(
-        item.duration,
-        absoluteAsset(overlay.file)
+      overlayJobs.push(
+        safeVideoDuration(
+          item.duration,
+          absoluteAsset(overlay.file)
+        ).then((duration) => ({ ...item, duration }))
       );
+      continue;
     }
-    if (overlay.type === "sfx") {
-      item.duration = await safeAudioDuration(
-        item.duration,
-        absoluteAsset(overlay.file)
-      );
-      delete item.type;
-      sfxItems.push(item);
-    } else {
-      overlayItems.push(item);
-    }
+    overlayJobs.push(Promise.resolve(item));
   }
 }
 
@@ -169,19 +178,19 @@ export async function buildCompileSpec(
   options: CompileSpecOptions = {}
 ): Promise<CompileSpec> {
   const imageItems: CompileItem[] = [];
-  const overlayItems: CompileItem[] = [];
-  const voiceItems: CompileItem[] = [];
-  const sfxItems: CompileItem[] = [];
+  const overlayJobs: Array<Promise<CompileItem>> = [];
+  const voiceJobs: Array<Promise<CompileItem>> = [];
+  const sfxJobs: Array<Promise<CompileItem>> = [];
   let sceneStart = 0;
 
   for (const scene of timeline.scenes) {
-    await addSceneItems(
+    addSceneItems(
       scene,
       sceneStart,
       imageItems,
-      overlayItems,
-      voiceItems,
-      sfxItems,
+      overlayJobs,
+      voiceJobs,
+      sfxJobs,
       options.preserveVideoMemeDuration === true
     );
     sceneStart += getSceneDuration(scene) + SCENE_GAP_SECONDS;
@@ -191,35 +200,52 @@ export async function buildCompileSpec(
     timeline.topicIntro?.case === "long" &&
     timeline.topicIntro.titleVoiceFile
   ) {
-    voiceItems.push({
-      path: absoluteAsset(
-        timeline.topicIntro.titleVoiceFile
-      ),
-      start: timeline.topicIntro.animationDuration,
-      duration: await safeAudioDuration(
+    const titleVoiceFile = absoluteAsset(
+      timeline.topicIntro.titleVoiceFile
+    );
+    voiceJobs.push(
+      safeAudioDuration(
         timeline.topicIntro.titleVoiceDuration,
-        absoluteAsset(
-          timeline.topicIntro.titleVoiceFile
-        )
-      ),
-      ref: "topic-title-voice"
-    });
+        titleVoiceFile
+      ).then((duration) => ({
+        path: titleVoiceFile,
+        start: timeline.topicIntro!.animationDuration,
+        duration,
+        ref: "topic-title-voice"
+      }))
+    );
   }
   if (timeline.topicIntro?.openSfxFile) {
-    sfxItems.push({
-      path: absoluteAsset(
-        timeline.topicIntro.openSfxFile
-      ),
-      start: 0,
-      duration: await safeAudioDuration(
+    const openSfxFile = absoluteAsset(
+      timeline.topicIntro.openSfxFile
+    );
+    sfxJobs.push(
+      safeAudioDuration(
         timeline.topicIntro.openSfxDuration ?? 0,
-        absoluteAsset(
-          timeline.topicIntro.openSfxFile
-        )
-      ),
-      ref: "topic-open-sfx"
-    });
+        openSfxFile
+      ).then((duration) => ({
+        path: openSfxFile,
+        start: 0,
+        duration,
+        ref: "topic-open-sfx"
+      }))
+    );
   }
+
+  const musicJob = timeline.musicFile
+    ? safeAudioDuration(
+        timeline.totalDuration,
+        absoluteAsset(timeline.musicFile)
+      )
+    : undefined;
+
+  const [overlayItems, voiceItems, sfxItems, musicDuration] =
+    await Promise.all([
+      Promise.all(overlayJobs),
+      Promise.all(voiceJobs),
+      Promise.all(sfxJobs),
+      musicJob ?? Promise.resolve(undefined)
+    ]);
 
   const tracks: CompileTrack[] = [];
   const operations: Array<Record<string, unknown>> = [];
@@ -286,17 +312,14 @@ export async function buildCompileSpec(
       items: sfxItems
     });
   }
-  if (timeline.musicFile) {
+  if (timeline.musicFile && musicDuration !== undefined) {
     tracks.push({
       type: "audio",
       name: "music",
       items: [{
         path: absoluteAsset(timeline.musicFile),
         start: 0,
-        duration: await safeAudioDuration(
-          timeline.totalDuration,
-          absoluteAsset(timeline.musicFile)
-        ),
+        duration: musicDuration,
         volume: MUSIC_VOLUME,
         ref: "music"
       }]

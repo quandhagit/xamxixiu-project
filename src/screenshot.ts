@@ -2,22 +2,29 @@
 
 import { PRESSABLE_SELECTOR } from "./extract.js";
 
-const IMAGE_WAIT_MS = 8000;
+const IMAGE_WAIT_MS = 1000;
 const SETTLE_MS = 250;
+const MAX_SCREENSHOT_ATTEMPTS = 2;
+
+const headerBottomByPage = new WeakMap<Page, number>();
 
 /**
  * Lazy-loaded media (avatars, attached images) may still be loading right
  * after scrolling into view. Force eager loading, wait until every image in
- * the container is decoded (or the timeout passes), then let layout settle.
+ * the container is decoded (or the timeout passes), then let layout settle
+ * only when something still had to load.
  */
 async function waitForContainerReady(
   container: Locator
 ): Promise<void> {
-  await container
+  const alreadyReady = await container
     .evaluate(
       async (element, timeoutMs) => {
         const images = Array.from(
           element.querySelectorAll("img")
+        );
+        const allComplete = images.every(
+          (image) => image.complete
         );
 
         for (const image of images) {
@@ -47,36 +54,33 @@ async function waitForContainerReady(
         ]);
 
         await document.fonts?.ready;
+        return allComplete;
       },
       IMAGE_WAIT_MS
     )
-    .catch(() => undefined);
+    .catch(() => false);
 
-  await container.page().waitForTimeout(SETTLE_MS);
+  if (!alreadyReady) {
+    await container.page().waitForTimeout(SETTLE_MS);
+  }
 }
 
-/**
- * Scrolls the container into view just below any sticky/fixed top bar
- * (e.g. the "Thread" header) so nothing covers it, without hiding or
- * modifying the page.
- */
-async function scrollBelowHeader(
-  container: Locator
-): Promise<void> {
-  await container
-    .evaluate((element) => {
-      let headerBottom = 0;
+async function stickyHeaderBottom(
+  page: Page
+): Promise<number> {
+  const cached = headerBottomByPage.get(page);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const headerBottom = await page
+    .evaluate(() => {
+      let bottom = 0;
 
       for (const node of Array.from(
         document.body.querySelectorAll<HTMLElement>("*")
       )) {
-        if (
-          node.contains(element) ||
-          element.contains(node)
-        ) {
-          continue;
-        }
-
         const style = getComputedStyle(node);
 
         if (
@@ -94,36 +98,57 @@ async function scrollBelowHeader(
           rect.width > window.innerWidth * 0.3 &&
           rect.top <= 8
         ) {
-          headerBottom = Math.max(
-            headerBottom,
-            rect.bottom
-          );
+          bottom = Math.max(bottom, rect.bottom);
         }
       }
 
+      return bottom;
+    })
+    .catch(() => 0);
+
+  headerBottomByPage.set(page, headerBottom);
+  return headerBottom;
+}
+
+/**
+ * Scrolls the container into view just below any sticky/fixed top bar
+ * (e.g. the "Thread" header) so nothing covers it, without hiding or
+ * modifying the page.
+ */
+async function scrollBelowHeader(
+  container: Locator,
+  headerBottom: number
+): Promise<void> {
+  await container
+    .evaluate((element, cachedHeaderBottom) => {
       const rect = element.getBoundingClientRect();
       const margin = 16;
 
       if (
-        rect.height + headerBottom + margin >
+        rect.height + cachedHeaderBottom + margin >
         window.innerHeight
       ) {
         // Taller than the viewport: align just below the header.
         window.scrollBy(
           0,
-          rect.top - headerBottom - margin
+          rect.top - cachedHeaderBottom - margin
         );
       } else {
         // Center within the area under the header.
-        const free = window.innerHeight - headerBottom;
+        const free = window.innerHeight - cachedHeaderBottom;
         const target =
-          headerBottom + (free - rect.height) / 2;
+          cachedHeaderBottom + (free - rect.height) / 2;
 
         window.scrollBy(0, rect.top - target);
       }
-    })
+    }, headerBottom)
     .catch(() => undefined);
 }
+
+const screenshotOptions = {
+  animations: "disabled" as const,
+  caret: "hide" as const
+};
 
 /**
  * @param resolveIndex Optional. Returns the container's *current* index
@@ -141,11 +166,16 @@ export async function screenshotContainer(
   const containers = page.locator(
     PRESSABLE_SELECTOR
   );
+  const headerBottom = await stickyHeaderBottom(page);
 
   let index = containerIndex;
   let stable = false;
 
-  for (let attempt = 0; attempt < 4 && !stable; attempt++) {
+  for (
+    let attempt = 0;
+    attempt < MAX_SCREENSHOT_ATTEMPTS && !stable;
+    attempt++
+  ) {
     const count = await containers.count();
 
     if (index < 0 || index >= count) {
@@ -158,7 +188,7 @@ export async function screenshotContainer(
     const container = containers.nth(index);
 
     await container.scrollIntoViewIfNeeded();
-    await scrollBelowHeader(container);
+    await scrollBelowHeader(container, headerBottom);
     await waitForContainerReady(container);
 
     if (!resolveIndex) {
@@ -188,7 +218,8 @@ export async function screenshotContainer(
 
   if (cropBottomPx <= 0) {
     await container.screenshot({
-      path: outputPath
+      path: outputPath,
+      ...screenshotOptions
     });
   } else {
     const box =
@@ -202,6 +233,7 @@ export async function screenshotContainer(
 
     await page.screenshot({
       path: outputPath,
+      ...screenshotOptions,
       clip: {
         x: box.x,
         y: box.y,

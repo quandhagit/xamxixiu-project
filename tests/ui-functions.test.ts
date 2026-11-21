@@ -74,7 +74,6 @@ import {
   createSpikeTimelineProject
 } from "../src/hyperframes/compile";
 import { addBeepClip, removeClip } from "../src/timeline/beep";
-import { SPIKE_DECISION } from "../src/hyperframes/engine";
 import {
   clipAnimationLabel,
   clipFlyUpProgress,
@@ -129,7 +128,19 @@ import {
 } from "../src/timeline/clear-comment-assets";
 import type { ThreadAnalysis, ThreadComment, VideoTimeline } from "../src/types";
 import { cn } from "../renderer/features/ui/cn";
-import { chooseParentIndex } from "../src/extract";
+import {
+  chooseParentIndex,
+  parsePressableComment,
+  parentIndexFromSnapshot,
+  type PressableCardSnapshot
+} from "../src/extract";
+import { getExportEngine } from "../src/hyperframes/engine";
+import { mediaType } from "../src/capcut/compile/spec-builder";
+import {
+  isAnimatedVisual,
+  overlayPixelFormat,
+  visualFilters
+} from "../src/export/video-exporter";
 import {
   assetsForTarget,
   pickerTitle,
@@ -1363,6 +1374,125 @@ describe("reply parent from indent", () => {
   });
 });
 
+describe("pressable card snapshot parse", () => {
+  const snapshot = (
+    overrides: Partial<PressableCardSnapshot> = {}
+  ): PressableCardSnapshot => ({
+    index: 1,
+    profileLinks: [
+      { href: "/@alice", text: "alice" },
+      { href: "/@alice/post/123", text: "2h" }
+    ],
+    dirAutoTexts: ["alice", "hello world", "5"],
+    buttonAriaLabels: ["Like", "12 likes"],
+    innerText: "alice\nhello world\n12",
+    selfLeft: 427,
+    levels: [
+      [
+        { index: 0, left: 386 },
+        { index: 1, left: 427 }
+      ]
+    ],
+    ...overrides
+  });
+
+  it("parses author, cleaned text, and likes from a viewport snapshot", () => {
+    const parsed = parsePressableComment(snapshot());
+    assert.equal(parsed?.author, "alice");
+    assert.equal(parsed?.text, "hello world");
+    assert.equal(parsed?.likes, 12);
+  });
+
+  it("ignores avatar-only profile links and post permalinks", () => {
+    const parsed = parsePressableComment(
+      snapshot({
+        profileLinks: [
+          { href: "/@alice", text: "" },
+          { href: "/@alice/post/123", text: "alice" },
+          { href: "/@alice", text: "alice" }
+        ]
+      })
+    );
+    assert.equal(parsed?.author, "alice");
+  });
+
+  it("reads parent index from the same snapshot geometry", () => {
+    assert.equal(
+      parentIndexFromSnapshot(
+        snapshot({
+          index: 3,
+          selfLeft: 427,
+          levels: [
+            [
+              { index: 2, left: 386 },
+              { index: 3, left: 427 }
+            ]
+          ]
+        })
+      ),
+      2
+    );
+  });
+});
+
+describe("export engine default", () => {
+  it("uses ffmpeg unless hyperframes is requested", () => {
+    const previous = process.env.XAMXIXIU_EXPORT_ENGINE;
+    delete process.env.XAMXIXIU_EXPORT_ENGINE;
+    try {
+      assert.equal(getExportEngine(), "ffmpeg");
+      process.env.XAMXIXIU_EXPORT_ENGINE = "hyperframes";
+      assert.equal(getExportEngine(), "hyperframes");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.XAMXIXIU_EXPORT_ENGINE;
+      } else {
+        process.env.XAMXIXIU_EXPORT_ENGINE = previous;
+      }
+    }
+  });
+});
+
+describe("video visual filters", () => {
+  it("skips lanczos and alpha for opaque pre-scaled stills", () => {
+    const filters = visualFilters(
+      {
+        item: { start: 0, duration: 2, opacity: 1 },
+        width: 800,
+        height: 400,
+        preScaled: true
+      },
+      30
+    );
+    assert.equal(filters.includes("lanczos"), false);
+    assert.equal(filters.includes("yuva420p"), false);
+    assert.ok(filters.includes("yuv420p"));
+    assert.equal(overlayPixelFormat(1), "yuv420p");
+  });
+
+  it("keeps alpha when opacity is below 1", () => {
+    const filters = visualFilters(
+      {
+        item: { start: 0, duration: 2, opacity: 0.5 },
+        width: 800,
+        height: 400,
+        preScaled: true
+      },
+      30
+    );
+    assert.ok(filters.includes("yuva420p"));
+    assert.ok(filters.includes("colorchannelmixer=aa=0.5"));
+    assert.equal(overlayPixelFormat(0.5), "yuva420p");
+  });
+
+  it("treats gif overlays as animated instead of stills", () => {
+    assert.equal(mediaType("memes/dance.gif"), "video");
+    assert.equal(mediaType("memes/still.png"), "photo");
+    assert.equal(isAnimatedVisual("overlays-12.gif"), true);
+    assert.equal(isAnimatedVisual("comment-01.png"), false);
+  });
+});
+
 describe("builtin meme combos", () => {
   it("keeps default combos at 100% scale and centered", () => {
     for (const id of ["punch", "cringe", "shock", "soft", "none"] as const) {
@@ -1550,7 +1680,7 @@ describe("AI meme suggestions", () => {
         (reaction) =>
           !reaction.memeAssetId ||
           library.find((item) => item.id === reaction.memeAssetId)?.mediaKind !==
-            "video"
+          "video"
       ),
       true
     );
@@ -1769,7 +1899,7 @@ describe("clear comment overlays", () => {
           sfxAssetId: null,
           sfxCategory: null,
           comboId: "shock",
-          animation: "shake",
+          animation: "shake-3",
           duration: 1
         }
       ]

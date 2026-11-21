@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import type { ExportProgress } from "../electron/ipc-types.js";
 import { exportTimelineVideo } from "../export/video-exporter.js";
 import type { TimelineProject } from "../timeline/project.js";
@@ -73,38 +72,9 @@ export async function exportWithHyperframes(
       return outputPath;
     }
   } catch (error) {
-    console.warn("Hyperframes producer failed, trying CLI then ffmpeg.", error);
-  }
-
-  const cliOk = await renderWithCli(projectDir, outputPath, onProgress);
-  if (cliOk) {
-    onProgress?.({ phase: "done", percent: 100 });
-    return outputPath;
+    console.warn("Hyperframes producer failed, falling back to ffmpeg.", error);
   }
 
   console.warn("Hyperframes render unavailable; falling back to ffmpeg exporter.");
   return exportTimelineVideo(projectDirectory, outputPath, onProgress);
-}
-
-function renderWithCli(
-  projectDir: string,
-  outputPath: string,
-  onProgress?: (progress: ExportProgress) => void
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(
-      "npx",
-      ["--yes", "hyperframes", "render", "--output", outputPath],
-      {
-        cwd: projectDir,
-        shell: true,
-        windowsHide: true
-      }
-    );
-    child.stdout?.on("data", () => {
-      onProgress?.({ phase: "rendering", percent: 40 });
-    });
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
 }
