@@ -3,6 +3,7 @@
 import {
   CAPTURE_COMMENT_MAX
 } from "../../../src/comments/comment-constants";
+import type { CaptureViewport } from "../../../src/types";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Panel } from "../ui/Panel";
@@ -10,16 +11,20 @@ import { Panel } from "../ui/Panel";
 export function InputStep({
   url,
   captureCount,
+  captureViewport,
   captureLoading,
   onUrlChange,
   onCaptureCountChange,
+  onCaptureViewportChange,
   onCapture
 }: {
   url: string;
   captureCount: number;
+  captureViewport: CaptureViewport;
   captureLoading: boolean;
   onUrlChange: (url: string) => void;
   onCaptureCountChange: (count: number) => void;
+  onCaptureViewportChange: (viewport: CaptureViewport) => void;
   onCapture: () => void;
 }): React.ReactElement {
   const countReady =
@@ -75,6 +80,33 @@ export function InputStep({
       <p className="mt-1 text-[12px] text-ink-3">
         {`Số comment được chụp, từ 1 đến ${CAPTURE_COMMENT_MAX}. Ảnh bài gốc luôn được chụp thêm.`}
       </p>
+      <p className="mt-3 text-[13px] font-medium text-ink">
+        Layout capture
+      </p>
+      <div className="mt-2 flex gap-4 text-[13px] text-ink">
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="radio"
+            name="capture-viewport"
+            value="mobile"
+            checked={captureViewport === "mobile"}
+            disabled={captureLoading}
+            onChange={() => onCaptureViewportChange("mobile")}
+          />
+          Mobile
+        </label>
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="radio"
+            name="capture-viewport"
+            value="desktop"
+            checked={captureViewport === "desktop"}
+            disabled={captureLoading}
+            onChange={() => onCaptureViewportChange("desktop")}
+          />
+          Desktop
+        </label>
+      </div>
       <Button
         variant="primary"
         className="mt-3"

@@ -16,6 +16,11 @@ import {
   reorderComments,
   setCommentShownAsRoot
 } from "../../../src/comments/order";
+import {
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  type CommentCaptureStyle
+} from "../../../src/capture-style";
+import { CaptureStyleImage } from "../custom/CaptureStyleImage";
 import type {
   CommentCurationKind,
   ThreadComment
@@ -131,6 +136,7 @@ interface CaptureCommentsProps {
   comments: ThreadComment[];
   imageSlots: number[];
   assets: Record<string, string>;
+  captureStyle?: CommentCaptureStyle;
   addLoading: boolean;
   onChange: (
     comments: ThreadComment[],
@@ -166,6 +172,7 @@ export function CaptureComments({
   comments,
   imageSlots,
   assets,
+  captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
   addLoading,
   onChange,
   onAdd
@@ -475,10 +482,11 @@ export function CaptureComments({
       >
         <div className="flex min-h-[160px] items-start justify-center rounded-md bg-app p-3">
           {screenshot ? (
-            <img
+            <CaptureStyleImage
               src={screenshot}
               alt={`Comment ${index + 1} screenshot`}
-              className="max-h-[260px] max-w-full rounded-md object-contain"
+              className="max-h-[260px] max-w-full object-contain"
+              captureStyle={captureStyle}
               draggable={false}
             />
           ) : (

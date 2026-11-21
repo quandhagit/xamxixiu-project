@@ -6,6 +6,8 @@ import {
   useRef,
   useState
 } from "react";
+import { DEFAULT_COMMENT_CAPTURE_STYLE } from "../../../src/capture-style";
+import { DEFAULT_TOPIC_TITLE_STYLE } from "../../../src/topic-title-style";
 import type {
   AiProvider,
   AppSettings
@@ -40,7 +42,9 @@ const EMPTY_SETTINGS: AppSettings = {
   vbeeAccessToken: "",
   vbeeAppId: "",
   vbeeWebhookPort: "3001",
-  capcutDraftsDir: ""
+  capcutDraftsDir: "",
+  commentCapture: DEFAULT_COMMENT_CAPTURE_STYLE,
+  topicTitle: DEFAULT_TOPIC_TITLE_STYLE
 };
 
 type TabId =

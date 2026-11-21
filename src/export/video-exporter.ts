@@ -10,8 +10,16 @@ import type {
   CompileItem,
   CompileSpec
 } from "../capcut/compile/types.js";
+import type { CommentCaptureStyle } from "../capture-style.js";
+import type { TopicTitleStyle } from "../topic-title-style.js";
+import { applyCaptureStyle } from "../process-image.js";
 import type { VideoTimeline } from "../types.js";
-import { TOPIC_TITLE_ANIMATION_DURATION } from "../timeline/topic-constants.js";
+import { clipUsesFlyUp } from "../timeline/clip-motion.js";
+import type { TimelineClip, TimelineProject } from "../timeline/project.js";
+import {
+  TOPIC_TITLE_ANIMATION_DURATION,
+  TOPIC_TITLE_WIDTH_FRACTION
+} from "../timeline/topic-constants.js";
 import {
   resolveFfmpegPath,
   resolveFfprobePath
@@ -172,9 +180,79 @@ function targetWidth(
   canvasWidth: number
 ): number {
   if (item.ref === "topic-title-card") {
-    return nativeWidth;
+    return nativeWidth * (item.scale ?? 1);
   }
   return (item.scale ?? 1) * canvasWidth;
+}
+
+function assetBasename(file: string): string {
+  return path.basename(file.replaceAll("\\", "/")).toLowerCase();
+}
+
+export function matchExportClip(
+  project: TimelineProject,
+  item: CompileItem
+): TimelineClip | undefined {
+  if (item.ref === "topic-title-card") {
+    return project.clips.find(
+      (clip) => clip.trackId === "title-card" || clip.kind === "title"
+    );
+  }
+  if (!item.path) {
+    return undefined;
+  }
+  const key = assetBasename(item.path);
+  const visual = project.clips.filter(
+    (clip) =>
+      clip.kind !== "audio" &&
+      clip.trackId !== "background" &&
+      assetBasename(clip.file) === key
+  );
+  if (visual.length <= 1) {
+    return visual[0];
+  }
+  return (
+    visual.find((clip) => Math.abs(clip.start - item.start) < 0.08) ??
+    visual[0]
+  );
+}
+
+export function applyTimelineProjectLayout(
+  spec: CompileSpec,
+  project?: TimelineProject
+): CompileSpec {
+  if (!project) {
+    return spec;
+  }
+  for (const track of spec.tracks) {
+    if (track.type === "audio" || track.name === "background") {
+      continue;
+    }
+    for (const item of track.items) {
+      const clip = matchExportClip(project, item);
+      if (!clip) {
+        continue;
+      }
+      if (clip.x !== undefined) {
+        item.x = clip.x;
+      }
+      if (clip.y !== undefined) {
+        item.y = clip.y;
+      }
+      if (clip.scale !== undefined) {
+        item.scale =
+          item.ref === "topic-title-card"
+            ? clip.scale / TOPIC_TITLE_WIDTH_FRACTION
+            : clip.scale;
+      }
+      item.flyUp = clipUsesFlyUp(clip);
+      if (item.flyUp) {
+        item.animationDuration =
+          clip.animationDuration ?? item.animationDuration;
+      }
+    }
+  }
+  return spec;
 }
 
 function overlayPosition(
@@ -212,6 +290,40 @@ async function preScaleStill(
     .png()
     .toFile(destination);
   return destination;
+}
+
+async function styleCaptureStill(
+  source: string,
+  directory: string,
+  name: string,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  style: CommentCaptureStyle
+): Promise<{
+  file: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}> {
+  const resized = await preScaleStill(
+    source,
+    directory,
+    `${name}-plain`,
+    width,
+    height
+  );
+  const destination = path.join(directory, `${name}.png`);
+  const applied = await applyCaptureStyle(resized, destination, style);
+  return {
+    file: destination,
+    width: applied.width,
+    height: applied.height,
+    x: x - applied.originX,
+    y: y - applied.originY
+  };
 }
 
 export interface VideoExportProgress {
@@ -336,9 +448,9 @@ function runFfmpeg(
 }
 
 export function overlayPixelFormat(
-  opacity?: number
+  _opacity?: number
 ): "yuv420p" | "yuva420p" {
-  return (opacity ?? 1) < 1 ? "yuva420p" : "yuv420p";
+  return "yuva420p";
 }
 
 export function visualFilters(
@@ -385,10 +497,7 @@ function overlayYExpression(
     TOPIC_TITLE_ANIMATION_DURATION
   );
   const restY = layer.y;
-  const startY =
-    layer.item.ref === "topic-title-card"
-      ? Math.round(canvasHeight - layer.height / 2)
-      : restY + canvasHeight;
+  const startY = restY + canvasHeight;
   return `'${startY}+(${restY - startY})*min(1\\,max(0\\,(t-${seconds(
     layer.item.start
   )})/${seconds(animation)}))'`;
@@ -422,7 +531,8 @@ function timelineDuration(spec: CompileSpec): number {
 
 async function buildGraph(
   spec: CompileSpec,
-  stagingDirectory: string
+  stagingDirectory: string,
+  captureStyle?: CommentCaptureStyle
 ): Promise<{
   inputArgs: string[];
   filterScript: string;
@@ -555,6 +665,29 @@ async function buildGraph(
           spec.height
         );
         const isPhoto = !animated;
+        if (isPhoto && captureStyle && track.name === "images") {
+          const styled = await styleCaptureStill(
+            item.path as string,
+            stagingDirectory,
+            name,
+            width,
+            height,
+            position.x,
+            position.y,
+            captureStyle
+          );
+          return {
+            item,
+            extraArgs,
+            file: styled.file,
+            width: styled.width,
+            height: styled.height,
+            x: styled.x,
+            y: styled.y,
+            preScaled: true,
+            attachAudio: false
+          };
+        }
         const file = isPhoto
           ? await preScaleStill(
               item.path as string,
@@ -679,7 +812,10 @@ async function buildGraph(
 export async function exportTimelineVideo(
   projectDirectory: string,
   outputPath: string,
-  onProgress?: (progress: VideoExportProgress) => void
+  onProgress?: (progress: VideoExportProgress) => void,
+  captureStyle?: CommentCaptureStyle,
+  titleStyle?: TopicTitleStyle,
+  timelineProject?: TimelineProject
 ): Promise<string> {
   onProgress?.({
     phase: "preparing",
@@ -689,14 +825,18 @@ export async function exportTimelineVideo(
   const topicTitleCardFile = timeline.topicIntro
     ? await renderTopicTitleCard(
         projectDirectory,
-        timeline.topicIntro.title
+        timeline.topicIntro.title,
+        titleStyle
       )
     : undefined;
-  const spec = await buildCompileSpec(
-    projectDirectory,
-    timeline,
-    topicTitleCardFile,
-    { preserveVideoMemeDuration: true }
+  const spec = applyTimelineProjectLayout(
+    await buildCompileSpec(
+      projectDirectory,
+      timeline,
+      topicTitleCardFile,
+      { preserveVideoMemeDuration: true }
+    ),
+    timelineProject
   );
   const stagingDirectory = await fs.mkdtemp(
     path.join(os.tmpdir(), "xamxixiu-export-")
@@ -704,7 +844,8 @@ export async function exportTimelineVideo(
   try {
     const graph = await buildGraph(
       spec,
-      stagingDirectory
+      stagingDirectory,
+      captureStyle
     );
     await fs.mkdir(path.dirname(outputPath), {
       recursive: true

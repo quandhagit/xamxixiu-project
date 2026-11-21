@@ -1,7 +1,7 @@
 "use client";
 
 import { Maximize2, Minimize2, Pause, Play } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
@@ -30,6 +30,7 @@ import {
 } from "../../../src/timeline/clip-motion";
 import {
   TOPIC_TITLE_CENTER_FRACTION,
+  TOPIC_TITLE_TRANSFORM_Y,
   TOPIC_TITLE_WIDTH_FRACTION
 } from "../../../src/timeline/topic-constants";
 import { previewSeekThreshold } from "./preview-timeline";
@@ -37,8 +38,20 @@ import {
   isPreviewFullscreen,
   previewFrameClass,
   previewHostClass,
-  previewStageMode
+  previewStageBoxStyle,
+  previewStageMode,
+  previewStageScale
 } from "./preview-chrome";
+import {
+  commentCaptureCardStyle,
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  type CommentCaptureStyle
+} from "../../../src/capture-style";
+import {
+  DEFAULT_TOPIC_TITLE_STYLE,
+  topicTitleCardStyle,
+  type TopicTitleStyle
+} from "../../../src/topic-title-style";
 
 const TRACK_Z: Record<string, number> = {
   background: 0,
@@ -80,7 +93,12 @@ function mutedByBeep(
   );
 }
 
-function visualStyle(clip: TimelineClip, time: number): CSSProperties {
+function visualStyle(
+  clip: TimelineClip,
+  time: number,
+  captureStyle: CommentCaptureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
+  titleStyle: TopicTitleStyle = DEFAULT_TOPIC_TITLE_STYLE
+): CSSProperties {
   const opacity = clipOpacity(clip, time);
   if (clip.trackId === "background") {
     return {
@@ -110,8 +128,7 @@ function visualStyle(clip: TimelineClip, time: number): CSSProperties {
   if (clipUsesFlyUp(clip)) {
     top = clipFlyUpTopPercent({
       restTopPercent: top,
-      progress,
-      mode: clip.trackId === "title-card" ? "title" : "full"
+      progress
     });
   }
   if (motion === "slide-left") {
@@ -131,7 +148,13 @@ function visualStyle(clip: TimelineClip, time: number): CSSProperties {
     transform: `translate(-50%, -50%)${shakeShift} scale(${zoom})`,
     objectFit: "contain",
     opacity,
-    zIndex: TRACK_Z[clip.trackId] ?? 1
+    zIndex: TRACK_Z[clip.trackId] ?? 1,
+    ...(clip.trackId === "images"
+      ? commentCaptureCardStyle(captureStyle)
+      : {}),
+    ...(clip.trackId === "title-card"
+      ? topicTitleCardStyle(titleStyle)
+      : {})
   };
 }
 
@@ -144,19 +167,23 @@ function PreviewClip({
   visible,
   selected,
   dragging,
+  captureStyle,
+  titleStyle,
   onMedia,
   onMovePointerDown,
   onMovePointerMove,
   onMovePointerUp
 }: {
   clip: TimelineClip;
-  src: string;
+  src?: string;
   time: number;
   playing: boolean;
   muted: boolean;
   visible: boolean;
   selected?: boolean;
   dragging?: boolean;
+  captureStyle?: CommentCaptureStyle;
+  titleStyle?: TopicTitleStyle;
   onMedia?: (element: HTMLMediaElement | null) => void;
   onMovePointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onMovePointerMove?: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -226,13 +253,18 @@ function PreviewClip({
 
   const hidden = visible ? undefined : "hidden";
   const movable = visible && canMoveClipOnPreview(clip);
+  const clipStyle = visualStyle(
+    clip,
+    time,
+    captureStyle,
+    titleStyle
+  );
   const style: CSSProperties = {
-    ...visualStyle(clip, time),
+    ...clipStyle,
     cursor: movable ? (dragging ? "grabbing" : "grab") : undefined,
-    boxShadow:
-      selected && visible
-        ? "0 0 0 1px rgba(255,255,255,0.75)"
-        : undefined,
+    ...(selected && visible
+      ? { boxShadow: "0 0 0 1px rgba(255,255,255,0.75)" }
+      : {}),
     touchAction: movable ? "none" : undefined
   };
   const moveProps = movable
@@ -258,6 +290,14 @@ function PreviewClip({
         style={style}
         {...moveProps}
       />
+    );
+  }
+
+  if (clip.trackId === "title-card" || clip.kind === "title") {
+    return (
+      <div className={hidden} style={style} {...moveProps}>
+        {clip.label}
+      </div>
     );
   }
 
@@ -297,6 +337,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   currentTime,
   playing,
   selectedClipId,
+  captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
+  titleStyle = DEFAULT_TOPIC_TITLE_STYLE,
   onToggle,
   onSelectClip,
   onPositionCommit
@@ -306,6 +348,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   currentTime: number;
   playing: boolean;
   selectedClipId?: string;
+  captureStyle?: CommentCaptureStyle;
+  titleStyle?: TopicTitleStyle;
   onToggle: () => void;
   onSelectClip?: (clipId: string) => void;
   onPositionCommit?: (clipId: string, x: number, y: number) => void;
@@ -323,6 +367,25 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
     native: nativeFullscreen,
     overlay: overlayFullscreen
   });
+  const [stageScale, setStageScale] = useState(1);
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    function update(): void {
+      setStageScale(previewStageScale(frame?.clientWidth ?? 0));
+    }
+    update();
+    if (!frame) {
+      return;
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(frame);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [stageMode]);
 
   useEffect(() => {
     function onFullscreenChange(): void {
@@ -441,9 +504,13 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
       originX: event.clientX,
       originY: event.clientY,
       startX: clip.x ?? 0,
-      startY: clip.y ?? 0,
+      startY:
+        clip.y ??
+        (clip.trackId === "title-card" ? TOPIC_TITLE_TRANSFORM_Y : 0),
       liveX: clip.x ?? 0,
-      liveY: clip.y ?? 0,
+      liveY:
+        clip.y ??
+        (clip.trackId === "title-card" ? TOPIC_TITLE_TRANSFORM_Y : 0),
       stageWidth: rect.width,
       stageHeight: rect.height,
       moved: false
@@ -520,9 +587,10 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
         className={previewFrameClass(stageMode)}
         onDoubleClick={() => void toggleFullscreen()}
       >
+        <div style={previewStageBoxStyle(stageScale)}>
         {clips.map((clip) => {
           const src = assets[clip.file];
-          if (!src) {
+          if (!src && clip.trackId !== "title-card") {
             return null;
           }
           const visible = clipActive(clip, currentTime);
@@ -539,6 +607,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
               visible={visible}
               selected={selectedClipId === clip.id}
               dragging={draggingId === clip.id}
+              captureStyle={captureStyle}
+              titleStyle={titleStyle}
               onMovePointerDown={(event) => beginOverlayDrag(event, clip)}
               onMovePointerMove={moveOverlayDrag}
               onMovePointerUp={endOverlayDrag}
@@ -552,6 +622,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
             />
           );
         })}
+        </div>
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent p-1.5"
           onDoubleClick={(event) => event.stopPropagation()}

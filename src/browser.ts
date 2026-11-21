@@ -1,5 +1,6 @@
 import {
     chromium,
+    devices,
     type BrowserContext,
     type Page
 } from "playwright";
@@ -7,29 +8,57 @@ import {
     getBrowserDataDir,
     resolveChromiumExecutable
 } from "./binaries.js";
+import {
+    DEFAULT_CAPTURE_VIEWPORT,
+    parseCaptureViewport,
+    type CaptureViewport
+} from "./types.js";
+
+export {
+    DEFAULT_CAPTURE_VIEWPORT,
+    parseCaptureViewport
+};
+export type { CaptureViewport };
+
+const DESKTOP_VIEWPORT = {
+    width: 1440,
+    height: 1200
+} as const;
 
 let loginBrowserOpen = false;
 
-export async function createContext(): Promise<BrowserContext> {
+export async function createContext(
+    viewport: CaptureViewport = DEFAULT_CAPTURE_VIEWPORT
+): Promise<BrowserContext> {
     if (loginBrowserOpen) {
         throw new Error(
             "Cửa sổ đăng nhập Threads đang mở. Hãy đăng nhập xong và đóng cửa sổ đó trước khi capture."
         );
     }
 
-    return launchContext();
+    return launchContext(parseCaptureViewport(viewport));
 }
 
-async function launchContext(): Promise<BrowserContext> {
+async function launchContext(
+    viewport: CaptureViewport = "desktop"
+): Promise<BrowserContext> {
     const executablePath = resolveChromiumExecutable();
+    const mobile = devices["iPhone 13"];
 
     return chromium.launchPersistentContext(getBrowserDataDir(), {
         ...(executablePath ? { executablePath } : {}),
         headless: false,
-        viewport: {
-            width: 1440,
-            height: 1200
-        }
+        ...(viewport === "mobile"
+            ? {
+                userAgent: mobile.userAgent,
+                viewport: mobile.viewport,
+                deviceScaleFactor: mobile.deviceScaleFactor,
+                isMobile: mobile.isMobile,
+                hasTouch: mobile.hasTouch
+            }
+            : {
+                viewport: DESKTOP_VIEWPORT
+            })
     });
 }
 
@@ -52,7 +81,7 @@ export async function openLoginBrowser(): Promise<void> {
     loginBrowserOpen = true;
 
     try {
-        const context = await launchContext();
+        const context = await launchContext("desktop");
         const closed = new Promise<void>((resolve) => {
             context.on("close", () => resolve());
         });

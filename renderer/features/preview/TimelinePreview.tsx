@@ -11,6 +11,10 @@ import type {
 } from "../../../src/types";
 import { getSceneBlocks } from "../../../src/timeline/timing";
 import {
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  type CommentCaptureStyle
+} from "../../../src/capture-style";
+import {
   getCaptureStyle,
   getOverlayStyle
 } from "./preview-timeline";
@@ -28,6 +32,7 @@ interface TimelinePreviewProps {
   timeline: VideoTimeline;
   assets: Record<string, string>;
   preview: UseTimelinePreviewResult;
+  captureStyle?: CommentCaptureStyle;
 }
 
 interface MemeOverlayProps {
@@ -153,7 +158,8 @@ function TopicMemeOverlay({
 export function TimelinePreview({
   timeline,
   assets,
-  preview
+  preview,
+  captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE
 }: TimelinePreviewProps): React.ReactElement {
   const {
     previewScene,
@@ -237,7 +243,7 @@ export function TimelinePreview({
                 className="absolute object-contain"
                 src={assets[block.imageFile]}
                 alt="Timeline preview"
-                style={getCaptureStyle(block)}
+                style={getCaptureStyle(block, captureStyle)}
               />
             ) : null
           )}

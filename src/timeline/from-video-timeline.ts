@@ -11,7 +11,10 @@ import {
 } from "./project.js";
 import type { VideoTimeline } from "../types.js";
 import { preserveComboClips } from "./meme-combo.js";
-import { TOPIC_POST_COMMENT_INDEX } from "./topic-constants.js";
+import {
+  TOPIC_POST_COMMENT_INDEX,
+  TOPIC_TITLE_TRANSFORM_Y
+} from "./topic-constants.js";
 
 function isVideoAsset(file: string): boolean {
   return [".mp4", ".mov", ".webm", ".mkv"].some((extension) =>
@@ -104,6 +107,9 @@ export function videoTimelineToProject(
 
   if (timeline.topicIntro) {
     if (timeline.topicIntro.titleCardFile) {
+      const previousTitle = previous?.clips.find(
+        (clip) => clip.id === "title-card"
+      );
       clips.push(makeClip({
         id: "title-card",
         trackId: "title-card",
@@ -112,7 +118,9 @@ export function videoTimelineToProject(
         file: timeline.topicIntro.titleCardFile,
         label: timeline.topicIntro.title || "Title card",
         animation: "slide-up",
-        animationDuration: timeline.topicIntro.animationDuration
+        animationDuration: timeline.topicIntro.animationDuration,
+        x: previousTitle?.x ?? 0,
+        y: previousTitle?.y ?? TOPIC_TITLE_TRANSFORM_Y
       }));
     }
     if (timeline.topicIntro.openSfxFile) {

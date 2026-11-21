@@ -8,6 +8,14 @@ import type {
   AiProvider,
   AppSettings
 } from "./ipc-types.js";
+import {
+  clampCommentCaptureStyle,
+  DEFAULT_COMMENT_CAPTURE_STYLE
+} from "../capture-style.js";
+import {
+  clampTopicTitleStyle,
+  DEFAULT_TOPIC_TITLE_STYLE
+} from "../topic-title-style.js";
 
 function defaultCapCutDraftsDirectory(): string {
   const localAppData =
@@ -70,7 +78,9 @@ export function settingsFromEnv(): AppSettings {
       readEnv("VBEE_WEBHOOK_PORT") || DEFAULT_PORT,
     capcutDraftsDir:
       readEnv("CAPCUT_DRAFTS_DIR") ||
-      defaultCapCutDraftsDirectory()
+      defaultCapCutDraftsDirectory(),
+    commentCapture: DEFAULT_COMMENT_CAPTURE_STYLE,
+    topicTitle: DEFAULT_TOPIC_TITLE_STYLE
   };
 }
 
@@ -172,7 +182,15 @@ export function normalizeSettings(
       readField(
         input.capcutDraftsDir,
         fallback.capcutDraftsDir
-      ) || defaultCapCutDraftsDirectory()
+      ) || defaultCapCutDraftsDirectory(),
+    commentCapture: clampCommentCaptureStyle(
+      input.commentCapture,
+      fallback.commentCapture
+    ),
+    topicTitle: clampTopicTitleStyle(
+      input.topicTitle,
+      fallback.topicTitle
+    )
   };
 }
 
@@ -208,7 +226,7 @@ export function applySettings(
 ): void {
   const values: AppSettings = settings;
   (
-    Object.keys(ENV_KEYS) as Array<keyof AppSettings>
+    Object.keys(ENV_KEYS) as Array<keyof typeof ENV_KEYS>
   ).forEach((field) => {
     process.env[ENV_KEYS[field]] = values[field];
   });
@@ -260,7 +278,8 @@ export async function saveSettings(
   }
 
   const settings = normalizeSettings(
-    input as Partial<AppSettings>
+    input as Partial<AppSettings>,
+    await loadSettings()
   );
   await assertValidSettings(settings);
   const file = settingsFile();

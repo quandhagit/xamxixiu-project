@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { AssetLibraryManager } from "../assets/AssetLibraryManager";
+import { CustomWorkspace } from "../custom/CustomWorkspace";
 import { WorkflowWorkspace } from "../workflow/WorkflowWorkspace";
 import { AppChrome } from "./AppChrome";
 import {
@@ -29,6 +30,11 @@ export function AppShell(): React.ReactElement {
       <div className={appViewPanelClass("library", active)}>
         <AssetLibraryManager
           visible={isAppViewVisible(active, "library")}
+        />
+      </div>
+      <div className={appViewPanelClass("custom", active)}>
+        <CustomWorkspace
+          visible={isAppViewVisible(active, "custom")}
         />
       </div>
     </AppChrome>

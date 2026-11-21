@@ -28,9 +28,12 @@ import {
   screenshotContainer
 } from "./screenshot.js";
 
-import type {
-  ThreadComment,
-  ThreadData
+import {
+  DEFAULT_CAPTURE_VIEWPORT,
+  parseCaptureViewport,
+  type CaptureViewport,
+  type ThreadComment,
+  type ThreadData
 } from "./types.js";
 
 import {
@@ -164,72 +167,6 @@ async function waitForViewportChange(
   }
 }
 
-/**
- * When the shared comment is the focused post, its container also holds the
- * sort bar and reply composer. Returns how many px to cut from the bottom so
- * the image ends right under the like/reply/repost/share row (0 otherwise).
- */
-async function actionBarCropPx(
-  page: Page,
-  containerIndex: number
-): Promise<number> {
-  return page
-    .locator(PRESSABLE_SELECTOR)
-    .nth(containerIndex)
-    .evaluate((element) => {
-      const composer = element.querySelector(
-        '[contenteditable="true"][role="textbox"]'
-      );
-
-      if (!composer) {
-        return 0;
-      }
-
-      const labels =
-        /^(thích|trả lời|đăng lại|chia sẻ|like|reply|repost|share)$/i;
-      const box = element.getBoundingClientRect();
-      const composerTop =
-        composer.getBoundingClientRect().top;
-      let actionsBottom = 0;
-
-      for (const svg of Array.from(
-        element.querySelectorAll("svg")
-      )) {
-        const label = (
-          svg.getAttribute("aria-label") ??
-          svg.querySelector("title")?.textContent ??
-          ""
-        ).trim();
-
-        if (!labels.test(label)) {
-          continue;
-        }
-
-        const rect = svg.getBoundingClientRect();
-
-        if (rect.bottom < composerTop) {
-          actionsBottom = Math.max(
-            actionsBottom,
-            rect.bottom
-          );
-        }
-      }
-
-      if (actionsBottom <= 0) {
-        return 0;
-      }
-
-      // Keep the action row's own padding below the icons.
-      const keepBelow = 12;
-
-      return Math.max(
-        0,
-        Math.floor(box.bottom - actionsBottom - keepBelow)
-      );
-    })
-    .catch(() => 0);
-}
-
 function commentKey(author: string, text: string): string {
   return `${author}\u0000${text}`;
 }
@@ -263,7 +200,8 @@ async function harvestThread(
   rawDir: string,
   processedDir: string,
   processor: ImageProcessor,
-  commentTarget: number
+  commentTarget: number,
+  viewport: CaptureViewport
 ): Promise<ThreadData> {
   await page.evaluate(() => {
     window.scrollTo(0, 0);
@@ -282,7 +220,15 @@ async function harvestThread(
   const postKey = commentKey(post.author, post.text);
   const topicPath = path.join(rawDir, "topic.png");
 
-  await screenshotContainer(page, 0, topicPath, 124);
+  const stitchOverflow = viewport === "mobile";
+
+  await screenshotContainer(
+    page,
+    0,
+    topicPath,
+    undefined,
+    stitchOverflow
+  );
   enqueueProcessedImage(processor, topicPath, processedDir);
 
   const harvested: HarvestedComment[] = [];
@@ -359,14 +305,14 @@ async function harvestThread(
           page,
           cards[i].index,
           rawPath,
-          0,
           () =>
             findContainerIndexByContent(
               page,
               (author, text) =>
                 commentKey(author, text) === key,
               cards[i].index
-            )
+            ),
+          stitchOverflow
         );
       } catch {
         continue;
@@ -500,9 +446,11 @@ export function normalizeCaptureCount(
 
 export async function captureThread(
   url: string,
-  commentLimit?: number
+  commentLimit?: number,
+  viewport: CaptureViewport = DEFAULT_CAPTURE_VIEWPORT
 ): Promise<CaptureResult> {
-  const context = await createContext();
+  const captureViewport = parseCaptureViewport(viewport);
+  const context = await createContext(captureViewport);
   const processor = createImageProcessor();
 
   try {
@@ -550,8 +498,14 @@ export async function captureThread(
       rawDir,
       processedDir,
       processor,
-      normalizeCaptureCount(commentLimit)
+      normalizeCaptureCount(commentLimit),
+      captureViewport
     );
+    const sourceUrl = url.trim();
+    if (sourceUrl) {
+      thread.url = sourceUrl;
+    }
+    thread.viewport = captureViewport;
     await processor.drain();
 
     // Save thread.json
@@ -591,6 +545,7 @@ export interface CaptureCommentInput {
   }>;
   /** Abbreviation table (lowercased keys); defaults to the starter list. */
   abbreviations?: Record<string, string>;
+  viewport?: CaptureViewport;
 }
 
 function replyCodesFromUrl(url: string): string[] {
@@ -659,9 +614,9 @@ async function findReplyContainerIndex(
           continue;
         }
 
-        const column = element.closest(columnSelector);
+        const column = document.querySelector(columnSelector);
 
-        if (!column) {
+        if (column && !element.closest(columnSelector)) {
           continue;
         }
 
@@ -669,22 +624,33 @@ async function findReplyContainerIndex(
           '[data-pressable-container="true"]'
         );
 
-        if (!container || !column.contains(container)) {
+        if (!container || (column && !column.contains(container))) {
           container = null;
           continue;
         }
 
-        let parent =
-          container.parentElement?.closest(
-            '[data-pressable-container="true"]'
-          ) ?? null;
-
-        while (parent && column.contains(parent)) {
-          container = parent;
-          parent =
+        while (
+          container &&
+          !containers.includes(container)
+        ) {
+          const parent: Element | null =
             container.parentElement?.closest(
               '[data-pressable-container="true"]'
             ) ?? null;
+
+          if (
+            !parent ||
+            (column && !column.contains(parent))
+          ) {
+            break;
+          }
+
+          container = parent;
+        }
+
+        if (!container || !containers.includes(container)) {
+          container = null;
+          continue;
         }
 
         break;
@@ -720,7 +686,8 @@ export async function captureComment(
     filename
   );
 
-  const context = await createContext();
+  const captureViewport = parseCaptureViewport(input.viewport);
+  const context = await createContext(captureViewport);
 
   try {
     const page = await openThreads(
@@ -821,7 +788,6 @@ export async function captureComment(
         page,
         containerIndex,
         tempPath,
-        await actionBarCropPx(page, containerIndex),
         () =>
           findContainerIndexByContent(
             page,
@@ -829,7 +795,8 @@ export async function captureComment(
               candidateAuthor.trim() === author &&
               candidateText.trim() === text,
             containerIndex
-          )
+          ),
+        captureViewport === "mobile"
       );
       await processImage(
         tempPath,

@@ -1,3 +1,8 @@
+import {
+  commentCaptureCardStyle,
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  type CommentCaptureStyle
+} from "../../../src/capture-style";
 import { MUSIC_VOLUME } from "../../../src/timeline/audio-constants";
 import {
   getSceneBlocks,
@@ -81,13 +86,17 @@ export function getOverlayStyle(
 }
 
 export function getCaptureStyle(
-  scene: TimelineCommentBlock
+  scene: TimelineCommentBlock,
+  captureStyle?: CommentCaptureStyle
 ): React.CSSProperties {
   return {
     width: `${(scene.imageScale ?? 1) * 100}%`,
     left: `${50 + (scene.imageX ?? 0) * 50}%`,
     top: `${50 - (scene.imageY ?? 0) * 50}%`,
-    transform: "translate(-50%, -50%)"
+    transform: "translate(-50%, -50%)",
+    ...commentCaptureCardStyle(
+      captureStyle ?? DEFAULT_COMMENT_CAPTURE_STYLE
+    )
   };
 }
 

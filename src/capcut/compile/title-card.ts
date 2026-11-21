@@ -3,11 +3,19 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   TOPIC_TITLE_CARD_FILE,
-  TOPIC_TITLE_LINE_HEIGHT,
-  TOPIC_TITLE_MIN_HEIGHT,
-  TOPIC_TITLE_PADDING,
   TOPIC_TITLE_WIDTH_FRACTION
 } from "../../timeline/topic-constants.js";
+import {
+  clampTopicTitleStyle,
+  DEFAULT_TOPIC_TITLE_STYLE,
+  overlayCanvasPx,
+  TOPIC_TITLE_DESIGN_WIDTH,
+  type TopicTitleStyle
+} from "../../topic-title-style.js";
+
+const TITLE_LINE_HEIGHT = 1.2;
+const AVERAGE_GLYPH_EM = 0.6;
+const MAX_TITLE_LINES = 12;
 
 function escapeXml(value: string): string {
   return value
@@ -18,31 +26,118 @@ function escapeXml(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-function wrapTitle(title: string, maxCharacters = 28): string[] {
-  const words = title.trim().split(/\s+/).filter(Boolean);
+export function wrapTopicTitle(
+  title: string,
+  maxCharacters: number
+): string[] {
+  const limit = Math.max(1, Math.floor(maxCharacters));
+  const paragraphs = title.replaceAll("\r\n", "\n").split("\n");
   const lines: string[] = [];
-  let current = "";
 
-  for (const word of words) {
-    const candidate = current
-      ? `${current} ${word}`
-      : word;
-    if (current && candidate.length > maxCharacters) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = candidate;
+  function pushLine(line: string): void {
+    if (lines.length < MAX_TITLE_LINES) {
+      lines.push(line);
     }
   }
-  if (current) {
-    lines.push(current);
+
+  function flushWord(word: string, current: string): string {
+    if (word.length <= limit) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (current && candidate.length > limit) {
+        pushLine(current);
+        return word;
+      }
+      return candidate;
+    }
+    if (current) {
+      pushLine(current);
+    }
+    for (let index = 0; index < word.length; index += limit) {
+      const chunk = word.slice(index, index + limit);
+      if (index + limit >= word.length) {
+        return chunk;
+      }
+      pushLine(chunk);
+    }
+    return "";
   }
-  return lines.length > 0 ? lines.slice(0, 3) : [""];
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.trim() === "" && paragraph.length === 0) {
+      pushLine("");
+      continue;
+    }
+    const words = paragraph.trim().split(/\s+/).filter(Boolean);
+    let current = "";
+    for (const word of words) {
+      current = flushWord(word, current);
+    }
+    if (current) {
+      pushLine(current);
+    }
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
+
+export interface TopicTitleCardMetrics {
+  fontSize: number;
+  padding: number;
+  border: number;
+  radius: number;
+  cardWidth: number;
+  cardHeight: number;
+  innerWidth: number;
+  lines: string[];
+}
+
+export function topicTitleCardMetrics(
+  title: string,
+  titleStyle?: TopicTitleStyle
+): TopicTitleCardMetrics {
+  const style = clampTopicTitleStyle(
+    titleStyle,
+    DEFAULT_TOPIC_TITLE_STYLE
+  );
+  const fontSize = overlayCanvasPx(style.fontSize);
+  const padding = overlayCanvasPx(style.padding);
+  const border = overlayCanvasPx(style.border);
+  const radius = overlayCanvasPx(style.radius);
+  const cardWidth = Math.round(
+    TOPIC_TITLE_DESIGN_WIDTH * TOPIC_TITLE_WIDTH_FRACTION
+  );
+  const innerWidth = Math.max(
+    fontSize,
+    cardWidth - (padding + border) * 2
+  );
+  const maxCharacters = Math.max(
+    4,
+    Math.floor(innerWidth / (fontSize * AVERAGE_GLYPH_EM))
+  );
+  const lines = wrapTopicTitle(title, maxCharacters);
+  const lineHeight = fontSize * TITLE_LINE_HEIGHT;
+  const cardHeight = Math.max(
+    2,
+    Math.round(
+      border * 2 + padding * 2 + Math.max(1, lines.length) * lineHeight
+    )
+  );
+  return {
+    fontSize,
+    padding,
+    border,
+    radius,
+    cardWidth,
+    cardHeight,
+    innerWidth,
+    lines
+  };
 }
 
 export async function renderTopicTitleCard(
   projectDirectory: string,
-  title: string
+  title: string,
+  titleStyle?: TopicTitleStyle
 ): Promise<string> {
   const output = path.join(
     projectDirectory,
@@ -50,52 +145,74 @@ export async function renderTopicTitleCard(
   );
   await fs.mkdir(path.dirname(output), { recursive: true });
 
-  const lines = wrapTitle(title).map(escapeXml);
-  const lineHeight = TOPIC_TITLE_LINE_HEIGHT;
-  const cardHeight = Math.max(
-    TOPIC_TITLE_MIN_HEIGHT,
-    lines.length * lineHeight + TOPIC_TITLE_PADDING
+  const style = clampTopicTitleStyle(
+    titleStyle,
+    DEFAULT_TOPIC_TITLE_STYLE
   );
-  const cardTop = 850 - cardHeight / 2;
-  const firstBaseline =
-    cardTop +
-    (cardHeight - (lines.length - 1) * lineHeight) / 2 +
-    20;
-  const titleLines = lines
+  const {
+    fontSize,
+    padding,
+    border,
+    radius,
+    cardWidth,
+    cardHeight,
+    lines
+  } = topicTitleCardMetrics(title, style);
+  const escapedLines = lines.map(escapeXml);
+  const lineHeight = fontSize * TITLE_LINE_HEIGHT;
+  const firstBaseline = border + padding + fontSize * 0.8;
+  const titleLines = escapedLines
     .map(
       (line, index) =>
-      `<tspan x="540" dy="${index === 0 ? 0 : lineHeight}">${line}</tspan>`
+        `<tspan x="${cardWidth / 2}" dy="${index === 0 ? 0 : lineHeight}">${line}</tspan>`
     )
     .join("");
+  const innerLeft = border;
+  const innerTop = border;
+  const innerWidthPx = Math.max(0, cardWidth - border * 2);
+  const innerHeightPx = Math.max(0, cardHeight - border * 2);
+  const innerRadius = Math.max(0, radius - border);
+  const outerFill =
+    border > 0 ? style.borderColor : style.background;
+  const innerRect =
+    border > 0 && innerWidthPx > 0 && innerHeightPx > 0
+      ? `<rect
+        x="${innerLeft}"
+        y="${innerTop}"
+        width="${innerWidthPx}"
+        height="${innerHeightPx}"
+        rx="${innerRadius}"
+        fill="${style.background}"
+      />`
+      : "";
 
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920">
+    <svg xmlns="http://www.w3.org/2000/svg" width="${cardWidth}" height="${cardHeight}" viewBox="0 0 ${cardWidth} ${cardHeight}">
       <style>
         .title {
-          font-family: Roboto, Arial, sans-serif;
-          font-size: 56px;
+          font-family: ${style.fontFamily};
+          font-size: ${fontSize}px;
           font-weight: 700;
-          fill: #ffffff;
+          fill: ${style.color};
           text-anchor: middle;
         }
       </style>
       <rect
-        x="${1080 * (1 - TOPIC_TITLE_WIDTH_FRACTION) / 2}"
-        y="${cardTop}"
-        width="${1080 * TOPIC_TITLE_WIDTH_FRACTION}"
+        x="0"
+        y="0"
+        width="${cardWidth}"
         height="${cardHeight}"
-        rx="24"
-        fill="#000000"
+        rx="${radius}"
+        fill="${outerFill}"
       />
-      <text x="540" y="${firstBaseline}" class="title">${titleLines}</text>
+      ${innerRect}
+      <text x="${cardWidth / 2}" y="${firstBaseline}" class="title">${titleLines}</text>
     </svg>
   `;
 
-  // Keep only the visible card. Its 864px width is exactly 80% of the
-  // 1080px canvas, so CapCut imports it at the requested visual width.
   await sharp(Buffer.from(svg))
+    .resize(cardWidth, cardHeight, { fit: "fill" })
     .png()
-    .trim()
     .toFile(output);
   return output;
 }

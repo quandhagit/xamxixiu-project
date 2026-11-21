@@ -11,6 +11,8 @@ import { canRemoveTimelineAsset } from "../../../src/timeline/replace-asset";
 import { isBulkClearableOverlayClip } from "../../../src/timeline/comment-overlay-clips";
 import type { ProjectState } from "../../../src/project/store";
 import type { VideoTimeline } from "../../../src/types";
+import type { CommentCaptureStyle } from "../../../src/capture-style";
+import type { TopicTitleStyle } from "../../../src/topic-title-style";
 import type { TimelineProject } from "../../../src/timeline/project";
 import {
   DEFAULT_AUTO_FORMAT
@@ -60,7 +62,11 @@ import {
 } from "../../../src/timeline/persist";
 import { HyperframesPlayer } from "./HyperframesPlayer";
 import { computeWaveformPeaks } from "./waveform";
-import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
+import {
+  TOPIC_TITLE_MAX_LENGTH,
+  TOPIC_TITLE_TRANSFORM_Y
+} from "../../../src/timeline/topic-constants";
+import { canMoveClipOnPreview } from "../../../src/timeline/clip-position";
 import {
   AssetPickerDialog
 } from "./AssetPickerDialog";
@@ -88,6 +94,8 @@ interface TimelineWorkspaceProps {
   timeline?: VideoTimeline;
   timelineProject?: TimelineProject;
   previewAssets: Record<string, string>;
+  captureStyle?: CommentCaptureStyle;
+  titleStyle?: TopicTitleStyle;
   analysis?: ProjectState["analysis"];
   reactions?: ProjectState["reactions"];
   visible?: boolean;
@@ -102,6 +110,8 @@ export function TimelineWorkspace({
   timeline,
   timelineProject,
   previewAssets,
+  captureStyle,
+  titleStyle,
   analysis,
   reactions,
   visible = true,
@@ -700,6 +710,8 @@ export function TimelineWorkspace({
               currentTime={preview.previewTime}
               playing={preview.previewPlaying}
               selectedClipId={selectedClipId}
+              captureStyle={captureStyle}
+              titleStyle={titleStyle}
               onToggle={preview.togglePreview}
               onSelectClip={setSelectedClipId}
               onPositionCommit={(clipId, x, y) => {
@@ -1026,6 +1038,10 @@ function ClipFadePanel({
     ? CUSTOM_COMBO_ID
     : (clip.comboId ?? "none");
   const namedCombo = findCombo(clip.comboId, userCombos);
+  const positionX = clip.x ?? 0;
+  const positionY =
+    clip.y ??
+    (clip.trackId === "title-card" ? TOPIC_TITLE_TRANSFORM_Y : 0);
 
   async function saveCurrentCombo(): Promise<void> {
     if (!clip) {
@@ -1169,7 +1185,7 @@ function ClipFadePanel({
             />
           </label>
         ) : null}
-        {imageMeme || videoMeme || clip.trackId === "images" ? (
+        {canMoveClipOnPreview(clip) ? (
           <>
             <label>
               X
@@ -1178,7 +1194,7 @@ function ClipFadePanel({
                 min={-1}
                 max={1}
                 step={0.05}
-                value={clip.x ?? 0}
+                value={positionX}
                 disabled={disabled || clip.locked}
                 className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
                 onBlur={() => onFlushDraft?.()}
@@ -1188,7 +1204,7 @@ function ClipFadePanel({
                       project,
                       clipId,
                       Number(event.target.value),
-                      clip.y ?? 0
+                      positionY
                     )
                   )
                 }
@@ -1201,7 +1217,7 @@ function ClipFadePanel({
                 min={-1}
                 max={1}
                 step={0.05}
-                value={clip.y ?? 0}
+                value={positionY}
                 disabled={disabled || clip.locked}
                 className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
                 onBlur={() => onFlushDraft?.()}
@@ -1210,7 +1226,7 @@ function ClipFadePanel({
                     setClipPosition(
                       project,
                       clipId,
-                      clip.x ?? 0,
+                      positionX,
                       Number(event.target.value)
                     )
                   )

@@ -1,4 +1,5 @@
 import type {
+  CaptureViewport,
   ContentData,
   ThreadComment,
   TopicTitleVoiceMode
@@ -28,6 +29,8 @@ import type {
   AssetType,
   AssetUpdate
 } from "../assets/library.js";
+import type { CommentCaptureStyle } from "../capture-style.js";
+import type { TopicTitleStyle } from "../topic-title-style.js";
 import type {
   MatchedReaction
 } from "../assets/matcher.js";
@@ -131,6 +134,8 @@ export interface AppSettings {
   vbeeAppId: string;
   vbeeWebhookPort: string;
   capcutDraftsDir: string;
+  commentCapture: CommentCaptureStyle;
+  topicTitle: TopicTitleStyle;
 }
 
 export interface SaveSettingsResult {
@@ -168,7 +173,8 @@ export type UpdaterStatus =
 export interface DesktopApi {
   captureThread(
     url: string,
-    commentLimit?: number
+    commentLimit?: number,
+    viewport?: CaptureViewport
   ): Promise<ProjectState>;
   captureComment(
     payload: CaptureCommentPayload

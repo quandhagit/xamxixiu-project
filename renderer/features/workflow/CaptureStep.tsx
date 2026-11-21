@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import {
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  type CommentCaptureStyle
+} from "../../../src/capture-style";
+import { CaptureStyleImage } from "../custom/CaptureStyleImage";
 import type { ContentData } from "../../../src/types";
 import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
@@ -13,6 +18,7 @@ import { cn } from "../ui/cn";
 export function CaptureStep({
   draftContent,
   captureAssets,
+  captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
   imageSlots,
   addCommentLoading,
   operationLoading,
@@ -37,6 +43,7 @@ export function CaptureStep({
 }: {
   draftContent?: ContentData;
   captureAssets: Record<string, string>;
+  captureStyle?: CommentCaptureStyle;
   imageSlots: number[];
   addCommentLoading: boolean;
   operationLoading: boolean;
@@ -123,10 +130,11 @@ export function CaptureStep({
           <div className="grid gap-3 lg:grid-cols-[0.8fr_1.2fr]">
             <Panel className="flex min-h-[160px] items-start justify-center bg-app">
               {captureAssets.topic ? (
-                <img
+                <CaptureStyleImage
                   src={captureAssets.topic}
                   alt="Threads topic screenshot"
-                  className="max-h-[260px] max-w-full rounded-md object-contain"
+                  className="max-h-[260px] max-w-full object-contain"
+                  captureStyle={captureStyle}
                 />
               ) : (
                 <p className="py-8 text-[13px] text-ink-3">
@@ -243,6 +251,7 @@ export function CaptureStep({
             comments={draftContent.comments}
             imageSlots={imageSlots}
             assets={captureAssets}
+            captureStyle={captureStyle}
             addLoading={addCommentLoading}
             onChange={onCommentsChange}
             onAdd={onAddComment}

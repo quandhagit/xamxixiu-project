@@ -109,13 +109,8 @@ export function clipFlyUpProgress(
 export function clipFlyUpTopPercent(options: {
   restTopPercent: number;
   progress: number;
-  mode: "title" | "full";
 }): number {
-  const extra =
-    options.mode === "title"
-      ? 100 - options.restTopPercent
-      : 100;
-  return options.restTopPercent + (1 - options.progress) * extra;
+  return options.restTopPercent + (1 - options.progress) * 100;
 }
 
 export function clipZoomMultiplier(progress: number): number {

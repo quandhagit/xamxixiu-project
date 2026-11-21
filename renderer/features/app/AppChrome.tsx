@@ -5,14 +5,17 @@ import { useState } from "react";
 import { Button } from "../ui/Button";
 import { cn } from "../ui/cn";
 import { SettingsDialog } from "./SettingsDialog";
-import { APP_VIEW_HREF } from "./app-view";
+import {
+  APP_VIEW_HREF,
+  type AppView
+} from "./app-view";
 
 export function AppChrome({
   active,
   projectLabel,
   children
 }: {
-  active: "workflow" | "library";
+  active: AppView;
   projectLabel?: string;
   children: React.ReactNode;
 }): React.ReactElement {
@@ -51,6 +54,19 @@ export function AppChrome({
               )}
             >
               Library
+            </Link>
+            <Link
+              href={APP_VIEW_HREF.custom}
+              scroll={false}
+              aria-current={active === "custom" ? "page" : undefined}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[13px] transition",
+                active === "custom"
+                  ? "bg-accent/15 text-ink"
+                  : "text-ink-2 hover:bg-elevated hover:text-ink"
+              )}
+            >
+              Custom
             </Link>
           </nav>
         </div>

@@ -1,4 +1,9 @@
-export const PREVIEW_MOVE_TRACKS = ["meme", "video", "images"] as const;
+export const PREVIEW_MOVE_TRACKS = [
+  "meme",
+  "video",
+  "images",
+  "title-card"
+] as const;
 
 export type PreviewMoveTrackId = (typeof PREVIEW_MOVE_TRACKS)[number];
 

@@ -1,18 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CommentCaptureStyle } from "../capture-style.js";
 import type { ExportProgress } from "../electron/ipc-types.js";
 import { exportTimelineVideo } from "../export/video-exporter.js";
 import type { TimelineProject } from "../timeline/project.js";
+import type { TopicTitleStyle } from "../topic-title-style.js";
 import { compileTimelineProject } from "./compile.js";
 import { getExportEngine } from "./engine.js";
 
 export async function writeHyperframesProject(
   projectDirectory: string,
-  timelineProject: TimelineProject
+  timelineProject: TimelineProject,
+  captureStyle?: CommentCaptureStyle,
+  titleStyle?: TopicTitleStyle
 ): Promise<string> {
   const outputDir = path.join(projectDirectory, "hyperframes");
   await fs.mkdir(outputDir, { recursive: true });
   const html = compileTimelineProject(timelineProject, {
+    captureStyle,
+    titleStyle,
     resolveSrc: (file) => {
       if (path.isAbsolute(file) || file.startsWith("data:")) {
         return file.replaceAll("\\", "/");
@@ -31,17 +37,28 @@ export async function exportWithHyperframes(
   projectDirectory: string,
   timelineProject: TimelineProject,
   outputPath: string,
-  onProgress?: (progress: ExportProgress) => void
+  onProgress?: (progress: ExportProgress) => void,
+  captureStyle?: CommentCaptureStyle,
+  titleStyle?: TopicTitleStyle
 ): Promise<string> {
   const engine = getExportEngine();
   if (engine === "ffmpeg") {
-    return exportTimelineVideo(projectDirectory, outputPath, onProgress);
+    return exportTimelineVideo(
+      projectDirectory,
+      outputPath,
+      onProgress,
+      captureStyle,
+      titleStyle,
+      timelineProject
+    );
   }
 
   onProgress?.({ phase: "preparing", percent: 2 });
   const projectDir = await writeHyperframesProject(
     projectDirectory,
-    timelineProject
+    timelineProject,
+    captureStyle,
+    titleStyle
   );
 
   try {
@@ -76,5 +93,12 @@ export async function exportWithHyperframes(
   }
 
   console.warn("Hyperframes render unavailable; falling back to ffmpeg exporter.");
-  return exportTimelineVideo(projectDirectory, outputPath, onProgress);
+  return exportTimelineVideo(
+    projectDirectory,
+    outputPath,
+    onProgress,
+    captureStyle,
+    titleStyle,
+    timelineProject
+  );
 }

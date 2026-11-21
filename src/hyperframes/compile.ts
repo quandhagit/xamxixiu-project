@@ -1,4 +1,14 @@
 import {
+  commentCaptureCssText,
+  type CommentCaptureStyle
+} from "../capture-style.js";
+import {
+  DEFAULT_TOPIC_TITLE_STYLE,
+  topicTitleCssText,
+  type TopicTitleStyle
+} from "../topic-title-style.js";
+import { TOPIC_TITLE_WIDTH_FRACTION } from "../timeline/topic-constants.js";
+import {
   clipFlyUpTopPercent,
   clipMotionName,
   clipUsesFlyUp,
@@ -15,6 +25,8 @@ import {
 export interface CompileOptions {
   resolveSrc?: (file: string) => string;
   compositionId?: string;
+  captureStyle?: CommentCaptureStyle;
+  titleStyle?: TopicTitleStyle;
 }
 
 function escapeHtml(value: string): string {
@@ -29,11 +41,23 @@ function srcOf(clip: TimelineClip, resolveSrc?: (file: string) => string): strin
   return resolveSrc ? resolveSrc(clip.file) : clip.file.replaceAll("\\", "/");
 }
 
-function visualStyle(clip: TimelineClip): string {
-  const width = clip.scale ? `${Math.round(clip.scale * 100)}%` : "100%";
+function isTitleClip(clip: TimelineClip): boolean {
+  return clip.trackId === "title-card" || clip.kind === "title";
+}
+
+function visualStyle(
+  clip: TimelineClip,
+  captureStyle?: CommentCaptureStyle,
+  titleStyle?: TopicTitleStyle
+): string {
+  const width = clip.scale
+    ? `${Math.round(clip.scale * 100)}%`
+    : isTitleClip(clip)
+      ? `${Math.round(TOPIC_TITLE_WIDTH_FRACTION * 100)}%`
+      : "100%";
   const left = 50 + (clip.x ?? 0) * 50;
   const top = 50 - (clip.y ?? (clip.trackId === "title-card" ? 0.2 : 0)) * 50;
-  return [
+  const parts = [
     "position:absolute",
     `left:${left}%`,
     `top:${top}%`,
@@ -41,7 +65,16 @@ function visualStyle(clip: TimelineClip): string {
     `width:${width}`,
     "max-height:100%",
     "object-fit:contain"
-  ].join(";");
+  ];
+  if (clip.trackId === "images" && captureStyle) {
+    parts.push(commentCaptureCssText(captureStyle));
+  }
+  if (isTitleClip(clip)) {
+    parts.push(
+      topicTitleCssText(titleStyle ?? DEFAULT_TOPIC_TITLE_STYLE)
+    );
+  }
+  return parts.join(";");
 }
 
 function voiceSegments(project: TimelineProject, clip: TimelineClip): TimelineClip[] {
@@ -92,7 +125,13 @@ function voiceSegments(project: TimelineProject, clip: TimelineClip): TimelineCl
   return segments;
 }
 
-function mediaTag(clip: TimelineClip, src: string, trackIndex: number): string {
+function mediaTag(
+  clip: TimelineClip,
+  src: string,
+  trackIndex: number,
+  captureStyle?: CommentCaptureStyle,
+  titleStyle?: TopicTitleStyle
+): string {
   const start = clip.start.toFixed(3);
   const duration = clip.duration.toFixed(3);
   const attrs = [
@@ -102,18 +141,23 @@ function mediaTag(clip: TimelineClip, src: string, trackIndex: number): string {
     `data-duration="${duration}"`,
     `data-track-index="${trackIndex}"`,
     clip.trimIn ? `data-media-start="${clip.trimIn.toFixed(3)}"` : "",
-    `data-volume="${clip.volume}"`,
-    `src="${escapeHtml(src)}"`
+    `data-volume="${clip.volume}"`
   ].filter(Boolean);
+
+  if (isTitleClip(clip)) {
+    return `<div ${attrs.join(" ")} style="${visualStyle(clip, captureStyle, titleStyle)}">${escapeHtml(clip.label)}</div>`;
+  }
+
+  attrs.push(`src="${escapeHtml(src)}"`);
 
   if (clip.kind === "audio") {
     return `<audio ${attrs.join(" ")}></audio>`;
   }
   if (clip.kind === "video") {
     const muted = clipMutesVideoElement(clip) ? " muted" : "";
-    return `<video ${attrs.join(" ")} style="${visualStyle(clip)}"${muted} playsinline></video>`;
+    return `<video ${attrs.join(" ")} style="${visualStyle(clip, captureStyle, titleStyle)}"${muted} playsinline></video>`;
   }
-  return `<img ${attrs.join(" ")} alt="${escapeHtml(clip.label)}" style="${visualStyle(clip)}" />`;
+  return `<img ${attrs.join(" ")} alt="${escapeHtml(clip.label)}" style="${visualStyle(clip, captureStyle, titleStyle)}" />`;
 }
 
 function gsapFades(
@@ -132,8 +176,7 @@ function gsapFades(
       const restTop = 50 - (clip.y ?? (clip.trackId === "title-card" ? 0.2 : 0)) * 50;
       const startTop = clipFlyUpTopPercent({
         restTopPercent: restTop,
-        progress: 0,
-        mode: clip.trackId === "title-card" ? "title" : "full"
+        progress: 0
       });
       const fromY = Math.round(((startTop - restTop) / 100) * canvasHeight);
       lines.push(
@@ -201,7 +244,9 @@ export function compileTimelineProject(
     mediaTag(
       clip,
       srcOf(clip, options.resolveSrc),
-      TRACK_INDEX[clip.trackId] ?? 1
+      TRACK_INDEX[clip.trackId] ?? 1,
+      options.captureStyle,
+      options.titleStyle
     )
   );
   const duration = Math.max(project.totalDuration, 1).toFixed(3);

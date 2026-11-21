@@ -22,11 +22,12 @@ const api: DesktopApi = {
   openLoginBrowser: () =>
     ipcRenderer.invoke("browser:open-login"),
 
-  captureThread: (url, commentLimit) =>
+  captureThread: (url, commentLimit, viewport) =>
     ipcRenderer.invoke(
       "capture:thread",
       url,
-      commentLimit
+      commentLimit,
+      viewport
     ),
 
   captureComment: (

@@ -6,9 +6,11 @@ import {
   useRef,
   useState
 } from "react";
-import type {
-  AudioFailureTarget,
-  ContentData
+import {
+  DEFAULT_CAPTURE_VIEWPORT,
+  type AudioFailureTarget,
+  type CaptureViewport,
+  type ContentData
 } from "../../../src/types";
 import type {
   ProjectState,
@@ -36,12 +38,16 @@ import { Button } from "../ui/Button";
 import {
   formatProjectId,
   identityImageSlots,
+  projectCaptureViewport,
+  projectSourceUrl,
   withVoiceAssignment
 } from "./project-helpers";
 import {
   WORKFLOW_STEPS,
   type WorkflowStep
 } from "./steps";
+import { useCommentCaptureStyle } from "../custom/use-comment-capture-style";
+import { useTopicTitleStyle } from "../custom/use-topic-title-style";
 import { CaptureStep } from "./CaptureStep";
 import { InputStep } from "./InputStep";
 import {
@@ -66,6 +72,8 @@ export function WorkflowWorkspace({
   visible: boolean;
   onProjectLabelChange: (label: string) => void;
 }): React.ReactElement {
+  const captureStyle = useCommentCaptureStyle(visible);
+  const titleStyle = useTopicTitleStyle(visible);
   const [currentStep, setCurrentStep] =
     useState<WorkflowStep>("INPUT");
   const [projects, setProjects] =
@@ -87,6 +95,8 @@ export function WorkflowWorkspace({
   const previewAssetsRef = useRef(previewAssets);
   previewAssetsRef.current = previewAssets;
   const [url, setUrl] = useState("");
+  const [captureViewport, setCaptureViewport] =
+    useState<CaptureViewport>(DEFAULT_CAPTURE_VIEWPORT);
   const [captureCount, setCaptureCount] =
     useState(CAPTURE_COMMENT_TARGET);
   const [loading, setLoading] =
@@ -133,6 +143,25 @@ export function WorkflowWorkspace({
     selectedProject?.content?.topicTitle,
     selectedProject?.analysis?.topicTitle
   ]);
+
+  const savedSourceUrl = projectSourceUrl(selectedProject);
+  const savedCaptureViewport = projectCaptureViewport(selectedProject);
+
+  useEffect(() => {
+    if (currentStep !== "INPUT" || !savedSourceUrl) {
+      return;
+    }
+
+    setUrl(savedSourceUrl);
+  }, [currentStep, selectedProject?.id, savedSourceUrl]);
+
+  useEffect(() => {
+    if (currentStep !== "INPUT" || !selectedProject) {
+      return;
+    }
+
+    setCaptureViewport(savedCaptureViewport);
+  }, [currentStep, selectedProject?.id, savedCaptureViewport]);
 
   useEffect(() => {
     if (!canUseBridge) {
@@ -422,7 +451,8 @@ export function WorkflowWorkspace({
       const project =
         await window.xamxixiu.captureThread(
           url,
-          captureCount
+          captureCount,
+          captureViewport
         );
       const content =
         project.content ?? project.thread;
@@ -1189,9 +1219,11 @@ export function WorkflowWorkspace({
                 <InputStep
                   url={url}
                   captureCount={captureCount}
+                  captureViewport={captureViewport}
                   captureLoading={captureLoading}
                   onUrlChange={setUrl}
                   onCaptureCountChange={setCaptureCount}
+                  onCaptureViewportChange={setCaptureViewport}
                   onCapture={() => {
                     void capture();
                   }}
@@ -1200,6 +1232,7 @@ export function WorkflowWorkspace({
                 <CaptureStep
                   draftContent={draftContent}
                   captureAssets={captureAssets}
+                  captureStyle={captureStyle}
                   imageSlots={imageSlots}
                   addCommentLoading={addCommentLoading}
                   operationLoading={operationLoading}
@@ -1322,6 +1355,8 @@ export function WorkflowWorkspace({
                       timeline={selectedProject.timeline}
                       timelineProject={selectedProject.timelineProject}
                       previewAssets={previewAssets}
+                      captureStyle={captureStyle}
+                      titleStyle={titleStyle}
                       analysis={selectedProject.analysis}
                       reactions={selectedProject.reactions}
                       visible={visible}

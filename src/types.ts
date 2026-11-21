@@ -27,10 +27,20 @@ export interface ThreadComment {
   curation?: CommentCuration;
 }
 
+export type CaptureViewport = "desktop" | "mobile";
+
+export const DEFAULT_CAPTURE_VIEWPORT: CaptureViewport = "mobile";
+
+export function parseCaptureViewport(value: unknown): CaptureViewport {
+  return value === "desktop" ? "desktop" : "mobile";
+}
+
 export interface ThreadData {
   url: string;
   author: string;
   text: string;
+  /** Viewport used when capturing this thread. */
+  viewport?: CaptureViewport;
   /** Raw captured text, only set when `text` was rewritten (abbreviations expanded). */
   originalText?: string;
   /** User/AI title entered at capture; empty until the user fills it. */

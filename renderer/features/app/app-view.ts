@@ -1,22 +1,30 @@
 import { cn } from "../ui/cn";
 
-export type AppView = "workflow" | "library";
+export type AppView = "workflow" | "library" | "custom";
 
 export const APP_VIEWS = [
   "workflow",
-  "library"
+  "library",
+  "custom"
 ] as const satisfies readonly AppView[];
 
 export const APP_VIEW_HREF: Record<AppView, string> = {
   workflow: "/",
-  library: "/library/"
+  library: "/library/",
+  custom: "/custom/"
 };
 
 export function appViewFromPathname(
   pathname: string
 ): AppView {
   const path = pathname.replace(/\/+$/, "") || "/";
-  return path === "/library" ? "library" : "workflow";
+  if (path === "/library") {
+    return "library";
+  }
+  if (path === "/custom") {
+    return "custom";
+  }
+  return "workflow";
 }
 
 export function isAppViewVisible(

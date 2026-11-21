@@ -35,12 +35,16 @@ export interface ParsedPressableComment {
 export const THREAD_COLUMN_SELECTOR =
   '[aria-label="Column body"]';
 
+const PRESSABLE_CARD =
+  '[data-pressable-container="true"]:not([data-pressable-container="true"] [data-pressable-container="true"])';
+
 /**
  * Opening post and comments: pressable cards inside the thread
  * column, excluding a quoted post nested inside a comment.
+ * On mobile the column label may be missing; fall back to the page body.
  */
 export const PRESSABLE_SELECTOR =
-  `${THREAD_COLUMN_SELECTOR} [data-pressable-container="true"]:not([data-pressable-container="true"] [data-pressable-container="true"])`;
+  `${THREAD_COLUMN_SELECTOR} ${PRESSABLE_CARD}, body:not(:has(${THREAD_COLUMN_SELECTOR})) ${PRESSABLE_CARD}`;
 
 export async function extractThread(
   page: Page

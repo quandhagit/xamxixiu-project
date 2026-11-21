@@ -26,6 +26,7 @@ import {
   shouldGenerateTopicTitleVoice,
   TOPIC_POST_COMMENT_INDEX,
   TOPIC_TITLE_MAX_LENGTH,
+  TOPIC_TITLE_TRANSFORM_Y,
   TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH
 } from "../src/timeline/topic-constants";
 import {
@@ -126,21 +127,42 @@ import {
   clearCommentReactionAssets,
   collectClearedOverlayKinds
 } from "../src/timeline/clear-comment-assets";
-import type { ThreadAnalysis, ThreadComment, VideoTimeline } from "../src/types";
+import {
+  DEFAULT_CAPTURE_VIEWPORT,
+  parseCaptureViewport,
+  type ThreadAnalysis,
+  type ThreadComment,
+  type VideoTimeline
+} from "../src/types";
 import { cn } from "../renderer/features/ui/cn";
 import {
   chooseParentIndex,
   parsePressableComment,
   parentIndexFromSnapshot,
+  PRESSABLE_SELECTOR,
+  THREAD_COLUMN_SELECTOR,
   type PressableCardSnapshot
 } from "../src/extract";
+import {
+  captureCardRoot,
+  composerOverlayRoot,
+  isBottomChrome,
+  screenshotClipFitsViewport,
+  screenshotClipRect,
+  screenshotExtractRect
+} from "../src/screenshot";
 import { getExportEngine } from "../src/hyperframes/engine";
 import { mediaType } from "../src/capcut/compile/spec-builder";
 import {
+  applyTimelineProjectLayout,
   isAnimatedVisual,
   overlayPixelFormat,
   visualFilters
 } from "../src/export/video-exporter";
+import {
+  topicTitleCardMetrics,
+  wrapTopicTitle
+} from "../src/capcut/compile/title-card";
 import {
   assetsForTarget,
   pickerTitle,
@@ -172,17 +194,44 @@ import {
 } from "../renderer/features/preview/preview-timeline";
 import {
   isPreviewFullscreen,
+  previewCaptureStyleScale,
   previewFrameClass,
+  previewFullscreenFrameWidth,
   previewHostClass,
-  previewStageMode
+  previewStageBoxStyle,
+  previewStageMode,
+  previewStageScale
 } from "../renderer/features/preview/preview-chrome";
 import {
   formatProjectId,
+  projectCaptureViewport,
+  projectSourceUrl,
   identityImageSlots,
   withVoiceAssignment
 } from "../renderer/features/workflow/project-helpers";
 import { WORKFLOW_STEPS } from "../renderer/features/workflow/steps";
 import { createDefaultAnalysis } from "../src/ai/default-analysis";
+import {
+  clampCommentCaptureStyle,
+  commentCaptureCardStyle,
+  commentCaptureCssText,
+  commentCaptureDisplayScale,
+  DEFAULT_COMMENT_CAPTURE_STYLE,
+  parseHexColor,
+  shadowOffset
+} from "../src/capture-style";
+import {
+  clampTopicTitleStyle,
+  DEFAULT_TOPIC_TITLE_STYLE,
+  OVERLAY_CANVAS_PX_SCALE,
+  OVERLAY_REFERENCE_WIDTH,
+  overlayCanvasPx,
+  TOPIC_TITLE_PREVIEW_TEXT,
+  topicTitleCardStyle,
+  topicTitleCssText,
+  topicTitleDisplayScale,
+  topicTitleExportScale
+} from "../src/topic-title-style";
 import {
   APP_VIEW_HREF,
   APP_VIEWS,
@@ -470,6 +519,36 @@ describe("workflow chrome", () => {
     assert.match(capture, /scrollIntoView/);
   });
 
+  it("reads the saved Threads URL from the project", () => {
+    assert.equal(
+      projectSourceUrl({
+        content: {
+          url: " https://www.threads.com/@user/post/1 ",
+          author: "",
+          text: "",
+          likes: 0,
+          postContainerIndex: 0,
+          comments: []
+        }
+      }),
+      "https://www.threads.com/@user/post/1"
+    );
+    assert.equal(
+      projectSourceUrl({
+        thread: {
+          url: "https://www.threads.com/@user/post/2",
+          author: "",
+          text: "",
+          likes: 0,
+          postContainerIndex: 0,
+          comments: []
+        }
+      }),
+      "https://www.threads.com/@user/post/2"
+    );
+    assert.equal(projectSourceUrl(undefined), "");
+  });
+
   it("formats project ids without the -thread suffix", () => {
     assert.equal(
       formatProjectId({
@@ -490,12 +569,149 @@ describe("workflow chrome", () => {
   });
 });
 
+describe("capture viewport", () => {
+  it("parses desktop or defaults to mobile", () => {
+    assert.equal(DEFAULT_CAPTURE_VIEWPORT, "mobile");
+    assert.equal(parseCaptureViewport("desktop"), "desktop");
+    assert.equal(parseCaptureViewport("mobile"), "mobile");
+    assert.equal(parseCaptureViewport("tablet"), "mobile");
+    assert.equal(parseCaptureViewport(undefined), "mobile");
+  });
+
+  it("reads the saved capture viewport from the project", () => {
+    assert.equal(
+      projectCaptureViewport({
+        content: {
+          url: "",
+          author: "",
+          text: "",
+          likes: 0,
+          postContainerIndex: 0,
+          comments: [],
+          viewport: "desktop"
+        }
+      }),
+      "desktop"
+    );
+    assert.equal(
+      projectCaptureViewport({
+        thread: {
+          url: "",
+          author: "",
+          text: "",
+          likes: 0,
+          postContainerIndex: 0,
+          comments: []
+        }
+      }),
+      "mobile"
+    );
+    assert.equal(projectCaptureViewport(undefined), "mobile");
+  });
+
+  it("shows Desktop/Mobile radios on Input, defaulting to Mobile", () => {
+    const input = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/InputStep.tsx"),
+      "utf8"
+    );
+    const workspace = readFileSync(
+      path.join(
+        repoRoot,
+        "renderer/features/workflow/WorkflowWorkspace.tsx"
+      ),
+      "utf8"
+    );
+    assert.match(input, /type="radio"/);
+    assert.match(input, /value="mobile"/);
+    assert.match(input, /value="desktop"/);
+    assert.match(input, />\s*Mobile\s*</);
+    assert.match(input, />\s*Desktop\s*</);
+    assert.match(input, /checked=\{captureViewport === "mobile"\}/);
+    assert.match(workspace, /DEFAULT_CAPTURE_VIEWPORT/);
+    assert.match(workspace, /captureViewport/);
+    assert.match(workspace, /captureThread\(/);
+    assert.match(workspace, /captureViewport/);
+  });
+
+  it("launches iPhone 13 for mobile capture and 1440 for login", () => {
+    const browser = readFileSync(
+      path.join(repoRoot, "src/browser.ts"),
+      "utf8"
+    );
+    assert.match(browser, /devices\["iPhone 13"\]/);
+    assert.match(browser, /width: 1440/);
+    assert.match(browser, /height: 1200/);
+    assert.match(browser, /launchContext\("desktop"\)/);
+    assert.match(browser, /viewport: mobile\.viewport/);
+    assert.match(browser, /isMobile: mobile\.isMobile/);
+    assert.match(browser, /hasTouch: mobile\.hasTouch/);
+    const login = browser.slice(
+      browser.indexOf("export async function openLoginBrowser")
+    );
+    assert.match(login, /launchContext\("desktop"\)/);
+    assert.doesNotMatch(login, /launchContext\("mobile"\)/);
+  });
+
+  it("passes viewport through captureThread and IPC", () => {
+    const capture = readFileSync(
+      path.join(repoRoot, "src/capture.ts"),
+      "utf8"
+    );
+    const ipc = readFileSync(
+      path.join(repoRoot, "src/electron/ipc.ts"),
+      "utf8"
+    );
+    const types = readFileSync(
+      path.join(repoRoot, "src/electron/ipc-types.ts"),
+      "utf8"
+    );
+    const preload = readFileSync(
+      path.join(repoRoot, "src/electron/preload.ts"),
+      "utf8"
+    );
+    const createProject = readFileSync(
+      path.join(repoRoot, "src/create-project.ts"),
+      "utf8"
+    );
+    assert.match(
+      capture,
+      /viewport: CaptureViewport = DEFAULT_CAPTURE_VIEWPORT/
+    );
+    assert.match(capture, /thread\.viewport = captureViewport/);
+    assert.match(capture, /parseCaptureViewport\(input\.viewport\)/);
+    assert.match(ipc, /parseCaptureViewport\(viewport\)/);
+    assert.match(ipc, /project\?\.content\?\.viewport/);
+    assert.match(types, /viewport\?: CaptureViewport/);
+    assert.match(
+      preload,
+      /captureThread: \(url, commentLimit, viewport\)/
+    );
+    assert.match(createProject, /DEFAULT_CAPTURE_VIEWPORT/);
+  });
+
+  it("falls back to pressable cards when Column body is missing", () => {
+    assert.ok(PRESSABLE_SELECTOR.includes(THREAD_COLUMN_SELECTOR));
+    assert.match(
+      PRESSABLE_SELECTOR,
+      /body:not\(:has\(\[aria-label="Column body"\]\)\)/
+    );
+    const capture = readFileSync(
+      path.join(repoRoot, "src/capture.ts"),
+      "utf8"
+    );
+    assert.match(capture, /column && !element\.closest\(columnSelector\)/);
+    assert.match(capture, /!containers\.includes\(container\)/);
+  });
+});
+
 describe("app tab keep-alive", () => {
   it("maps renderer pathnames to chrome tabs", () => {
     assert.equal(appViewFromPathname("/"), "workflow");
     assert.equal(appViewFromPathname(""), "workflow");
     assert.equal(appViewFromPathname("/library"), "library");
     assert.equal(appViewFromPathname("/library/"), "library");
+    assert.equal(appViewFromPathname("/custom"), "custom");
+    assert.equal(appViewFromPathname("/custom/"), "custom");
   });
 
   it("keeps both workspaces present when switching to library and back", () => {
@@ -530,6 +746,14 @@ describe("app tab keep-alive", () => {
     );
     assert.equal(
       isAppViewVisible(appViewFromPathname("/"), "library"),
+      false
+    );
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/custom/"), "custom"),
+      true
+    );
+    assert.equal(
+      isAppViewVisible(appViewFromPathname("/custom/"), "workflow"),
       false
     );
 
@@ -574,12 +798,15 @@ describe("app tab keep-alive", () => {
     assert.match(chrome, /import Link from "next\/link"/);
     assert.match(chrome, /href=\{APP_VIEW_HREF\.workflow\}/);
     assert.match(chrome, /href=\{APP_VIEW_HREF\.library\}/);
+    assert.match(chrome, /href=\{APP_VIEW_HREF\.custom\}/);
     assert.doesNotMatch(chrome, /<a\b[^>]*href=/);
     assert.equal(APP_VIEW_HREF.workflow, "/");
     assert.equal(APP_VIEW_HREF.library, "/library/");
+    assert.equal(APP_VIEW_HREF.custom, "/custom/");
 
     assert.match(shell, /<WorkflowWorkspace/);
     assert.match(shell, /<AssetLibraryManager/);
+    assert.match(shell, /<CustomWorkspace/);
     assert.doesNotMatch(
       shell,
       /active === "workflow" \?\s*\(?\s*<WorkflowWorkspace/
@@ -588,6 +815,699 @@ describe("app tab keep-alive", () => {
       shell,
       /active === "library" \?\s*\(?\s*<AssetLibraryManager/
     );
+    assert.doesNotMatch(
+      shell,
+      /active === "custom" \?\s*\(?\s*<CustomWorkspace/
+    );
+  });
+});
+
+describe("comment capture style", () => {
+  it("clamps radius, border, shadow and hex colors", () => {
+    assert.deepEqual(
+      clampCommentCaptureStyle(undefined),
+      DEFAULT_COMMENT_CAPTURE_STYLE
+    );
+    assert.equal(DEFAULT_COMMENT_CAPTURE_STYLE.radius, 0);
+    assert.deepEqual(
+      clampCommentCaptureStyle({
+        radius: 200,
+        border: -4,
+        borderColor: "#fff",
+        shadow: 12.6,
+        shadowColor: "red"
+      }),
+      {
+        radius: 80,
+        border: 0,
+        borderColor: "#ffffff",
+        shadow: 13,
+        shadowColor: "#000000"
+      }
+    );
+    assert.equal(parseHexColor("#AbC"), "#aabbcc");
+    assert.equal(parseHexColor("zzz"), undefined);
+    assert.equal(shadowOffset(10), 3);
+    assert.deepEqual(
+      commentCaptureCardStyle({
+        radius: 8,
+        border: 2,
+        borderColor: "#112233",
+        shadow: 9,
+        shadowColor: "#000000"
+      }),
+      {
+        borderRadius: "14.22px",
+        border: "3.56px solid #112233",
+        boxShadow: "0 5.33px 16px #000000"
+      }
+    );
+    assert.equal(
+      commentCaptureCssText({
+        radius: 8,
+        border: 2,
+        borderColor: "#112233",
+        shadow: 9,
+        shadowColor: "#000000"
+      }),
+      "border-radius:14.22px;border:3.56px solid #112233;box-shadow:0 5.33px 16px #000000"
+    );
+    assert.equal(commentCaptureDisplayScale(270, 1080), 0.25);
+    assert.deepEqual(
+      commentCaptureCardStyle(
+        {
+          radius: 8,
+          border: 2,
+          borderColor: "#112233",
+          shadow: 9,
+          shadowColor: "#000000"
+        },
+        0.25
+      ),
+      {
+        borderRadius: "3.56px",
+        border: "0.89px solid #112233",
+        boxShadow: "0 1.33px 4px #000000"
+      }
+    );
+  });
+
+  it("renders Comment Capture controls and live preview", () => {
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/CustomWorkspace.tsx"),
+      "utf8"
+    );
+    const tabs = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/custom-tabs.ts"),
+      "utf8"
+    );
+    const page = readFileSync(
+      path.join(repoRoot, "renderer/app/custom/page.tsx"),
+      "utf8"
+    );
+    assert.match(tabs, /Comment Capture/);
+    assert.match(workspace, /previewStageBoxStyle/);
+    assert.match(workspace, /COMMENT_PREVIEW_WIDTH_FRACTION/);
+    assert.match(workspace, /commentCaptureCardStyle\(style\)/);
+    assert.doesNotMatch(workspace, /CaptureStyleImage/);
+    assert.match(workspace, /saveSettings/);
+    assert.match(workspace, /commentCapture: next/);
+    assert.match(workspace, /setSaved\(next\)/);
+    assert.doesNotMatch(workspace, /result\.settings\.commentCapture/);
+    assert.match(workspace, /processed\/comment-01\.png/);
+    assert.match(workspace, /getProjectAsset/);
+    assert.match(workspace, /PREVIEW_CHECKERBOARD/);
+    assert.match(workspace, /COMMENT_CAPTURE_STYLE_CHANGED/);
+    assert.match(page, /export default function CustomPage/);
+  });
+
+  it("previews the latest Custom style on Capture and Timeline instead of baking files", () => {
+    const processImage = readFileSync(
+      path.join(repoRoot, "src/process-image.ts"),
+      "utf8"
+    );
+    const capture = readFileSync(
+      path.join(repoRoot, "src/capture.ts"),
+      "utf8"
+    );
+    const captureStep = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/CaptureStep.tsx"),
+      "utf8"
+    );
+    const comments = readFileSync(
+      path.join(repoRoot, "renderer/features/capture/CaptureComments.tsx"),
+      "utf8"
+    );
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    const workflow = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/WorkflowWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(processImage, /export async function applyCaptureStyle/);
+    assert.match(processImage, /function imageSize/);
+    assert.match(processImage, /overlayCanvasPx/);
+    assert.doesNotMatch(processImage, /16 \/ 9/);
+    assert.match(processImage, /width: imageSize\(canvasWidth\)/);
+    assert.match(processImage, /fit: "inside"/);
+    assert.doesNotMatch(
+      processImage.slice(
+        processImage.indexOf("export async function processImage"),
+        processImage.indexOf("export async function applyCaptureStyle")
+      ),
+      /dest-in/
+    );
+    assert.doesNotMatch(capture, /input\.style/);
+    assert.match(captureStep, /CaptureStyleImage/);
+    assert.match(comments, /CaptureStyleImage/);
+    assert.match(player, /commentCaptureCardStyle\(captureStyle\)/);
+    assert.doesNotMatch(player, /CANVAS_CSS_PX_SCALE/);
+    assert.match(player, /previewStageBoxStyle/);
+    assert.match(workflow, /useCommentCaptureStyle\(visible\)/);
+    const html = compileTimelineProject(createSpikeTimelineProject(), {
+      captureStyle: {
+        radius: 8,
+        border: 2,
+        borderColor: "#112233",
+        shadow: 9,
+        shadowColor: "#000000"
+      }
+    });
+    assert.match(html, /id="comment"[^>]*border-radius:14.22px/);
+    assert.doesNotMatch(html, /id="meme-b"[^>]*border-radius:14.22px/);
+  });
+});
+
+describe("topic title style", () => {
+  it("clamps radius, colors, font and keeps the default card look", () => {
+    assert.deepEqual(
+      clampTopicTitleStyle(undefined),
+      DEFAULT_TOPIC_TITLE_STYLE
+    );
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.radius, 24);
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.padding, 24);
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.fontSize, 24);
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.color, "#ffffff");
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.background, "#000000");
+    assert.deepEqual(
+      clampTopicTitleStyle({
+        background: "#fff",
+        border: 40,
+        borderColor: "red",
+        radius: -2,
+        padding: 200,
+        fontFamily: "Comic Sans",
+        fontSize: 0,
+        color: "#AbC"
+      }),
+      {
+        background: "#ffffff",
+        border: 24,
+        borderColor: "#000000",
+        radius: 0,
+        padding: 80,
+        fontFamily: "Roboto, Arial, sans-serif",
+        fontSize: 1,
+        color: "#aabbcc"
+      }
+    );
+    assert.deepEqual(
+      topicTitleCardStyle(DEFAULT_TOPIC_TITLE_STYLE),
+      {
+        backgroundColor: "#000000",
+        borderRadius: "42.67px",
+        border: "none",
+        color: "#ffffff",
+        fontFamily: "Roboto, Arial, sans-serif",
+        fontSize: "42.67px",
+        fontWeight: 700,
+        textAlign: "center",
+        boxSizing: "border-box",
+        padding: "42.67px",
+        lineHeight: 1.2,
+        whiteSpace: "pre-wrap"
+      }
+    );
+    assert.match(
+      topicTitleCssText(DEFAULT_TOPIC_TITLE_STYLE),
+      /font-size:42.67px/
+    );
+    assert.match(
+      topicTitleCssText(DEFAULT_TOPIC_TITLE_STYLE),
+      /background:#000000/
+    );
+  });
+
+  it("renders Topic Title controls and live preview", () => {
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/CustomWorkspace.tsx"),
+      "utf8"
+    );
+    const tabs = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/custom-tabs.ts"),
+      "utf8"
+    );
+    assert.match(tabs, /Topic Title/);
+    assert.match(workspace, /TOPIC_TITLE_PREVIEW_TEXT/);
+    assert.equal(
+      TOPIC_TITLE_PREVIEW_TEXT,
+      "Đây là title topic của bạn"
+    );
+    assert.match(workspace, /saveSettings/);
+    assert.match(workspace, /topicTitle: next/);
+    assert.match(workspace, /setSaved\(next\)/);
+    assert.doesNotMatch(workspace, /result\.settings\.topicTitle/);
+    assert.match(workspace, /TOPIC_TITLE_STYLE_CHANGED/);
+    assert.match(workspace, /TOPIC_TITLE_FONTS/);
+    assert.match(workspace, /title-padding/);
+    assert.match(workspace, /PREVIEW_CHECKERBOARD/);
+    assert.match(workspace, /previewStageBoxStyle/);
+    assert.match(workspace, /previewStageScale/);
+    assert.match(workspace, /topicTitleCardStyle\(style\)/);
+    assert.doesNotMatch(workspace, /CANVAS_CSS_PX_SCALE/);
+    assert.match(workspace, /TOPIC_TITLE_WIDTH_FRACTION/);
+    assert.match(workspace, /TOPIC_TITLE_TRANSFORM_Y/);
+  });
+
+  it("compiles title-card as live HTML CSS and leaves comment images alone", () => {
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    const workflow = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/WorkflowWorkspace.tsx"),
+      "utf8"
+    );
+    const compile = readFileSync(
+      path.join(repoRoot, "src/hyperframes/compile.ts"),
+      "utf8"
+    );
+    const exporter = readFileSync(
+      path.join(repoRoot, "src/hyperframes/export.ts"),
+      "utf8"
+    );
+    assert.match(player, /topicTitleCardStyle\(titleStyle\)/);
+    assert.doesNotMatch(player, /CANVAS_CSS_PX_SCALE/);
+    assert.match(player, /previewStageBoxStyle/);
+    assert.match(player, /clip\.trackId === "title-card"/);
+    assert.match(workflow, /useTopicTitleStyle\(visible\)/);
+    assert.match(compile, /topicTitleCssText/);
+    assert.match(exporter, /titleStyle/);
+    const project = createSpikeTimelineProject();
+    project.clips.push({
+      id: "title-card",
+      trackId: "title-card",
+      start: 0,
+      duration: 2,
+      trimIn: 0,
+      sourceDuration: 2,
+      file: "processed/topic-title-card.png",
+      fadeIn: 0,
+      fadeOut: 0,
+      volume: 1,
+      locked: false,
+      label: "Hello title",
+      kind: "title"
+    });
+    const html = compileTimelineProject(project, {
+      titleStyle: {
+        background: "#123456",
+        border: 4,
+        borderColor: "#abcdef",
+        radius: 16,
+        padding: 12,
+        fontFamily: "Arial, sans-serif",
+        fontSize: 40,
+        color: "#fedcba"
+      }
+    });
+    assert.match(html, /<div id="title-card"/);
+    assert.match(html, /id="title-card"[^>]*font-size:71.11px/);
+    assert.match(html, /id="title-card"[^>]*background:#123456/);
+    assert.match(html, /id="title-card"[^>]*padding:21.33px/);
+    assert.match(html, /id="title-card"[^>]*border:7.11px solid #abcdef/);
+    assert.match(html, /Hello title/);
+    assert.doesNotMatch(html, /id="comment"[^>]*font-size:40px/);
+    assert.doesNotMatch(html, /id="comment"[^>]*background:#123456/);
+    assert.doesNotMatch(html, /id="meme-b"[^>]*font-size:40px/);
+  });
+
+  it("lets title-card move on preview and persist x/y", () => {
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    assert.equal(
+      canMoveClipOnPreview({ trackId: "title-card", kind: "title" }),
+      true
+    );
+    assert.match(player, /TOPIC_TITLE_TRANSFORM_Y/);
+    const project = createSpikeTimelineProject();
+    project.clips.push({
+      id: "title-card",
+      trackId: "title-card",
+      start: 0,
+      duration: 2,
+      trimIn: 0,
+      sourceDuration: 2,
+      file: "processed/topic-title-card.png",
+      fadeIn: 0,
+      fadeOut: 0,
+      volume: 1,
+      locked: false,
+      label: "Title",
+      kind: "title",
+      x: 0,
+      y: TOPIC_TITLE_TRANSFORM_Y
+    });
+    const moved = setClipPosition(project, "title-card", 0.15, -0.3);
+    const clip = moved.clips.find((item) => item.id === "title-card");
+    assert.equal(clip?.x, 0.15);
+    assert.equal(clip?.y, -0.3);
+  });
+
+  it("slides title up the same full distance as meme overlays", () => {
+    const titleRest = 40;
+    const memeRest = 50;
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: titleRest, progress: 0 }) -
+        titleRest,
+      100
+    );
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: memeRest, progress: 0 }) -
+        memeRest,
+      100
+    );
+    assert.equal(
+      clipFlyUpTopPercent({ restTopPercent: titleRest, progress: 1 }),
+      titleRest
+    );
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    const exporter = readFileSync(
+      path.join(repoRoot, "src/export/video-exporter.ts"),
+      "utf8"
+    );
+    assert.doesNotMatch(player, /mode: \"title\"/);
+    assert.doesNotMatch(
+      exporter,
+      /canvasHeight - layer.height \/ 2/
+    );
+  });
+
+  it("scales docked and fullscreen from the same 1080 canvas and copies editor x/y into ffmpeg", () => {
+    assert.equal(previewStageScale(270), 270 / 1080);
+    assert.equal(previewStageScale(1080), 1);
+    assert.deepEqual(previewStageBoxStyle(0.25).width, 1080);
+    assert.deepEqual(previewStageBoxStyle(0.25).height, 1920);
+    assert.equal(OVERLAY_REFERENCE_WIDTH, 607.5);
+    assert.equal(OVERLAY_CANVAS_PX_SCALE, 16 / 9);
+    assert.equal(overlayCanvasPx(4), 4 * (16 / 9));
+    assert.equal(topicTitleDisplayScale(270), 0.25);
+    assert.equal(topicTitleDisplayScale(1080), 1);
+    assert.equal(topicTitleExportScale(1080), 16 / 9);
+    assert.equal(topicTitleExportScale(607.5), 16 / 9);
+    const titleCard = readFileSync(
+      path.join(repoRoot, "src/capcut/compile/title-card.ts"),
+      "utf8"
+    );
+    assert.doesNotMatch(titleCard, /TOPIC_TITLE_MIN_HEIGHT/);
+    assert.doesNotMatch(titleCard, /TOPIC_TITLE_LINE_HEIGHT/);
+    assert.doesNotMatch(titleCard, /stroke-width/);
+    assert.doesNotMatch(titleCard, /density: 96/);
+    assert.match(titleCard, /resize\(cardWidth, cardHeight/);
+    assert.match(titleCard, /overlayCanvasPx/);
+    assert.doesNotMatch(titleCard, /16 \/ 9/);
+    assert.deepEqual(
+      wrapTopicTitle("một hai ba bốn năm sáu bảy tám", 8),
+      ["một hai", "ba bốn", "năm sáu", "bảy tám"]
+    );
+    const exporter = readFileSync(
+      path.join(repoRoot, "src/hyperframes/export.ts"),
+      "utf8"
+    );
+    assert.match(exporter, /titleStyle,\s*timelineProject/s);
+    const spec = applyTimelineProjectLayout(
+      {
+        name: "test",
+        width: 1080,
+        height: 1920,
+        fps: 30,
+        ratio: "9:16",
+        tracks: [
+          {
+            type: "video",
+            name: "topic-title-card",
+            items: [{
+              start: 0,
+              duration: 2,
+              path: "processed/topic-title-card.png",
+              ref: "topic-title-card",
+              scale: 1,
+              x: 0,
+              y: 0.2,
+              flyUp: true
+            }]
+          },
+          {
+            type: "video",
+            name: "overlays",
+            items: [{
+              start: 1.2,
+              duration: 1,
+              path: "C:/tmp/meme.png",
+              ref: "overlay-comment-0-0",
+              x: 0,
+              y: 0,
+              scale: 0.7
+            }]
+          }
+        ]
+      },
+      {
+        version: 1,
+        canvas: { width: 1080, height: 1920, fps: 30 },
+        totalDuration: 4,
+        settings: DEFAULT_AUTO_FORMAT,
+        clips: [
+          {
+            id: "title-card",
+            trackId: "title-card",
+            start: 0,
+            duration: 2,
+            trimIn: 0,
+            sourceDuration: 2,
+            file: "processed/topic-title-card.png",
+            fadeIn: 0,
+            fadeOut: 0,
+            volume: 1,
+            locked: false,
+            label: "Title",
+            kind: "title",
+            x: 0.12,
+            y: -0.4,
+            scale: 0.5,
+            animation: "slide-up",
+            animationDuration: 0.4
+          },
+          {
+            id: "meme-0",
+            trackId: "meme",
+            start: 1.2,
+            duration: 1,
+            trimIn: 0,
+            sourceDuration: 1,
+            file: "assets/meme.png",
+            fadeIn: 0,
+            fadeOut: 0,
+            volume: 1,
+            locked: false,
+            label: "Meme",
+            kind: "image",
+            commentIndex: 0,
+            x: -0.2,
+            y: 0.35,
+            scale: 0.55,
+            animation: "slide-up",
+            animationDuration: 0.5
+          }
+        ]
+      }
+    );
+    const title = spec.tracks[0]?.items[0];
+    const meme = spec.tracks[1]?.items[0];
+    assert.equal(title?.x, 0.12);
+    assert.equal(title?.y, -0.4);
+    assert.equal(title?.scale, 0.625);
+    assert.equal(title?.flyUp, true);
+    assert.equal(title?.animationDuration, 0.4);
+    assert.equal(meme?.x, -0.2);
+    assert.equal(meme?.y, 0.35);
+    assert.equal(meme?.scale, 0.55);
+    assert.equal(meme?.flyUp, true);
+    assert.equal(meme?.animationDuration, 0.5);
+  });
+
+  it("paints form px as CSS px at fullscreen while sharing the 1080 canvas", () => {
+    const dockedWidth = 270;
+    const fullscreenWidth = previewFullscreenFrameWidth(1920, 1080);
+    const dockedBox = previewStageBoxStyle(previewStageScale(dockedWidth));
+    const fullscreenBox = previewStageBoxStyle(
+      previewStageScale(fullscreenWidth)
+    );
+    const nativeBox = previewStageBoxStyle(previewStageScale(1080));
+
+    assert.equal(OVERLAY_REFERENCE_WIDTH, 607.5);
+    assert.equal(OVERLAY_CANVAS_PX_SCALE, 16 / 9);
+    assert.equal(overlayCanvasPx(4), 4 * (16 / 9));
+    assert.equal(overlayCanvasPx(24), 24 * (16 / 9));
+    assert.equal(topicTitleExportScale(1080), 16 / 9);
+    assert.equal(topicTitleExportScale(fullscreenWidth), 16 / 9);
+    assert.equal(
+      overlayCanvasPx(4) * (fullscreenWidth / 1080),
+      4
+    );
+    assert.equal(
+      topicTitleDisplayScale(dockedWidth),
+      previewStageScale(dockedWidth)
+    );
+    assert.equal(
+      topicTitleDisplayScale(fullscreenWidth),
+      previewStageScale(fullscreenWidth)
+    );
+    assert.equal(commentCaptureDisplayScale(dockedWidth), dockedWidth / 1080);
+    assert.equal(dockedBox.width, 1080);
+    assert.equal(dockedBox.height, 1920);
+    assert.equal(fullscreenBox.width, 1080);
+    assert.equal(fullscreenBox.height, 1920);
+    assert.equal(nativeBox.width, 1080);
+    assert.equal(nativeBox.transform, "scale(1)");
+    assert.equal(dockedBox.transform, `scale(${dockedWidth / 1080})`);
+    assert.equal(
+      fullscreenBox.transform,
+      `scale(${fullscreenWidth / 1080})`
+    );
+    assert.notEqual(dockedBox.transform, fullscreenBox.transform);
+
+    const titleStyle = {
+      background: "#123456",
+      border: 4,
+      borderColor: "#abcdef",
+      radius: 16,
+      padding: 12,
+      fontFamily: "Arial, sans-serif",
+      fontSize: 40,
+      color: "#fedcba"
+    };
+    const css = topicTitleCardStyle(titleStyle);
+    const metrics = topicTitleCardMetrics("Hello title", titleStyle);
+    assert.equal(css.fontSize, "71.11px");
+    assert.equal(css.padding, "21.33px");
+    assert.equal(css.border, "7.11px solid #abcdef");
+    assert.equal(css.borderRadius, "28.44px");
+    assert.equal(metrics.fontSize, overlayCanvasPx(40));
+    assert.equal(metrics.padding, overlayCanvasPx(12));
+    assert.equal(metrics.border, overlayCanvasPx(4));
+    assert.equal(metrics.radius, overlayCanvasPx(16));
+    assert.equal(metrics.cardWidth, 864);
+    assert.equal(
+      css.fontSize,
+      `${Math.round(metrics.fontSize * 100) / 100}px`
+    );
+    assert.equal(
+      css.padding,
+      `${Math.round(metrics.padding * 100) / 100}px`
+    );
+
+    const captureCss = commentCaptureCardStyle({
+      radius: 8,
+      border: 4,
+      borderColor: "#112233",
+      shadow: 9,
+      shadowColor: "#000000"
+    });
+    assert.equal(captureCss.borderRadius, "14.22px");
+    assert.equal(captureCss.border, "7.11px solid #112233");
+    assert.equal(captureCss.boxShadow, "0 5.33px 16px #000000");
+
+    const project = createSpikeTimelineProject();
+    project.clips.push({
+      id: "title-card",
+      trackId: "title-card",
+      start: 0,
+      duration: 2,
+      trimIn: 0,
+      sourceDuration: 2,
+      file: "processed/topic-title-card.png",
+      fadeIn: 0,
+      fadeOut: 0,
+      volume: 1,
+      locked: false,
+      label: "Hello title",
+      kind: "title"
+    });
+    const html = compileTimelineProject(project, {
+      captureStyle: {
+        radius: 8,
+        border: 2,
+        borderColor: "#112233",
+        shadow: 9,
+        shadowColor: "#000000"
+      },
+      titleStyle
+    });
+    assert.match(html, /id="title-card"[^>]*font-size:71.11px/);
+    assert.match(html, /id="title-card"[^>]*padding:21.33px/);
+    assert.match(html, /id="title-card"[^>]*border:7.11px solid #abcdef/);
+    assert.match(html, /id="comment"[^>]*border-radius:14.22px/);
+    assert.match(html, /id="comment"[^>]*border:3.56px solid #112233/);
+
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/CustomWorkspace.tsx"),
+      "utf8"
+    );
+    const compile = readFileSync(
+      path.join(repoRoot, "src/hyperframes/compile.ts"),
+      "utf8"
+    );
+    const previewCompile = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/compile-hyperframes.ts"),
+      "utf8"
+    );
+    const processImage = readFileSync(
+      path.join(repoRoot, "src/process-image.ts"),
+      "utf8"
+    );
+    const titleCard = readFileSync(
+      path.join(repoRoot, "src/capcut/compile/title-card.ts"),
+      "utf8"
+    );
+    const timeline = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/preview-timeline.ts"),
+      "utf8"
+    );
+    assert.match(player, /previewStageBoxStyle/);
+    assert.match(player, /previewStageScale/);
+    assert.match(player, /topicTitleCardStyle\(titleStyle\)/);
+    assert.match(player, /commentCaptureCardStyle\(captureStyle\)/);
+    assert.match(workspace, /topicTitleCardStyle\(style\)/);
+    assert.match(workspace, /commentCaptureCardStyle\(style\)/);
+    assert.match(workspace, /previewStageBoxStyle\(displayScale\)/);
+    assert.match(workspace, /COMMENT_PREVIEW_WIDTH_FRACTION/);
+    const captureImage = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/CaptureStyleImage.tsx"),
+      "utf8"
+    );
+    assert.match(captureImage, /commentCaptureCardStyle\(captureStyle, scale\)/);
+    const captureStyleSource = readFileSync(
+      path.join(repoRoot, "src/capture-style.ts"),
+      "utf8"
+    );
+    assert.match(captureStyleSource, /overlayCanvasPx/);
+    assert.match(captureStyleSource, /COMMENT_OVERLAY_PX_SCALE = 16 \/ 9/);
+    assert.doesNotMatch(captureStyleSource, /topic-title-style/);
+    assert.match(compile, /topicTitleCssText\(titleStyle \?\? DEFAULT_TOPIC_TITLE_STYLE\)/);
+    assert.match(compile, /commentCaptureCssText\(captureStyle\)/);
+    assert.match(previewCompile, /topicTitleCssText\(titleStyle \?\? DEFAULT_TOPIC_TITLE_STYLE\)/);
+    assert.match(processImage, /overlayCanvasPx\(value\)/);
+    assert.match(titleCard, /overlayCanvasPx\(style\.fontSize\)/);
+    assert.match(titleCard, /resize\(cardWidth, cardHeight/);
+    assert.doesNotMatch(titleCard, /density: 96/);
+    assert.doesNotMatch(player, /CANVAS_CSS_PX_SCALE/);
+    assert.doesNotMatch(workspace, /CANVAS_CSS_PX_SCALE/);
+    assert.doesNotMatch(compile, /CANVAS_CSS_PX_SCALE/);
+    assert.doesNotMatch(previewCompile, /CANVAS_CSS_PX_SCALE/);
+    assert.doesNotMatch(timeline, /CANVAS_CSS_PX_SCALE/);
+    assert.doesNotMatch(processImage, /16 \/ 9/);
   });
 });
 
@@ -1086,6 +2006,8 @@ describe("timeline tracks", () => {
     const project = videoTimelineToProject(source);
     const title = project.clips.find((clip) => clip.trackId === "title-card");
     assert.equal(title?.file, "processed/topic-title-card.png");
+    assert.equal(title?.x, 0);
+    assert.equal(title?.y, TOPIC_TITLE_TRANSFORM_Y);
     assert.equal(
       project.clips.some((clip) => clip.id === "topic-open-sfx"),
       false
@@ -1122,6 +2044,23 @@ describe("timeline preview chrome", () => {
     assert.doesNotMatch(previewFrameClass("docked"), /38vh/);
     assert.match(previewHostClass("overlay"), /fixed inset-0/);
     assert.match(previewFrameClass("native"), /100dvh/);
+    assert.equal(previewFullscreenFrameWidth(1920, 1080), 607.5);
+    assert.equal(
+      previewCaptureStyleScale("native", 607.5, 1920, 1080),
+      1
+    );
+    assert.equal(
+      previewCaptureStyleScale("docked", 270, 1920, 1080),
+      270 / 607.5
+    );
+    assert.equal(
+      previewStageBoxStyle(previewStageScale(270)).transform,
+      `scale(${270 / 1080})`
+    );
+    assert.equal(
+      previewStageBoxStyle(previewStageScale(607.5)).width,
+      previewStageBoxStyle(previewStageScale(270)).width
+    );
   });
 
   it("detects whether the preview host owns fullscreen", () => {
@@ -1374,6 +2313,133 @@ describe("reply parent from indent", () => {
   });
 });
 
+describe("screenshot clip", () => {
+  it("crops extra pixels from the top and bottom of a card", () => {
+    assert.deepEqual(
+      screenshotClipRect(
+        { x: 10.4, y: 20.2, width: 100.8, height: 80.9 },
+        8,
+        12
+      ),
+      { x: 10, y: 28, width: 101, height: 61 }
+    );
+  });
+
+  it("trims Threads card padding above the avatar", () => {
+    const source = readFileSync(
+      path.join(repoRoot, "src/screenshot.ts"),
+      "utf8"
+    );
+    assert.match(source, /contentInsetTopPx/);
+    assert.match(source, /TOP_CROP_KEEP_PX = 8/);
+    assert.match(source, /cropTopPx/);
+  });
+
+  it("does not use a viewport clip when the topic card is taller than the screen", () => {
+    const clip = screenshotClipRect(
+      { x: 0, y: 70, width: 390, height: 1200 },
+      8,
+      0
+    );
+    assert.equal(
+      screenshotClipFitsViewport({ width: 390, height: 844 }, clip),
+      false
+    );
+    assert.equal(
+      screenshotClipFitsViewport({ width: 1440, height: 1200 }, {
+        x: 10,
+        y: 20,
+        width: 500,
+        height: 400
+      }),
+      true
+    );
+    assert.deepEqual(
+      screenshotExtractRect(
+        { width: 1170, height: 3600 },
+        { width: 390, height: 1200 },
+        8,
+        0
+      ),
+      { left: 0, top: 24, width: 1170, height: 3576 }
+    );
+    const capture = readFileSync(
+      path.join(repoRoot, "src/capture.ts"),
+      "utf8"
+    );
+    const screenshot = readFileSync(
+      path.join(repoRoot, "src/screenshot.ts"),
+      "utf8"
+    );
+    assert.doesNotMatch(capture, /actionBarCropPx/);
+    assert.doesNotMatch(capture, /DESKTOP_TOPIC_CROP_PX/);
+    assert.doesNotMatch(capture, /topicPath, 124/);
+    assert.match(screenshot, /resolveCaptureLocator/);
+    assert.match(screenshot, /withPageReplyComposerHidden/);
+    assert.match(screenshot, /stitchOverflow = false/);
+  });
+
+  it("hides a fixed bottom reply composer so it cannot cover comments", () => {
+    assert.equal(
+      isBottomChrome(
+        { width: 390, height: 120, bottom: 844 },
+        { width: 390, height: 844 }
+      ),
+      true
+    );
+    assert.equal(
+      isBottomChrome(
+        { width: 390, height: 56, bottom: 56 },
+        { width: 390, height: 844 }
+      ),
+      false
+    );
+    assert.equal(
+      composerOverlayRoot(
+        "textbox",
+        ["inner", "bar", "page"],
+        (node) => node === "bar"
+      ),
+      "bar"
+    );
+    const screenshot = readFileSync(
+      path.join(repoRoot, "src/screenshot.ts"),
+      "utf8"
+    );
+    assert.match(screenshot, /withPageReplyComposerHidden\(page/);
+  });
+
+  it("picks the inner post card instead of the wrap that has the reply composer", () => {
+    assert.equal(
+      captureCardRoot(
+        "outer",
+        "composer",
+        ["post", "quote"],
+        (parent, child) => parent === "outer"
+      ),
+      "post"
+    );
+    assert.equal(
+      captureCardRoot(
+        "comment",
+        undefined,
+        [],
+        () => false
+      ),
+      "comment"
+    );
+    assert.equal(
+      captureCardRoot(
+        "outer",
+        "composer",
+        ["wrap"],
+        (parent) => parent === "wrap"
+      ),
+      "outer"
+    );
+  });
+});
+
 describe("pressable card snapshot parse", () => {
   const snapshot = (
     overrides: Partial<PressableCardSnapshot> = {}
@@ -1454,7 +2520,7 @@ describe("export engine default", () => {
 });
 
 describe("video visual filters", () => {
-  it("skips lanczos and alpha for opaque pre-scaled stills", () => {
+  it("skips lanczos for pre-scaled stills and keeps PNG alpha", () => {
     const filters = visualFilters(
       {
         item: { start: 0, duration: 2, opacity: 1 },
@@ -1465,9 +2531,8 @@ describe("video visual filters", () => {
       30
     );
     assert.equal(filters.includes("lanczos"), false);
-    assert.equal(filters.includes("yuva420p"), false);
-    assert.ok(filters.includes("yuv420p"));
-    assert.equal(overlayPixelFormat(1), "yuv420p");
+    assert.ok(filters.includes("yuva420p"));
+    assert.equal(overlayPixelFormat(1), "yuva420p");
   });
 
   it("keeps alpha when opacity is below 1", () => {
@@ -2420,6 +3485,12 @@ describe("clip preview position", () => {
     assert.equal(canMoveClipOnPreview({ trackId: "meme", kind: "image" }), true);
     assert.equal(canMoveClipOnPreview({ trackId: "voice", kind: "audio" }), false);
     assert.equal(setClipPosition(meme, "meme-b", 0.25, -0.4), meme);
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(workspace, /canMoveClipOnPreview\(clip\)/);
+    assert.match(workspace, /TOPIC_TITLE_TRANSFORM_Y/);
   });
 
   it("marks a punch combo custom after the overlay is moved", () => {

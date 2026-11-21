@@ -64,10 +64,11 @@ import {
 import { addBeepClip, createBeepWav } from "../timeline/beep.js";
 import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
 import { ENABLE_CAPCUT } from "../hyperframes/engine.js";
-import type {
-  AudioFailureTarget,
-  ThreadData,
-  VideoTimeline
+import {
+  parseCaptureViewport,
+  type AudioFailureTarget,
+  type ThreadData,
+  type VideoTimeline
 } from "../types.js";
 import {
   entriesToTable,
@@ -172,7 +173,8 @@ export function registerIpc(
     async (
       _event,
       url: string,
-      commentLimit?: number
+      commentLimit?: number,
+      viewport?: unknown
     ) => {
       if (!url.trim()) {
         throw new Error(
@@ -205,7 +207,11 @@ export function registerIpc(
       }
 
       const result =
-        await captureThread(url, commentLimit);
+        await captureThread(
+          url,
+          commentLimit,
+          parseCaptureViewport(viewport)
+        );
       const processedDirectory =
         path.join(
           result.projectDir,
@@ -354,6 +360,8 @@ export function registerIpc(
         );
       }
 
+      const project =
+        await store.getProject(payload.projectId);
       return captureComment({
         projectDir: directory,
         url: payload.url,
@@ -361,6 +369,10 @@ export function registerIpc(
         existing: payload.existing,
         abbreviations: entriesToTable(
           await loadAbbreviationEntries()
+        ),
+        viewport: parseCaptureViewport(
+          project?.content?.viewport ??
+            project?.thread?.viewport
         )
       });
     }
@@ -725,7 +737,8 @@ export function registerIpc(
         }
         const generated = await renderTopicTitleCard(
           projectDirectory,
-          timeline.topicIntro.title
+          timeline.topicIntro.title,
+          (await loadSettings()).topicTitle
         );
         buffer = await fs.readFile(generated);
       }
@@ -1193,11 +1206,14 @@ export function registerIpc(
       if (!timelineProject) {
         throw new Error("Chưa có timeline để xuất video.");
       }
+      const settings = await loadSettings();
       return exportWithHyperframes(
         directory,
         timelineProject,
         outputPath,
-        sendProgress
+        sendProgress,
+        settings.commentCapture,
+        settings.topicTitle
       );
     }
   );

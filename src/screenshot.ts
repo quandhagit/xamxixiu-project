@@ -1,4 +1,5 @@
 ﻿import type { Locator, Page } from "playwright";
+import sharp from "sharp";
 
 import { PRESSABLE_SELECTOR } from "./extract.js";
 
@@ -150,6 +151,347 @@ const screenshotOptions = {
   caret: "hide" as const
 };
 
+const TOP_CROP_KEEP_PX = 8;
+const TOP_CROP_MAX_PX = 20;
+const TOP_CROP_MIN_CONTENT_PX = 16;
+const COMPOSER_SELECTOR =
+  '[contenteditable="true"][role="textbox"]';
+const INNER_PRESSABLE_SELECTOR =
+  '[data-pressable-container="true"]';
+
+/**
+ * The focused post wrap also contains the logged-in reply composer.
+ * Prefer the inner pressable card that is not that composer.
+ */
+export function captureCardRoot<T>(
+  root: T,
+  composer: T | undefined,
+  inners: T[],
+  contains: (parent: T, child: T) => boolean
+): T {
+  if (composer === undefined) {
+    return root;
+  }
+
+  return (
+    inners.find((inner) => !contains(inner, composer)) ??
+    root
+  );
+}
+
+async function resolveCaptureLocator(
+  container: Locator
+): Promise<Locator> {
+  const innerIndex = await container.evaluate(
+    (
+      element,
+      selectors: { composer: string; pressable: string }
+    ) => {
+      const composer = element.querySelector(
+        selectors.composer
+      );
+
+      if (!composer) {
+        return -1;
+      }
+
+      const inners = Array.from(
+        element.querySelectorAll(selectors.pressable)
+      );
+
+      return inners.findIndex(
+        (inner) => !inner.contains(composer)
+      );
+    },
+    {
+      composer: COMPOSER_SELECTOR,
+      pressable: INNER_PRESSABLE_SELECTOR
+    }
+  );
+
+  if (innerIndex < 0) {
+    return container;
+  }
+
+  return container
+    .locator(INNER_PRESSABLE_SELECTOR)
+    .nth(innerIndex);
+}
+
+export function isBottomChrome(
+  rect: { width: number; height: number; bottom: number },
+  viewport: { width: number; height: number }
+): boolean {
+  return (
+    rect.height > 0 &&
+    rect.height < viewport.height / 3 &&
+    rect.width > viewport.width * 0.3 &&
+    rect.bottom >= viewport.height - 8
+  );
+}
+
+export function composerOverlayRoot<T>(
+  composer: T,
+  ancestors: T[],
+  isOverlay: (node: T) => boolean
+): T {
+  let overlay = composer;
+
+  for (const ancestor of ancestors) {
+    if (isOverlay(ancestor)) {
+      overlay = ancestor;
+    }
+  }
+
+  return overlay;
+}
+
+/**
+ * Hide the logged-in reply composer for the whole page, including a
+ * fixed/sticky bottom bar that paints over comments we are capturing.
+ */
+async function withPageReplyComposerHidden<T>(
+  page: Page,
+  work: () => Promise<T>
+): Promise<T> {
+  await page
+    .evaluate((selector) => {
+      const hide = (node: Element): void => {
+        if (!(node instanceof HTMLElement)) {
+          return;
+        }
+
+        if (node.dataset.xamxixiuHide !== undefined) {
+          return;
+        }
+
+        node.dataset.xamxixiuHide = node.style.display;
+        node.style.display = "none";
+      };
+
+      const overlayRoot = (composer: HTMLElement): HTMLElement => {
+        let overlay = composer;
+        let node = composer.parentElement;
+
+        while (node && node !== document.body) {
+          const style = getComputedStyle(node);
+
+          if (
+            style.position === "fixed" ||
+            style.position === "sticky"
+          ) {
+            overlay = node;
+          }
+
+          node = node.parentElement;
+        }
+
+        return overlay;
+      };
+
+      for (const composer of Array.from(
+        document.querySelectorAll(selector)
+      )) {
+        if (composer instanceof HTMLElement) {
+          hide(overlayRoot(composer));
+        }
+      }
+
+      const viewport = {
+        width: window.innerWidth,
+        height: window.innerHeight
+      };
+
+      for (const node of Array.from(
+        document.body.querySelectorAll<HTMLElement>("*")
+      )) {
+        const style = getComputedStyle(node);
+
+        if (
+          style.position !== "fixed" &&
+          style.position !== "sticky"
+        ) {
+          continue;
+        }
+
+        const rect = node.getBoundingClientRect();
+
+        if (
+          rect.height <= 0 ||
+          rect.height >= viewport.height / 3 ||
+          rect.width <= viewport.width * 0.3 ||
+          rect.bottom < viewport.height - 8
+        ) {
+          continue;
+        }
+
+        if (
+          node.matches(selector) ||
+          node.querySelector(selector)
+        ) {
+          hide(node);
+        }
+      }
+    }, COMPOSER_SELECTOR)
+    .catch(() => undefined);
+
+  try {
+    return await work();
+  } finally {
+    await page
+      .evaluate(() => {
+        for (const node of Array.from(
+          document.querySelectorAll("[data-xamxixiu-hide]")
+        )) {
+          if (!(node instanceof HTMLElement)) {
+            continue;
+          }
+
+          node.style.display = node.dataset.xamxixiuHide ?? "";
+          delete node.dataset.xamxixiuHide;
+        }
+      })
+      .catch(() => undefined);
+  }
+}
+
+export function screenshotClipRect(
+  box: { x: number; y: number; width: number; height: number },
+  cropTopPx = 0,
+  cropBottomPx = 0
+): { x: number; y: number; width: number; height: number } {
+  const cropTop = Math.max(0, cropTopPx);
+  const cropBottom = Math.max(0, cropBottomPx);
+  const x = Math.floor(box.x);
+  const y = Math.floor(box.y + cropTop);
+  const right = Math.floor(box.x + box.width);
+  const bottom = Math.floor(box.y + box.height - cropBottom);
+
+  return {
+    x,
+    y,
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y)
+  };
+}
+
+export function screenshotClipFitsViewport(
+  viewport: { width: number; height: number } | null,
+  clip: { x: number; y: number; width: number; height: number }
+): boolean {
+  if (!viewport) {
+    return false;
+  }
+
+  return (
+    clip.x >= 0 &&
+    clip.y >= 0 &&
+    clip.x + clip.width <= viewport.width &&
+    clip.y + clip.height <= viewport.height
+  );
+}
+
+/**
+ * Map CSS-pixel crops onto a device-pixel screenshot (e.g. iPhone 13 @3x).
+ */
+export function screenshotExtractRect(
+  image: { width: number; height: number },
+  cssSize: { width: number; height: number },
+  cropTopPx = 0,
+  cropBottomPx = 0
+): { left: number; top: number; width: number; height: number } {
+  const scaleY =
+    image.height / Math.max(1, cssSize.height);
+  const top = Math.max(
+    0,
+    Math.round(Math.max(0, cropTopPx) * scaleY)
+  );
+  const bottom = Math.max(
+    0,
+    Math.round(Math.max(0, cropBottomPx) * scaleY)
+  );
+  const extractTop = Math.min(top, Math.max(0, image.height - 1));
+
+  return {
+    left: 0,
+    top: extractTop,
+    width: Math.max(1, image.width),
+    height: Math.max(1, image.height - extractTop - bottom)
+  };
+}
+
+/**
+ * Threads cards include padding above the avatar/username. Measure that
+ * extra space so the screenshot can start just above the real content.
+ */
+async function contentInsetTopPx(
+  container: Locator
+): Promise<number> {
+  return container
+    .evaluate(
+      (element, options: {
+        keepPx: number;
+        maxPx: number;
+        minContentPx: number;
+      }) => {
+        const box = element.getBoundingClientRect();
+        let contentTop = Number.POSITIVE_INFINITY;
+
+        const consider = (rect: DOMRect): void => {
+          if (
+            rect.width < options.minContentPx ||
+            rect.height < options.minContentPx
+          ) {
+            return;
+          }
+
+          if (
+            rect.bottom <= box.top ||
+            rect.top >= box.bottom
+          ) {
+            return;
+          }
+
+          contentTop = Math.min(contentTop, rect.top);
+        };
+
+        for (const image of Array.from(
+          element.querySelectorAll("img")
+        )) {
+          consider(image.getBoundingClientRect());
+        }
+
+        for (const node of Array.from(
+          element.querySelectorAll("span, a, p, [dir='auto']")
+        )) {
+          if (!(node.textContent ?? "").trim()) {
+            continue;
+          }
+
+          consider(node.getBoundingClientRect());
+        }
+
+        if (!Number.isFinite(contentTop)) {
+          return 0;
+        }
+
+        return Math.min(
+          options.maxPx,
+          Math.max(
+            0,
+            Math.floor(contentTop - box.top - options.keepPx)
+          )
+        );
+      },
+      {
+        keepPx: TOP_CROP_KEEP_PX,
+        maxPx: TOP_CROP_MAX_PX,
+        minContentPx: TOP_CROP_MIN_CONTENT_PX
+      }
+    )
+    .catch(() => 0);
+}
+
 /**
  * @param resolveIndex Optional. Returns the container's *current* index
  *   (or undefined if it is gone). Threads virtualizes its list, so the
@@ -160,70 +502,74 @@ export async function screenshotContainer(
   page: Page,
   containerIndex: number,
   outputPath: string,
-  cropBottomPx = 0,
-  resolveIndex?: () => Promise<number | undefined>
+  resolveIndex?: () => Promise<number | undefined>,
+  stitchOverflow = false
 ): Promise<void> {
   const containers = page.locator(
     PRESSABLE_SELECTOR
   );
   const headerBottom = await stickyHeaderBottom(page);
 
-  let index = containerIndex;
-  let stable = false;
+  await withPageReplyComposerHidden(page, async () => {
+    let index = containerIndex;
+    let stable = false;
 
-  for (
-    let attempt = 0;
-    attempt < MAX_SCREENSHOT_ATTEMPTS && !stable;
-    attempt++
-  ) {
-    const count = await containers.count();
+    for (
+      let attempt = 0;
+      attempt < MAX_SCREENSHOT_ATTEMPTS && !stable;
+      attempt++
+    ) {
+      const count = await containers.count();
 
-    if (index < 0 || index >= count) {
-      throw new Error(
-        `Container index ${index} is out of range. ` +
-        `Found ${count} containers.`
-      );
+      if (index < 0 || index >= count) {
+        throw new Error(
+          `Container index ${index} is out of range. ` +
+          `Found ${count} containers.`
+        );
+      }
+
+      const container = containers.nth(index);
+
+      await container.scrollIntoViewIfNeeded();
+      await scrollBelowHeader(container, headerBottom);
+      await waitForContainerReady(container);
+
+      if (!resolveIndex) {
+        stable = true;
+        break;
+      }
+
+      const current = await resolveIndex();
+
+      if (current === undefined) {
+        throw new Error(
+          "Nội dung trang đã thay đổi trong lúc chụp, hãy thử lại."
+        );
+      }
+
+      stable = current === index;
+      index = current;
     }
 
-    const container = containers.nth(index);
-
-    await container.scrollIntoViewIfNeeded();
-    await scrollBelowHeader(container, headerBottom);
-    await waitForContainerReady(container);
-
-    if (!resolveIndex) {
-      stable = true;
-      break;
-    }
-
-    const current = await resolveIndex();
-
-    if (current === undefined) {
+    if (!stable) {
       throw new Error(
         "Nội dung trang đã thay đổi trong lúc chụp, hãy thử lại."
       );
     }
 
-    stable = current === index;
-    index = current;
-  }
+    const container = containers.nth(index);
+    const target = await resolveCaptureLocator(container);
+    const cropTopPx = await contentInsetTopPx(target);
 
-  if (!stable) {
-    throw new Error(
-      "Nội dung trang đã thay đổi trong lúc chụp, hãy thử lại."
-    );
-  }
+    if (cropTopPx <= 0) {
+      await target.screenshot({
+        path: outputPath,
+        ...screenshotOptions
+      });
+      return;
+    }
 
-  const container = containers.nth(index);
-
-  if (cropBottomPx <= 0) {
-    await container.screenshot({
-      path: outputPath,
-      ...screenshotOptions
-    });
-  } else {
-    const box =
-      await container.boundingBox();
+    const box = await target.boundingBox();
 
     if (!box) {
       throw new Error(
@@ -231,20 +577,48 @@ export async function screenshotContainer(
       );
     }
 
+    const clip = screenshotClipRect(box, cropTopPx);
+
+    if (
+      stitchOverflow &&
+      !screenshotClipFitsViewport(page.viewportSize(), clip)
+    ) {
+      const buffer = await target.screenshot({
+        ...screenshotOptions
+      });
+      const metadata = await sharp(buffer).metadata();
+
+      if (!metadata.width || !metadata.height) {
+        throw new Error(
+          `Could not measure screenshot for container ${index}`
+        );
+      }
+
+      await sharp(buffer)
+        .extract(
+          screenshotExtractRect(
+            {
+              width: metadata.width,
+              height: metadata.height
+            },
+            {
+              width: box.width,
+              height: box.height
+            },
+            cropTopPx
+          )
+        )
+        .png()
+        .toFile(outputPath);
+      return;
+    }
+
     await page.screenshot({
       path: outputPath,
       ...screenshotOptions,
-      clip: {
-        x: box.x,
-        y: box.y,
-        width: box.width,
-        height: Math.max(
-          1,
-          box.height - cropBottomPx
-        )
-      }
+      clip
     });
-  }
+  });
 
   console.log(`Saved: ${outputPath}`);
 }

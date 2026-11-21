@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   captureThread
 } from "./capture.js";
+import { DEFAULT_CAPTURE_VIEWPORT } from "./types.js";
 
 import {
   processProjectImages
@@ -30,7 +31,11 @@ console.log(
 
 // Step 1:
 // Threads → thread.json + raw screenshots
-const result = await captureThread(url);
+const result = await captureThread(
+  url,
+  undefined,
+  DEFAULT_CAPTURE_VIEWPORT
+);
 
 // Step 2:
 // raw → processed
