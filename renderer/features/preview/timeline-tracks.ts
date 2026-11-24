@@ -120,7 +120,9 @@ export function formatClipLabel(file?: string): string {
   return file.split(/[\\/]/).pop() ?? file;
 }
 
-function overlayTrackId(overlay: TimelineOverlay): TrackId | undefined {
+function overlayTrackId(
+  overlay: TimelineOverlay
+): "meme" | "video" | "sfx" | undefined {
   if (overlay.type === "sfx") {
     return "sfx";
   }
