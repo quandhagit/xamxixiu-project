@@ -35,21 +35,30 @@ import {
   findCombo,
   getBuiltinCombo
 } from "./meme-combo.js";
+import {
+  DEFAULT_MEME_DURATION,
+  sequenceMemeOverlays
+} from "./overlay-sequence.js";
+import {
+  applyMemeDefaultLayout,
+  DEFAULT_OVERLAY_STYLE_DEFAULTS,
+  type OverlayStyleDefaults
+} from "../meme-style.js";
+import { stackCommentPositions } from "./comment-stack.js";
 
 const CANVAS = {
   width: 1080,
   height: 1920,
   fps: 30
 } as const;
-const MIN_OVERLAY_DURATION = 1;
-const COMMENT_IMAGE_Y = CANVAS.height / 4;
-const COMMENT_STACK_PADDING = 50;
+const MIN_OVERLAY_DURATION = DEFAULT_MEME_DURATION;
 
 interface ProjectInputs {
   thread: ThreadData;
   analysis: ThreadAnalysis;
   assets: Asset[];
   reactions: MatchedReaction[];
+  overlayDefaults: OverlayStyleDefaults;
 }
 
 function projectPath(file: string): string {
@@ -122,7 +131,8 @@ function createScene(
   overlays: TimelineOverlay[],
   sceneDuration = audioDuration,
   imageStart = 0,
-  audioStart = 0
+  audioStart = 0,
+  overlayDefaults: OverlayStyleDefaults = DEFAULT_OVERLAY_STYLE_DEFAULTS
 ): TimelineScene {
   const overlayEnd = overlays.reduce(
     (latest, overlay) =>
@@ -149,9 +159,8 @@ function createScene(
     ),
     sceneDuration: finalSceneDuration,
     imageScale: 0.85,
-    imageY:
-      (CANVAS.height / 2 - COMMENT_IMAGE_Y) /
-      (CANVAS.height / 2),
+    imageX: overlayDefaults.commentX,
+    imageY: overlayDefaults.commentY,
     audioFile,
     audioStart,
     audioDuration,
@@ -212,26 +221,23 @@ async function combineCommentScenes(
   }
 
   const totalDuration = offset;
-  let previousCenterY = COMMENT_IMAGE_Y;
-  let previousHeight = 0;
+  const originX = blocks[0]?.imageX ?? DEFAULT_OVERLAY_STYLE_DEFAULTS.commentX;
+  const originY = blocks[0]?.imageY ?? DEFAULT_OVERLAY_STYLE_DEFAULTS.commentY;
+  const heights: number[] = [];
   for (const block of blocks) {
-    const height = await getCaptureHeight(block);
-    const centerY =
-      previousHeight === 0
-        ? COMMENT_IMAGE_Y
-        : previousCenterY +
-        previousHeight / 2 +
-        COMMENT_STACK_PADDING +
-        height / 2;
-    block.imageY =
-      (CANVAS.height / 2 - centerY) /
-      (CANVAS.height / 2);
+    heights.push(await getCaptureHeight(block));
+  }
+  const stacked = stackCommentPositions(heights, originX, originY);
+  for (const [index, block] of blocks.entries()) {
+    const position = stacked[index];
+    if (position) {
+      block.imageX = position.x;
+      block.imageY = position.y;
+    }
     block.imageDuration = Math.max(
       0,
       totalDuration - block.imageStart
     );
-    previousCenterY = centerY;
-    previousHeight = height;
   }
 
   const first = blocks[0];
@@ -335,93 +341,137 @@ function getDescendantIndexes(
   return result;
 }
 
+async function createMemeOverlay(
+  asset: Asset,
+  start: number,
+  options: {
+    duration: number;
+    animation: MatchedReaction["animation"];
+    comboId?: string;
+    comboLocked?: boolean;
+    applyCombo: boolean;
+    memeDefaults: OverlayStyleDefaults["meme"];
+  }
+): Promise<TimelineOverlay> {
+  const memeAbsolute = path.resolve(asset.file);
+  await assertFile(memeAbsolute, `Meme asset ${asset.id}`);
+  const isVideo = asset.mediaKind === "video";
+  const combo = isVideo || !options.applyCombo
+    ? getBuiltinCombo("none")
+    : (findCombo(options.comboId) ?? getBuiltinCombo("none"));
+  const memeDuration = isVideo
+    ? await readMediaDuration(memeAbsolute)
+    : Math.max(
+      combo.minDuration,
+      MIN_OVERLAY_DURATION,
+      options.duration
+    );
+  const baked = applyMemeDefaultLayout(
+    applyCombo(
+      { file: projectPath(asset.file) },
+      combo
+    ),
+    options.memeDefaults,
+    { keepComboFadeIn: combo.id !== "none" }
+  );
+  const overlay = createOverlay(
+    "meme",
+    baked.file ?? projectPath(asset.file),
+    memeDuration,
+    ((baked.animation === "shake"
+      ? "shake-1"
+      : baked.animation) as TimelineOverlay["animation"]) ??
+      options.animation,
+    start,
+    baked.fadeIn,
+    baked.animationDuration
+  );
+  overlay.scale = baked.scale;
+  overlay.x = baked.x;
+  overlay.y = baked.y;
+  overlay.comboId = baked.comboId;
+  overlay.sfxOffset = baked.sfxOffset;
+  overlay.comboLocked = options.comboLocked;
+  overlay.fadeIn = baked.fadeIn;
+  return overlay;
+}
+
+async function createSfxOverlay(
+  asset: Asset,
+  start: number
+): Promise<TimelineOverlay> {
+  const sfxAbsolute = path.resolve(asset.file);
+  await assertFile(sfxAbsolute, `SFX asset ${asset.id}`);
+  const sfxDuration = await readMediaDuration(sfxAbsolute);
+  return createOverlay(
+    "sfx",
+    projectPath(asset.file),
+    sfxDuration,
+    undefined,
+    start
+  );
+}
+
 async function createPostVoiceOverlays(
   reaction: Pick<
     MatchedReaction,
-    "meme" | "sfx" | "duration" | "animation" | "comboId" | "comboLocked"
+    | "meme"
+    | "extraMemes"
+    | "sfx"
+    | "extraSfx"
+    | "duration"
+    | "animation"
+    | "comboId"
+    | "comboLocked"
   > | undefined,
-  overlayStart: number
+  overlayStart: number,
+  memeDefaults: OverlayStyleDefaults["meme"] = DEFAULT_OVERLAY_STYLE_DEFAULTS.meme
 ): Promise<{ overlays: TimelineOverlay[]; extraDuration: number }> {
   const overlays: TimelineOverlay[] = [];
-  let extraDuration = 0;
   if (!reaction) {
-    return { overlays, extraDuration };
+    return { overlays, extraDuration: 0 };
   }
 
-  if (reaction.meme) {
-    const memeAbsolute = path.resolve(reaction.meme.file);
-    await assertFile(memeAbsolute, `Meme asset ${reaction.meme.id}`);
-    const isVideo = reaction.meme.mediaKind === "video";
-    const combo = isVideo
-      ? getBuiltinCombo("none")
-      : (findCombo(reaction.comboId) ?? getBuiltinCombo("none"));
-    const memeDuration = isVideo
-      ? await readMediaDuration(memeAbsolute)
-      : Math.max(
-        combo.minDuration,
-        MIN_OVERLAY_DURATION,
-        reaction.duration
-      );
-    const baked = applyCombo(
-      { file: projectPath(reaction.meme.file) },
-      combo
-    );
-    const memeOverlay = createOverlay(
-      "meme",
-      baked.file ?? projectPath(reaction.meme.file),
-      memeDuration,
-      ((baked.animation === "shake"
-        ? "shake-1"
-        : baked.animation) as TimelineOverlay["animation"]) ??
-        reaction.animation,
-      overlayStart,
-      baked.fadeIn,
-      baked.animationDuration
-    );
-    memeOverlay.scale = baked.scale;
-    memeOverlay.x = baked.x;
-    memeOverlay.y = baked.y;
-    memeOverlay.comboId = baked.comboId;
-    memeOverlay.sfxOffset = baked.sfxOffset;
-    memeOverlay.comboLocked = reaction.comboLocked;
-    overlays.push(memeOverlay);
-    extraDuration = Math.max(extraDuration, memeDuration);
-  }
-
-  if (reaction.sfx && reaction.meme?.mediaKind !== "video") {
-    const sfxAbsolute = path.resolve(reaction.sfx.file);
-    await assertFile(sfxAbsolute, `SFX asset ${reaction.sfx.id}`);
-    const sfxDuration = await readMediaDuration(sfxAbsolute);
-    const memeOverlay = overlays.find((overlay) => overlay.type === "meme");
-    const sfxStart = overlayStart + (memeOverlay?.sfxOffset ?? 0);
+  const memes = [
+    ...(reaction.meme ? [reaction.meme] : []),
+    ...(reaction.extraMemes ?? [])
+  ];
+  for (const [index, meme] of memes.entries()) {
     overlays.push(
-      createOverlay(
-        "sfx",
-        projectPath(reaction.sfx.file),
-        sfxDuration,
-        undefined,
-        sfxStart
-      )
+      await createMemeOverlay(meme, overlayStart, {
+        duration: index === 0 ? reaction.duration : MIN_OVERLAY_DURATION,
+        animation: reaction.animation,
+        comboId: reaction.comboId,
+        comboLocked: reaction.comboLocked,
+        applyCombo: index === 0,
+        memeDefaults
+      })
     );
-    extraDuration = Math.max(
-      extraDuration,
-      (memeOverlay?.sfxOffset ?? 0) + sfxDuration
-    );
-    if (memeOverlay) {
-      memeOverlay.duration = Math.max(
-        memeOverlay.duration,
-        (memeOverlay.sfxOffset ?? 0) + sfxDuration
-      );
-    }
   }
 
+  const sfxAssets = [
+    ...(reaction.sfx ? [reaction.sfx] : []),
+    ...(reaction.extraSfx ?? [])
+  ];
+  for (const sfx of sfxAssets) {
+    overlays.push(await createSfxOverlay(sfx, overlayStart));
+  }
+
+  sequenceMemeOverlays(overlays);
+
+  const extraDuration = overlays.reduce(
+    (latest, overlay) =>
+      Math.max(latest, overlay.start + overlay.duration - overlayStart),
+    0
+  );
   return { overlays, extraDuration };
 }
 
 async function createCommentScene(
   projectDir: string,
   commentIndex: number,
-  reaction: MatchedReaction | undefined
+  reaction: MatchedReaction | undefined,
+  overlayDefaults: OverlayStyleDefaults
 ): Promise<TimelineScene> {
   const imageAbsolute = path.join(
     projectDir,
@@ -446,7 +496,11 @@ async function createCommentScene(
   const audioDuration =
     await readMediaDuration(audioAbsolute);
   const { overlays, extraDuration: postVoiceDuration } =
-    await createPostVoiceOverlays(reaction, audioDuration);
+    await createPostVoiceOverlays(
+      reaction,
+      audioDuration,
+      overlayDefaults.meme
+    );
 
   return createScene(
     `comment-${commentIndex}`,
@@ -455,12 +509,16 @@ async function createCommentScene(
     timelineFile(audioAbsolute),
     audioDuration,
     overlays,
-    audioDuration + postVoiceDuration
+    audioDuration + postVoiceDuration,
+    0,
+    0,
+    overlayDefaults
   );
 }
 
 export async function buildTimeline(
-  projectDir: string
+  projectDir: string,
+  overlayDefaults: OverlayStyleDefaults = DEFAULT_OVERLAY_STYLE_DEFAULTS
 ): Promise<VideoTimeline> {
   const threadPath = path.join(
     projectDir,
@@ -505,7 +563,8 @@ export async function buildTimeline(
     assets: await scanAssets(),
     reactions: await readJson<MatchedReaction[]>(
       reactionsPath
-    )
+    ),
+    overlayDefaults
   };
 
   const topicImage = path.join(
@@ -621,28 +680,37 @@ export async function buildTimeline(
     }
   }
 
-  const topicPostMeme =
+  const topicPostMemes = [
     findAsset(inputs.assets, {
       id: inputs.analysis.topicPostMemeId,
       type: "meme"
-    });
-  const topicPostSfx =
-    topicPostMeme?.mediaKind === "video"
-      ? undefined
-      : findAsset(inputs.assets, {
-        id: inputs.analysis.topicPostSfxId,
-        type: "sfx"
-      });
+    }),
+    ...(inputs.analysis.topicPostExtraMemeIds ?? []).map((id) =>
+      findAsset(inputs.assets, { id, type: "meme" })
+    )
+  ].filter((asset): asset is Asset => Boolean(asset));
+  const topicPostSfxList = [
+    findAsset(inputs.assets, {
+      id: inputs.analysis.topicPostSfxId,
+      type: "sfx"
+    }),
+    ...(inputs.analysis.topicPostExtraSfxIds ?? []).map((id) =>
+      findAsset(inputs.assets, { id, type: "sfx" })
+    )
+  ].filter((asset): asset is Asset => Boolean(asset));
   const topicPostOverlays = await createPostVoiceOverlays(
-    topicPostMeme || topicPostSfx
+    topicPostMemes.length > 0 || topicPostSfxList.length > 0
       ? {
-        meme: topicPostMeme ?? null,
-        sfx: topicPostSfx ?? null,
+        meme: topicPostMemes[0] ?? null,
+        extraMemes: topicPostMemes.slice(1),
+        sfx: topicPostSfxList[0] ?? null,
+        extraSfx: topicPostSfxList.slice(1),
         animation: "none",
         duration: MIN_OVERLAY_DURATION
       }
       : undefined,
-    topicAudioStart + topicDuration
+    topicAudioStart + topicDuration,
+    inputs.overlayDefaults.meme
   );
   topicOverlays.push(...topicPostOverlays.overlays);
   if (hasTopicIntro) {
@@ -704,7 +772,8 @@ export async function buildTimeline(
         )
       ),
       topicCaptureStart,
-      topicAudioStart
+      topicAudioStart,
+      inputs.overlayDefaults
     )
   ];
 
@@ -721,7 +790,8 @@ export async function buildTimeline(
         await createCommentScene(
           projectDir,
           commentIndex,
-          reaction
+          reaction,
+          inputs.overlayDefaults
         )
       );
     }

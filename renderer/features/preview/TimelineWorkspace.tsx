@@ -560,6 +560,12 @@ export function TimelineWorkspace({
   }
 
   useEffect(() => {
+    if (replacing || loading) {
+      preview.setPreviewPlaying(false);
+    }
+  }, [replacing, loading]);
+
+  useEffect(() => {
     if (!visible) {
       return;
     }
@@ -675,7 +681,19 @@ export function TimelineWorkspace({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {replacing || loading ? (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center bg-app/70"
+          aria-busy="true"
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-[13px] text-ink">
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-ink-3 border-t-accent" />
+            {loading ? "Đang tạo timeline..." : "Đang cập nhật timeline..."}
+          </div>
+        </div>
+      ) : null}
       {exporting && exportProgress ? (
         <div className="shrink-0 border-b border-line px-2 py-1.5">
           <div className="h-1 overflow-hidden rounded-sm bg-elevated">
@@ -947,7 +965,10 @@ export function TimelineWorkspace({
         assets={pickerAssets}
         selectedId={
           target
-            ? selectedAssetId(target, analysis, reactions)
+            ? selectedAssetId(target, analysis, reactions, {
+                clips: (draftRef.current ?? timelineProject)?.clips,
+                assets: pickerAssets
+              })
             : undefined
         }
         onClose={() => setTarget(undefined)}
@@ -960,7 +981,10 @@ export function TimelineWorkspace({
         onRemove={
           target &&
           canRemoveTimelineAsset(target) &&
-          selectedAssetId(target, analysis, reactions)
+          selectedAssetId(target, analysis, reactions, {
+            clips: (draftRef.current ?? timelineProject)?.clips,
+            assets: pickerAssets
+          })
             ? () => void replaceAsset(target, null)
             : undefined
         }

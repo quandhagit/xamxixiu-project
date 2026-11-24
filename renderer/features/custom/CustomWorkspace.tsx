@@ -25,7 +25,18 @@ import {
   topicTitleCardStyle,
   type TopicTitleStyle
 } from "../../../src/topic-title-style";
-import { TOPIC_TITLE_TRANSFORM_Y, TOPIC_TITLE_WIDTH_FRACTION } from "../../../src/timeline/topic-constants";
+import {
+  clampMemeDefaultStyle,
+  DEFAULT_MEME_STYLE,
+  MEME_STYLE_CHANGED,
+  MEME_STYLE_LIMITS,
+  type MemeDefaultStyle
+} from "../../../src/meme-style";
+import { TOPIC_TITLE_WIDTH_FRACTION } from "../../../src/timeline/topic-constants";
+import {
+  overlayRestLeftPercent,
+  overlayRestTopPercent
+} from "../../../src/timeline/clip-position";
 import {
   previewStageBoxStyle,
   previewStageScale
@@ -40,6 +51,7 @@ import {
   CUSTOM_TABS,
   type CustomTabId
 } from "./custom-tabs";
+import { pickPreviewMeme } from "./preview-meme";
 
 function NumberField({
   id,
@@ -47,7 +59,9 @@ function NumberField({
   value,
   min,
   max,
-  onChange
+  onChange,
+  step = 1,
+  suffix = "px"
 }: {
   id: string;
   label: string;
@@ -55,19 +69,24 @@ function NumberField({
   min: number;
   max: number;
   onChange: (value: number) => void;
+  step?: number;
+  suffix?: string;
 }): React.ReactElement {
   return (
     <label className="block" htmlFor={id}>
       <span className="mb-1 flex items-center justify-between text-[11px] font-medium tracking-wide text-ink-3">
         {label}
-        <span className="text-ink-2">{value}px</span>
+        <span className="text-ink-2">
+          {value}
+          {suffix}
+        </span>
       </span>
       <input
         id={id}
         type="range"
         min={min}
         max={max}
-        step={1}
+        step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         className="w-full accent-accent"
@@ -77,7 +96,7 @@ function NumberField({
         type="number"
         min={min}
         max={max}
-        step={1}
+        step={step}
         value={value}
         onChange={(event) => {
           if (event.target.value === "") {
@@ -184,6 +203,23 @@ async function loadPreviewCapture(): Promise<string | undefined> {
   }
 
   return undefined;
+}
+
+async function loadPreviewMeme(): Promise<string | undefined> {
+  if (!window.xamxixiu?.listAssets || !window.xamxixiu.getAssetPreview) {
+    return undefined;
+  }
+
+  const assets = await window.xamxixiu.listAssets();
+  const meme = pickPreviewMeme(assets);
+  if (!meme) {
+    return undefined;
+  }
+  try {
+    return await window.xamxixiu.getAssetPreview(meme.id);
+  } catch {
+    return undefined;
+  }
 }
 
 function CommentCapturePanel({
@@ -381,6 +417,26 @@ function CommentCapturePanel({
             value={style.shadowColor}
             onChange={(shadowColor) => update({ shadowColor })}
           />
+          <NumberField
+            id="capture-x"
+            label="X"
+            value={style.x}
+            min={COMMENT_CAPTURE_LIMITS.x.min}
+            max={COMMENT_CAPTURE_LIMITS.x.max}
+            step={0.05}
+            suffix=""
+            onChange={(x) => update({ x })}
+          />
+          <NumberField
+            id="capture-y"
+            label="Y"
+            value={style.y}
+            min={COMMENT_CAPTURE_LIMITS.y.min}
+            max={COMMENT_CAPTURE_LIMITS.y.max}
+            step={0.05}
+            suffix=""
+            onChange={(y) => update({ y })}
+          />
         </div>
         <div className="mt-4 flex items-center justify-end gap-2">
           <Button
@@ -413,8 +469,8 @@ function CommentCapturePanel({
                     position: "absolute",
                     width: `${COMMENT_PREVIEW_WIDTH_FRACTION * 100}%`,
                     maxHeight: "100%",
-                    left: "50%",
-                    top: "50%",
+                    left: `${overlayRestLeftPercent(style.x)}%`,
+                    top: `${overlayRestTopPercent(style.y)}%`,
                     transform: "translate(-50%, -50%)",
                     objectFit: "contain",
                     ...commentCaptureCardStyle(style)
@@ -636,6 +692,26 @@ function TopicTitlePanel({
             value={style.color}
             onChange={(color) => update({ color })}
           />
+          <NumberField
+            id="title-x"
+            label="X"
+            value={style.x}
+            min={TOPIC_TITLE_STYLE_LIMITS.x.min}
+            max={TOPIC_TITLE_STYLE_LIMITS.x.max}
+            step={0.05}
+            suffix=""
+            onChange={(x) => update({ x })}
+          />
+          <NumberField
+            id="title-y"
+            label="Y"
+            value={style.y}
+            min={TOPIC_TITLE_STYLE_LIMITS.y.min}
+            max={TOPIC_TITLE_STYLE_LIMITS.y.max}
+            step={0.05}
+            suffix=""
+            onChange={(y) => update({ y })}
+          />
         </div>
         <div className="mt-4 flex items-center justify-end gap-2">
           <Button
@@ -665,8 +741,8 @@ function TopicTitlePanel({
                   position: "absolute",
                   width: `${TOPIC_TITLE_WIDTH_FRACTION * 100}%`,
                   maxHeight: "100%",
-                  left: "50%",
-                  top: `${50 - TOPIC_TITLE_TRANSFORM_Y * 50}%`,
+                  left: `${overlayRestLeftPercent(style.x)}%`,
+                  top: `${overlayRestTopPercent(style.y)}%`,
                   transform: "translate(-50%, -50%)",
                   ...topicTitleCardStyle(style)
                 }}
@@ -674,6 +750,249 @@ function TopicTitlePanel({
                 {TOPIC_TITLE_PREVIEW_TEXT}
               </div>
             </div>
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function MemePanel({
+  visible
+}: {
+  visible: boolean;
+}): React.ReactElement {
+  const setError = useErrorToast();
+  const [style, setStyle] = useState<MemeDefaultStyle>(DEFAULT_MEME_STYLE);
+  const [saved, setSaved] = useState<MemeDefaultStyle>(DEFAULT_MEME_STYLE);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState<string>();
+  const styleRef = useRef(style);
+  styleRef.current = style;
+  const dirtyRef = useRef(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [displayScale, setDisplayScale] = useState(1);
+  const dirty =
+    JSON.stringify(clampMemeDefaultStyle(style)) !== JSON.stringify(saved);
+  dirtyRef.current = dirty;
+
+  function update(partial: Partial<MemeDefaultStyle>): void {
+    setStyle((current) => clampMemeDefaultStyle({ ...current, ...partial }));
+  }
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    if (!window.xamxixiu?.getSettings) {
+      setError("Custom chỉ dùng trong app desktop.");
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    void window.xamxixiu
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) {
+          return;
+        }
+        const next = clampMemeDefaultStyle(settings.meme);
+        setSaved(next);
+        if (!dirtyRef.current) {
+          setStyle(next);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Không đọc được style meme."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, setError]);
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    let cancelled = false;
+    void loadPreviewMeme()
+      .then((source) => {
+        if (!cancelled) {
+          setPreviewSrc(source);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreviewSrc(undefined);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
+  useLayoutEffect(() => {
+    if (!visible) {
+      return;
+    }
+    const stage = stageRef.current;
+    function updateScale(): void {
+      setDisplayScale(
+        previewStageScale(stageRef.current?.clientWidth ?? 0)
+      );
+    }
+    updateScale();
+    if (!stage) {
+      return;
+    }
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(stage);
+    window.addEventListener("resize", updateScale);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateScale);
+    };
+  }, [visible]);
+
+  async function save(): Promise<void> {
+    if (!window.xamxixiu?.getSettings || !window.xamxixiu.saveSettings) {
+      setError("Custom chỉ dùng trong app desktop.");
+      return;
+    }
+
+    const next = clampMemeDefaultStyle(styleRef.current);
+    setSaving(true);
+    setError(undefined);
+    try {
+      const current = await window.xamxixiu.getSettings();
+      await window.xamxixiu.saveSettings({
+        ...current,
+        meme: next
+      });
+      setStyle(next);
+      setSaved(next);
+      window.dispatchEvent(
+        new CustomEvent(MEME_STYLE_CHANGED, {
+          detail: next
+        })
+      );
+    } catch (reason: unknown) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Không lưu được style meme."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+      <Panel>
+        <div className="space-y-3">
+          <NumberField
+            id="meme-x"
+            label="X"
+            value={style.x}
+            min={MEME_STYLE_LIMITS.x.min}
+            max={MEME_STYLE_LIMITS.x.max}
+            step={0.05}
+            suffix=""
+            onChange={(x) => update({ x })}
+          />
+          <NumberField
+            id="meme-y"
+            label="Y"
+            value={style.y}
+            min={MEME_STYLE_LIMITS.y.min}
+            max={MEME_STYLE_LIMITS.y.max}
+            step={0.05}
+            suffix=""
+            onChange={(y) => update({ y })}
+          />
+          <NumberField
+            id="meme-scale"
+            label="Scale"
+            value={style.scale}
+            min={MEME_STYLE_LIMITS.scale.min}
+            max={MEME_STYLE_LIMITS.scale.max}
+            step={0.05}
+            suffix=""
+            onChange={(scale) => update({ scale })}
+          />
+          <NumberField
+            id="meme-fade-in"
+            label="Fade in"
+            value={style.fadeIn}
+            min={MEME_STYLE_LIMITS.fadeIn.min}
+            max={MEME_STYLE_LIMITS.fadeIn.max}
+            step={0.05}
+            suffix=""
+            onChange={(fadeIn) => update({ fadeIn })}
+          />
+        </div>
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <Button
+            variant="primary"
+            onClick={() => {
+              void save();
+            }}
+            disabled={loading || saving || !dirty}
+          >
+            {saving ? "Đang lưu..." : "Lưu"}
+          </Button>
+        </div>
+      </Panel>
+      <Panel className="flex min-h-[320px] flex-col">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-ink-3">
+          Preview
+        </p>
+        <div className="mt-3 flex min-h-[280px] flex-1 items-center justify-center rounded-lg p-4">
+          <div
+            ref={stageRef}
+            className="relative mx-auto aspect-[9/16] h-[min(52vh,480px)] w-auto overflow-hidden rounded-lg border border-line"
+            style={PREVIEW_CHECKERBOARD}
+          >
+            {previewSrc ? (
+              <div style={previewStageBoxStyle(displayScale)}>
+                <img
+                  src={previewSrc}
+                  alt="Preview meme"
+                  style={{
+                    position: "absolute",
+                    width: `${style.scale * 100}%`,
+                    maxHeight: "100%",
+                    left: `${overlayRestLeftPercent(style.x)}%`,
+                    top: `${overlayRestTopPercent(style.y)}%`,
+                    transform: "translate(-50%, -50%)",
+                    objectFit: "contain"
+                  }}
+                />
+              </div>
+            ) : (
+              <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-[13px] text-neutral-600">
+                Chưa có meme trong library. Hãy import một ảnh meme để xem preview.
+              </p>
+            )}
           </div>
         </div>
       </Panel>
@@ -693,7 +1012,7 @@ export function CustomWorkspace({
       <div>
         <h2 className="text-sm font-medium text-ink">Custom</h2>
         <p className="mt-0.5 text-[12px] text-ink-3">
-          Tùy chỉnh title topic và comment capture. Style đã lưu áp dụng live trên Timeline và export, không ghi vào file ảnh.
+          Tùy chỉnh title topic, comment capture và meme. Style đã lưu áp dụng live trên Timeline và export, không ghi vào file ảnh.
         </p>
       </div>
       <div className="mt-3 flex flex-wrap gap-1 border-b border-line pb-2">
@@ -722,6 +1041,7 @@ export function CustomWorkspace({
       {tabId === "topic-title" ? (
         <TopicTitlePanel visible={visible} />
       ) : null}
+      {tabId === "meme" ? <MemePanel visible={visible} /> : null}
     </section>
   );
 }

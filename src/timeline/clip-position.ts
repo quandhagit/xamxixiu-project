@@ -18,6 +18,14 @@ export function clampClipAxis(value: number): number {
   return Math.max(-1, Math.min(1, value));
 }
 
+export function overlayRestLeftPercent(x: number): number {
+  return 50 + x * 50;
+}
+
+export function overlayRestTopPercent(y: number): number {
+  return 50 - y * 50;
+}
+
 export function canMoveClipOnPreview(clip: {
   trackId: string;
   kind?: string;

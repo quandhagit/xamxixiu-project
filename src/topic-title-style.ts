@@ -7,6 +7,8 @@ export interface TopicTitleStyle {
   fontFamily: string;
   fontSize: number;
   color: string;
+  x: number;
+  y: number;
 }
 
 export const TOPIC_TITLE_FONTS = [
@@ -24,7 +26,9 @@ export const TOPIC_TITLE_STYLE_LIMITS = {
   radius: { min: 0, max: 80 },
   border: { min: 0, max: 24 },
   padding: { min: 0, max: 80 },
-  fontSize: { min: 1, max: 96 }
+  fontSize: { min: 1, max: 96 },
+  x: { min: -1, max: 1 },
+  y: { min: -1, max: 1 }
 } as const;
 
 export const DEFAULT_TOPIC_TITLE_STYLE: TopicTitleStyle = {
@@ -35,7 +39,9 @@ export const DEFAULT_TOPIC_TITLE_STYLE: TopicTitleStyle = {
   padding: 24,
   fontFamily: "Roboto, Arial, sans-serif",
   fontSize: 24,
-  color: "#ffffff"
+  color: "#ffffff",
+  x: 0,
+  y: 0.2
 };
 
 export const TOPIC_TITLE_PREVIEW_TEXT =
@@ -143,6 +149,26 @@ function clampInt(
   return Math.min(max, Math.max(min, Math.round(raw)));
 }
 
+function clampAxis(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  const raw =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(raw)) {
+    return fallback;
+  }
+
+  return Math.round(Math.min(max, Math.max(min, raw)) * 1000) / 1000;
+}
+
 function normalizeFontFamily(
   value: unknown,
   fallback: string
@@ -198,7 +224,19 @@ export function clampTopicTitleStyle(
       TOPIC_TITLE_STYLE_LIMITS.fontSize.max,
       fallback.fontSize
     ),
-    color: normalizeHexColor(source.color, fallback.color)
+    color: normalizeHexColor(source.color, fallback.color),
+    x: clampAxis(
+      source.x,
+      TOPIC_TITLE_STYLE_LIMITS.x.min,
+      TOPIC_TITLE_STYLE_LIMITS.x.max,
+      fallback.x
+    ),
+    y: clampAxis(
+      source.y,
+      TOPIC_TITLE_STYLE_LIMITS.y.min,
+      TOPIC_TITLE_STYLE_LIMITS.y.max,
+      fallback.y
+    )
   };
 }
 

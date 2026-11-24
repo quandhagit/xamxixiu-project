@@ -61,7 +61,9 @@ export function clearCommentReactionAssets(
     return {
       ...reaction,
       meme: cleared.meme ? null : reaction.meme,
-      sfx: cleared.sfx ? null : reaction.sfx
+      extraMemes: cleared.meme ? [] : reaction.extraMemes,
+      sfx: cleared.sfx ? null : reaction.sfx,
+      extraSfx: cleared.sfx ? [] : reaction.extraSfx
     };
   });
 }
@@ -74,7 +76,13 @@ export function clearCommentAnalysisAssets(
   return {
     ...analysis,
     topicPostMemeId: topicPost?.meme ? null : analysis.topicPostMemeId,
+    topicPostExtraMemeIds: topicPost?.meme
+      ? []
+      : analysis.topicPostExtraMemeIds,
     topicPostSfxId: topicPost?.sfx ? null : analysis.topicPostSfxId,
+    topicPostExtraSfxIds: topicPost?.sfx
+      ? []
+      : analysis.topicPostExtraSfxIds,
     reactions: analysis.reactions.map((reaction) => {
       const cleared = kinds.get(reaction.commentIndex);
       if (!cleared) {
@@ -83,8 +91,10 @@ export function clearCommentAnalysisAssets(
       return {
         ...reaction,
         memeAssetId: cleared.meme ? null : reaction.memeAssetId,
+        extraMemeAssetIds: cleared.meme ? [] : reaction.extraMemeAssetIds,
         memeCategory: cleared.meme ? null : reaction.memeCategory,
         sfxAssetId: cleared.sfx ? null : reaction.sfxAssetId,
+        extraSfxAssetIds: cleared.sfx ? [] : reaction.extraSfxAssetIds,
         sfxCategory: cleared.sfx ? null : reaction.sfxCategory
       };
     })

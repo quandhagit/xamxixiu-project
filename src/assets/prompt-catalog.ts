@@ -126,11 +126,6 @@ function sanitizeReaction(
     ? resolveSelectable(assets, memeAssetId, "meme")
     : undefined;
 
-  if (selectedMeme?.mediaKind === "video") {
-    sfxAssetId = null;
-    sfxCategory = null;
-  }
-
   const sfx = resolveSelectable(assets, sfxAssetId, "sfx");
   if (sfxAssetId) {
     if (!sfx) {
@@ -158,12 +153,18 @@ function sanitizeReaction(
     }
   }
 
+  for (const id of reaction.extraMemeAssetIds ?? []) {
+    usedMemeIds.add(id);
+  }
+
   return {
     ...reaction,
     memeAssetId,
     memeCategory,
     sfxAssetId,
-    sfxCategory
+    sfxCategory,
+    extraMemeAssetIds: reaction.extraMemeAssetIds,
+    extraSfxAssetIds: reaction.extraSfxAssetIds
   };
 }
 

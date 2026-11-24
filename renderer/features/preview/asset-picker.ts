@@ -1,6 +1,7 @@
 import type { Asset } from "../../../src/assets/library";
 import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
 import type { ProjectState } from "../../../src/project/store";
+import { overlayFilesMatch } from "../../../src/timeline/replace-asset";
 import { isTopicPostIndex } from "../../../src/timeline/topic-constants";
 
 export function assetsForTarget(
@@ -63,7 +64,11 @@ export function pickerTitle(target: TimelineAssetTarget): string {
 export function selectedAssetId(
   target: TimelineAssetTarget,
   analysis: ProjectState["analysis"],
-  reactions: ProjectState["reactions"]
+  reactions: ProjectState["reactions"],
+  options?: {
+    clips?: Array<{ id: string; file: string }>;
+    assets?: Asset[];
+  }
 ): string | undefined {
   if (target.kind === "topic-title") {
     return undefined;
@@ -77,6 +82,23 @@ export function selectedAssetId(
   if (target.kind === "topic-meme") {
     return analysis?.topicMemeId ?? undefined;
   }
+  if ("clipId" in target && target.clipId) {
+    const file = options?.clips?.find((clip) => clip.id === target.clipId)?.file;
+    if (file && options?.assets) {
+      const matched = options.assets.find((asset) =>
+        overlayFilesMatch(asset.file, file)
+      );
+      if (matched) {
+        return matched.id;
+      }
+    }
+  } else if (
+    target.kind === "meme" ||
+    target.kind === "video" ||
+    target.kind === "sfx"
+  ) {
+    return undefined;
+  }
   if ("commentIndex" in target && isTopicPostIndex(target.commentIndex)) {
     if (target.kind === "sfx") {
       return analysis?.topicPostSfxId ?? undefined;
@@ -88,6 +110,13 @@ export function selectedAssetId(
   );
   if (target.kind === "sfx") {
     return reaction?.sfx?.id;
+  }
+  if (target.kind === "video") {
+    const memes = [
+      ...(reaction?.meme ? [reaction.meme] : []),
+      ...(reaction?.extraMemes ?? [])
+    ];
+    return memes.find((item) => item.mediaKind === "video")?.id;
   }
   return reaction?.meme?.id;
 }

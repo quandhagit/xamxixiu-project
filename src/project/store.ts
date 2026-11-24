@@ -21,9 +21,14 @@ import { buildTimeline } from "../timeline/builder.js";
 import { normalizeTopicTitle } from "../timeline/topic-constants.js";
 import type { TimelineProject } from "../timeline/project.js";
 import { videoTimelineToProject } from "../timeline/from-video-timeline.js";
+import { overlayStyleDefaultsFromSettings } from "../meme-style.js";
+import { loadSettings } from "../electron/settings.js";
 import { stampComboFromClips } from "../timeline/meme-combo.js";
 import { comboStampNeeded } from "../timeline/persist.js";
-import { createDefaultAnalysis } from "../ai/default-analysis.js";
+import {
+  createDefaultAnalysis,
+  emptyReaction
+} from "../ai/default-analysis.js";
 
 export interface ProjectSummary {
   id: string;
@@ -346,13 +351,17 @@ export class ProjectStore {
         (item) => item.commentIndex === commentIndex
       );
 
-      if (!reaction) {
-        throw new Error(
-          `No analysis reaction for comment ${commentIndex}`
+      if (reaction) {
+        reaction.voiceId = voiceId;
+      } else {
+        analysis.reactions.push({
+          ...emptyReaction(commentIndex),
+          voiceId
+        });
+        analysis.reactions.sort(
+          (left, right) => left.commentIndex - right.commentIndex
         );
       }
-
-      reaction.voiceId = voiceId;
     }
 
     await atomicWriteJson(analysisFile, analysis);
@@ -392,22 +401,27 @@ export class ProjectStore {
       if (reaction.sfx && !assetIds.has(reaction.sfx.id)) {
         throw new Error(`Unknown SFX asset: ${reaction.sfx.id}`);
       }
+      for (const extra of reaction.extraMemes ?? []) {
+        if (!assetIds.has(extra.id)) {
+          throw new Error(`Unknown meme asset: ${extra.id}`);
+        }
+      }
+      for (const extra of reaction.extraSfx ?? []) {
+        if (!assetIds.has(extra.id)) {
+          throw new Error(`Unknown SFX asset: ${extra.id}`);
+        }
+      }
       if (
         reaction.meme?.mediaKind === "video" &&
-        (reaction.sfx || reaction.animation !== "none")
+        reaction.animation !== "none"
       ) {
-        throw new Error("Video memes cannot use SFX or animation");
+        throw new Error("Video memes cannot use animation");
       }
     }
     const directory = this.getProjectDirectory(projectId);
     const analysisFile = path.join(directory, "analysis.json");
-    const analysis = selections
-      ? await readJson<ThreadAnalysis>(analysisFile)
-      : undefined;
-    if (selections && !analysis) {
-      throw new Error("Project analysis is missing");
-    }
-    if (selections && analysis) {
+    const analysis = await this.ensureAnalysis(projectId);
+    if (selections) {
       for (const [key, type] of [
         ["backgroundAssetId", "background"],
         ["musicAssetId", "music"]
@@ -462,18 +476,56 @@ export class ProjectStore {
         }
         analysis.topicPostSfxId = id ?? null;
       }
+      if ("topicPostExtraMemeIds" in selections) {
+        const ids = selections.topicPostExtraMemeIds ?? [];
+        for (const id of ids) {
+          if (
+            !assets.some(
+              (asset) => asset.id === id && asset.type === "meme"
+            )
+          ) {
+            throw new Error(`Unknown meme asset: ${id}`);
+          }
+        }
+        analysis.topicPostExtraMemeIds = ids;
+      }
+      if ("topicPostExtraSfxIds" in selections) {
+        const ids = selections.topicPostExtraSfxIds ?? [];
+        for (const id of ids) {
+          if (
+            !assets.some(
+              (asset) => asset.id === id && asset.type === "sfx"
+            )
+          ) {
+            throw new Error(`Unknown sfx asset: ${id}`);
+          }
+        }
+        analysis.topicPostExtraSfxIds = ids;
+      }
       if ("topicIntroEnabled" in selections) {
         analysis.topicIntroEnabled =
           selections.topicIntroEnabled !== false;
       }
     }
+    for (const reaction of reactions) {
+      const event = analysis.reactions.find(
+        (item) => item.commentIndex === reaction.commentIndex
+      );
+      if (!event) {
+        continue;
+      }
+      event.extraMemeAssetIds = (reaction.extraMemes ?? []).map(
+        (item) => item.id
+      );
+      event.extraSfxAssetIds = (reaction.extraSfx ?? []).map(
+        (item) => item.id
+      );
+    }
     await atomicWriteJson(
       path.join(directory, "reactions.json"),
       reactions
     );
-    if (selections && analysis) {
-      await atomicWriteJson(analysisFile, analysis);
-    }
+    await atomicWriteJson(analysisFile, analysis);
     await fs.rm(
       path.join(directory, "timeline.json"),
       { force: true }
@@ -553,7 +605,10 @@ export class ProjectStore {
   ): Promise<ProjectState> {
     await this.ensureAnalysis(projectId);
     const directory = this.getProjectDirectory(projectId);
-    const timeline = await buildTimeline(directory);
+    const overlayDefaults = overlayStyleDefaultsFromSettings(
+      await loadSettings()
+    );
+    const timeline = await buildTimeline(directory, overlayDefaults);
     await atomicWriteJson(
       path.join(directory, "timeline.json"),
       timeline
@@ -563,7 +618,7 @@ export class ProjectStore {
     );
     await atomicWriteJson(
       path.join(directory, "timeline-project.json"),
-      videoTimelineToProject(timeline, previous)
+      videoTimelineToProject(timeline, previous, overlayDefaults)
     );
     const project = await this.getProject(projectId);
     if (!project) {
@@ -584,7 +639,14 @@ export class ProjectStore {
     const timeline = await readJson<VideoTimeline>(
       path.join(directory, "timeline.json")
     );
-    return timeline ? videoTimelineToProject(timeline) : undefined;
+    if (!timeline) {
+      return undefined;
+    }
+    return videoTimelineToProject(
+      timeline,
+      undefined,
+      overlayStyleDefaultsFromSettings(await loadSettings())
+    );
   }
 
   async saveTimelineProject(

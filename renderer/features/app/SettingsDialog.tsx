@@ -8,6 +8,7 @@ import {
 } from "react";
 import { DEFAULT_COMMENT_CAPTURE_STYLE } from "../../../src/capture-style";
 import { DEFAULT_TOPIC_TITLE_STYLE } from "../../../src/topic-title-style";
+import { DEFAULT_MEME_STYLE } from "../../../src/meme-style";
 import type {
   AiProvider,
   AppSettings
@@ -44,7 +45,8 @@ const EMPTY_SETTINGS: AppSettings = {
   vbeeWebhookPort: "3001",
   capcutDraftsDir: "",
   commentCapture: DEFAULT_COMMENT_CAPTURE_STYLE,
-  topicTitle: DEFAULT_TOPIC_TITLE_STYLE
+  topicTitle: DEFAULT_TOPIC_TITLE_STYLE,
+  meme: DEFAULT_MEME_STYLE
 };
 
 type TabId =

@@ -1,3 +1,4 @@
+import { emptyReaction } from "../../../src/ai/default-analysis";
 import {
   DEFAULT_CAPTURE_VIEWPORT,
   parseCaptureViewport,
@@ -67,16 +68,36 @@ export function withVoiceAssignment(
     };
   }
 
+  const match = /^comment-(\d+)$/.exec(target);
+  if (!match) {
+    return analysis;
+  }
+
+  const commentIndex = Number(match[1]);
+  let found = false;
+  const reactions = analysis.reactions.map((reaction) => {
+    if (reaction.commentIndex !== commentIndex) {
+      return reaction;
+    }
+    found = true;
+    return {
+      ...reaction,
+      voiceId
+    };
+  });
+
+  if (!found) {
+    reactions.push({
+      ...emptyReaction(commentIndex),
+      voiceId
+    });
+    reactions.sort(
+      (left, right) => left.commentIndex - right.commentIndex
+    );
+  }
+
   return {
     ...analysis,
-    reactions: analysis.reactions.map(
-      (reaction) =>
-        `comment-${reaction.commentIndex}` === target
-          ? {
-              ...reaction,
-              voiceId
-            }
-          : reaction
-    )
+    reactions
   };
 }

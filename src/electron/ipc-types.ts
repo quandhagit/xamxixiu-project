@@ -31,6 +31,7 @@ import type {
 } from "../assets/library.js";
 import type { CommentCaptureStyle } from "../capture-style.js";
 import type { TopicTitleStyle } from "../topic-title-style.js";
+import type { MemeDefaultStyle } from "../meme-style.js";
 import type {
   MatchedReaction
 } from "../assets/matcher.js";
@@ -136,6 +137,7 @@ export interface AppSettings {
   capcutDraftsDir: string;
   commentCapture: CommentCaptureStyle;
   topicTitle: TopicTitleStyle;
+  meme: MemeDefaultStyle;
 }
 
 export interface SaveSettingsResult {

@@ -187,11 +187,23 @@ function syncPairedSfx(
   if (clip.commentIndex === undefined || clip.commentIndex === null) {
     return;
   }
-  const offset = clip.sfxOffset ?? 0;
+  let paired: TimelineClip | undefined;
   for (const other of project.clips) {
-    if (other.trackId === "sfx" && other.commentIndex === clip.commentIndex) {
-      other.start = roundTime(Math.max(0, clip.start + offset));
+    if (
+      other.trackId !== "sfx" ||
+      other.commentIndex !== clip.commentIndex
+    ) {
+      continue;
     }
+    if (
+      !paired ||
+      Math.abs(other.start - clip.start) < Math.abs(paired.start - clip.start)
+    ) {
+      paired = other;
+    }
+  }
+  if (paired) {
+    paired.start = roundTime(Math.max(0, clip.start + (clip.sfxOffset ?? 0)));
   }
 }
 

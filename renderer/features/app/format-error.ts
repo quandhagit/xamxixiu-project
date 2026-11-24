@@ -174,7 +174,7 @@ const TRANSLATIONS: Array<
   ],
   [
     /^Project analysis is missing$/,
-    () => "Project chưa có kết quả phân tích."
+    () => "Project chưa có dữ liệu voice/reaction. Hãy chọn voice hoặc generate."
   ],
   [
     /^Invalid voice target: (.+)$/,
@@ -182,7 +182,7 @@ const TRANSLATIONS: Array<
   ],
   [
     /^No analysis reaction for comment (\d+)$/,
-    (m) => `Chưa có phản ứng phân tích cho comment ${m[1]}.`
+    (m) => `Chưa gán voice cho comment ${m[1]}.`
   ],
   [
     /^Reactions must be an array$/,
@@ -193,8 +193,8 @@ const TRANSLATIONS: Array<
     () => "Gán reaction không hợp lệ."
   ],
   [
-    /^Video memes cannot use SFX/,
-    () => "Meme video không thể dùng SFX hoặc animation."
+    /^Video memes cannot use/,
+    () => "Meme video không thể dùng animation."
   ],
   [
     /^(Background|Music) cannot be removed from the timeline$/,

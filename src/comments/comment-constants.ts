@@ -16,7 +16,7 @@ export const CAPTURE_COMMENT_MAX = 100;
 export const CURATE_KEEP_MIN = 8;
 export const CURATE_KEEP_MAX = 12;
 
-/** Approximate comment count used by the Analyze prompt. */
+/** Approximate comment count used by per-task AI prompts. */
 export const ANALYZE_TARGET_COMMENT_COUNT = Math.round(
   (CURATE_KEEP_MIN + CURATE_KEEP_MAX) / 2
 );

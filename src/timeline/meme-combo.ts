@@ -104,7 +104,7 @@ export const BUILTIN_COMBOS: MemeCombo[] = [
     scale: 1,
     x: 0,
     y: 0,
-    fadeIn: 0.3,
+    fadeIn: 0,
     sfxOffset: 0,
     minDuration: 1
   }
@@ -417,6 +417,7 @@ export function preserveComboClips(
       (item) =>
         item.trackId === clip.trackId &&
         item.commentIndex === clip.commentIndex &&
+        item.file === clip.file &&
         item.commentIndex !== undefined &&
         item.commentIndex !== null
     );

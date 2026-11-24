@@ -121,9 +121,13 @@ export interface ReactionEvent {
 
   memeAssetId?: string | null;
 
+  extraMemeAssetIds?: string[];
+
   memeCategory: string | null;
 
   sfxAssetId?: string | null;
+
+  extraSfxAssetIds?: string[];
 
   sfxCategory: string | null;
 
@@ -148,8 +152,10 @@ export interface ThreadAnalysis {
   topicMemeId?: string | null;
   /** Meme or video overlay placed immediately after the topic voice. */
   topicPostMemeId?: string | null;
+  topicPostExtraMemeIds?: string[];
   /** SFX placed immediately after the topic voice. */
   topicPostSfxId?: string | null;
+  topicPostExtraSfxIds?: string[];
   backgroundAssetId?: string | null;
   musicAssetId?: string | null;
 

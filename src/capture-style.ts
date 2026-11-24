@@ -4,12 +4,16 @@ export interface CommentCaptureStyle {
   borderColor: string;
   shadow: number;
   shadowColor: string;
+  x: number;
+  y: number;
 }
 
 export const COMMENT_CAPTURE_LIMITS = {
   radius: { min: 0, max: 80 },
   border: { min: 0, max: 24 },
-  shadow: { min: 0, max: 80 }
+  shadow: { min: 0, max: 80 },
+  x: { min: -1, max: 1 },
+  y: { min: -1, max: 1 }
 } as const;
 
 export const DEFAULT_COMMENT_CAPTURE_STYLE: CommentCaptureStyle = {
@@ -17,7 +21,9 @@ export const DEFAULT_COMMENT_CAPTURE_STYLE: CommentCaptureStyle = {
   border: 0,
   borderColor: "#000000",
   shadow: 0,
-  shadowColor: "#000000"
+  shadowColor: "#000000",
+  x: 0,
+  y: 0.5
 };
 
 export const COMMENT_CAPTURE_DESIGN_WIDTH = 1080;
@@ -103,6 +109,26 @@ function clampInt(
   return Math.min(max, Math.max(min, Math.round(raw)));
 }
 
+function clampAxis(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  const raw =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(raw)) {
+    return fallback;
+  }
+
+  return Math.round(Math.min(max, Math.max(min, raw)) * 1000) / 1000;
+}
+
 export function clampCommentCaptureStyle(
   input?: unknown,
   fallback: CommentCaptureStyle = DEFAULT_COMMENT_CAPTURE_STYLE
@@ -138,6 +164,18 @@ export function clampCommentCaptureStyle(
     shadowColor: normalizeHexColor(
       source.shadowColor,
       fallback.shadowColor
+    ),
+    x: clampAxis(
+      source.x,
+      COMMENT_CAPTURE_LIMITS.x.min,
+      COMMENT_CAPTURE_LIMITS.x.max,
+      fallback.x
+    ),
+    y: clampAxis(
+      source.y,
+      COMMENT_CAPTURE_LIMITS.y.min,
+      COMMENT_CAPTURE_LIMITS.y.max,
+      fallback.y
     )
   };
 }

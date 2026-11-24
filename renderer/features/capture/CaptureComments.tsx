@@ -579,7 +579,7 @@ export function CaptureComments({
                   }}
                   className="accent-warning"
                 />
-                Exclude khỏi Analyze
+                Exclude khỏi video
               </label>
             </div>
           </div>

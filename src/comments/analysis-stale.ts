@@ -6,8 +6,7 @@ import type {
 /**
  * True when analysis.json no longer matches the comments that are currently
  * included: a reaction points at an excluded comment, or a comment between
- * the first and last included ones has no reaction (Analyze always creates
- * one for those).
+ * the first and last included ones has no reaction.
  */
 export function isAnalysisStale(
   content: Pick<ThreadData, "comments">,

@@ -11,10 +11,12 @@ import {
 } from "./project.js";
 import type { VideoTimeline } from "../types.js";
 import { preserveComboClips } from "./meme-combo.js";
+import { sequenceCommentVisualClips } from "./overlay-sequence.js";
+import { TOPIC_POST_COMMENT_INDEX } from "./topic-constants.js";
 import {
-  TOPIC_POST_COMMENT_INDEX,
-  TOPIC_TITLE_TRANSFORM_Y
-} from "./topic-constants.js";
+  DEFAULT_OVERLAY_STYLE_DEFAULTS,
+  type OverlayStyleDefaults
+} from "../meme-style.js";
 
 function isVideoAsset(file: string): boolean {
   return [".mp4", ".mov", ".webm", ".mkv"].some((extension) =>
@@ -73,7 +75,8 @@ function makeClip(
 
 export function videoTimelineToProject(
   timeline: VideoTimeline,
-  previous?: TimelineProject
+  previous?: TimelineProject,
+  overlayDefaults: OverlayStyleDefaults = DEFAULT_OVERLAY_STYLE_DEFAULTS
 ): TimelineProject {
   const locked = new Map(
     (previous?.clips ?? [])
@@ -119,8 +122,8 @@ export function videoTimelineToProject(
         label: timeline.topicIntro.title || "Title card",
         animation: "slide-up",
         animationDuration: timeline.topicIntro.animationDuration,
-        x: previousTitle?.x ?? 0,
-        y: previousTitle?.y ?? TOPIC_TITLE_TRANSFORM_Y
+        x: previousTitle?.x ?? overlayDefaults.titleX,
+        y: previousTitle?.y ?? overlayDefaults.titleY
       }));
     }
     if (timeline.topicIntro.openSfxFile) {
@@ -177,7 +180,7 @@ export function videoTimelineToProject(
         muteUnderBeep: true
       }));
       const postVoiceStart = block.audioStart + block.audioDuration;
-      for (const overlay of block.overlays) {
+      for (const [overlayIndex, overlay] of block.overlays.entries()) {
         const video = overlay.type === "meme" && isVideoAsset(overlay.file);
         const trackId = overlay.type === "sfx"
           ? "sfx"
@@ -188,8 +191,8 @@ export function videoTimelineToProject(
           isTopic && overlay.start + 0.001 >= postVoiceStart;
         clips.push(makeClip({
           id: isPostTopic
-            ? `${trackId}-topic-post`
-            : `${trackId}-${entry.scene.id}-${block.commentIndex}-${overlay.file}`,
+            ? `${trackId}-topic-post-${overlayIndex}`
+            : `${trackId}-${entry.scene.id}-${block.commentIndex}-${overlayIndex}`,
           trackId,
           start: entry.start + overlay.start,
           duration: overlay.duration,
@@ -219,6 +222,7 @@ export function videoTimelineToProject(
       merged.push(clip);
     }
   }
+  sequenceCommentVisualClips(merged);
 
   return recomputeTotalDuration({
     version: 1,

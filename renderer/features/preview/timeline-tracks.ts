@@ -5,7 +5,7 @@ import {
 import type { TimelineAssetTarget } from "../../../src/electron/ipc-types";
 import { canRemoveTimelineAsset } from "../../../src/timeline/replace-asset";
 import type {
-  TimelineCommentBlock,
+  TimelineOverlay,
   VideoTimeline
 } from "../../../src/types";
 import { withAnimationLabel } from "../../../src/timeline/clip-motion";
@@ -120,20 +120,35 @@ export function formatClipLabel(file?: string): string {
   return file.split(/[\\/]/).pop() ?? file;
 }
 
-function overlayFile(
-  block: TimelineCommentBlock,
-  type: "meme" | "sfx",
-  video?: boolean
-): string | undefined {
-  return block.overlays.find((overlay) => {
-    if (overlay.type !== type) {
-      return false;
+function overlayTrackId(overlay: TimelineOverlay): TrackId | undefined {
+  if (overlay.type === "sfx") {
+    return "sfx";
+  }
+  if (overlay.type !== "meme") {
+    return undefined;
+  }
+  return isVideoAsset(overlay.file) ? "video" : "meme";
+}
+
+function lastOverlayEnd(
+  overlays: TimelineOverlay[],
+  trackId: TrackId,
+  sceneStart: number,
+  fallback: number,
+  afterStart?: number
+): number {
+  let end = fallback;
+  for (const overlay of overlays) {
+    if (overlayTrackId(overlay) !== trackId) {
+      continue;
     }
-    if (type !== "meme" || video === undefined) {
-      return true;
+    const start = sceneStart + overlay.start;
+    if (afterStart !== undefined && start + 0.001 < afterStart) {
+      continue;
     }
-    return video === isVideoAsset(overlay.file);
-  })?.file;
+    end = Math.max(end, start + overlay.duration);
+  }
+  return end;
 }
 
 export function targetFromProjectClip(
@@ -162,13 +177,25 @@ export function targetFromProjectClip(
     return undefined;
   }
   if (clip.trackId === "meme") {
-    return { kind: "meme", commentIndex: clip.commentIndex };
+    return {
+      kind: "meme",
+      commentIndex: clip.commentIndex,
+      clipId: clip.id
+    };
   }
   if (clip.trackId === "video") {
-    return { kind: "video", commentIndex: clip.commentIndex };
+    return {
+      kind: "video",
+      commentIndex: clip.commentIndex,
+      clipId: clip.id
+    };
   }
   if (clip.trackId === "sfx") {
-    return { kind: "sfx", commentIndex: clip.commentIndex };
+    return {
+      kind: "sfx",
+      commentIndex: clip.commentIndex,
+      clipId: clip.id
+    };
   }
   return undefined;
 }
@@ -306,60 +333,53 @@ function addPlaceholderClip(clip: {
   };
 }
 
-function hasCommentClip(
+function lastCommentTrackEnd(
   project: TimelineProject,
   trackId: TimelineProjectTrackId,
-  commentIndex: number
-): boolean {
-  return project.clips.some(
-    (clip) => clip.trackId === trackId && clip.commentIndex === commentIndex
-  );
+  commentIndex: number,
+  fallbackStart: number
+): number {
+  let end = fallbackStart;
+  for (const clip of project.clips) {
+    if (clip.trackId !== trackId || clip.commentIndex !== commentIndex) {
+      continue;
+    }
+    end = Math.max(end, clip.start + clip.duration);
+  }
+  return end;
 }
 
 function overlayPlaceholders(options: {
   commentIndex: number;
-  start: number;
-  hasMeme: boolean;
-  hasVideo: boolean;
-  hasSfx: boolean;
+  memeStart: number;
+  videoStart: number;
+  sfxStart: number;
   idPrefix?: string;
 }): TimelineTrackClip[] {
-  const clips: TimelineTrackClip[] = [];
   const suffix = options.idPrefix ?? String(options.commentIndex);
-  if (!options.hasMeme) {
-    clips.push(
-      addPlaceholderClip({
-        id: `meme-add-${suffix}`,
-        trackId: "meme",
-        start: options.start,
-        duration: PLACEHOLDER_DURATION,
-        target: { kind: "meme", commentIndex: options.commentIndex }
-      })
-    );
-  }
-  if (!options.hasVideo) {
-    clips.push(
-      addPlaceholderClip({
-        id: `video-add-${suffix}`,
-        trackId: "video",
-        start: options.start,
-        duration: PLACEHOLDER_DURATION,
-        target: { kind: "video", commentIndex: options.commentIndex }
-      })
-    );
-  }
-  if (!options.hasSfx && !options.hasVideo) {
-    clips.push(
-      addPlaceholderClip({
-        id: `sfx-add-${suffix}`,
-        trackId: "sfx",
-        start: options.start,
-        duration: PLACEHOLDER_DURATION,
-        target: { kind: "sfx", commentIndex: options.commentIndex }
-      })
-    );
-  }
-  return clips;
+  return [
+    addPlaceholderClip({
+      id: `meme-add-${suffix}`,
+      trackId: "meme",
+      start: options.memeStart,
+      duration: PLACEHOLDER_DURATION,
+      target: { kind: "meme", commentIndex: options.commentIndex }
+    }),
+    addPlaceholderClip({
+      id: `video-add-${suffix}`,
+      trackId: "video",
+      start: options.videoStart,
+      duration: PLACEHOLDER_DURATION,
+      target: { kind: "video", commentIndex: options.commentIndex }
+    }),
+    addPlaceholderClip({
+      id: `sfx-add-${suffix}`,
+      trackId: "sfx",
+      start: options.sfxStart,
+      duration: PLACEHOLDER_DURATION,
+      target: { kind: "sfx", commentIndex: options.commentIndex }
+    })
+  ];
 }
 
 export function getProjectTracks(
@@ -372,26 +392,41 @@ export function getProjectTracks(
       continue;
     }
     const commentIndex = voice.commentIndex;
+    const afterVoice = voice.start + voice.duration;
     clips.push(
       ...overlayPlaceholders({
         commentIndex,
-        start: voice.start + voice.duration,
-        hasMeme: hasCommentClip(project, "meme", commentIndex),
-        hasVideo: hasCommentClip(project, "video", commentIndex),
-        hasSfx: hasCommentClip(project, "sfx", commentIndex)
+        memeStart: lastCommentTrackEnd(project, "meme", commentIndex, afterVoice),
+        videoStart: lastCommentTrackEnd(project, "video", commentIndex, afterVoice),
+        sfxStart: lastCommentTrackEnd(project, "sfx", commentIndex, afterVoice)
       })
     );
   }
 
   const topicVoice = project.clips.find(isTopicVoiceClip);
   if (topicVoice) {
+    const afterVoice = topicVoice.start + topicVoice.duration;
     clips.push(
       ...overlayPlaceholders({
         commentIndex: TOPIC_POST_COMMENT_INDEX,
-        start: topicVoice.start + topicVoice.duration,
-        hasMeme: hasCommentClip(project, "meme", TOPIC_POST_COMMENT_INDEX),
-        hasVideo: hasCommentClip(project, "video", TOPIC_POST_COMMENT_INDEX),
-        hasSfx: hasCommentClip(project, "sfx", TOPIC_POST_COMMENT_INDEX),
+        memeStart: lastCommentTrackEnd(
+          project,
+          "meme",
+          TOPIC_POST_COMMENT_INDEX,
+          afterVoice
+        ),
+        videoStart: lastCommentTrackEnd(
+          project,
+          "video",
+          TOPIC_POST_COMMENT_INDEX,
+          afterVoice
+        ),
+        sfxStart: lastCommentTrackEnd(
+          project,
+          "sfx",
+          TOPIC_POST_COMMENT_INDEX,
+          afterVoice
+        ),
         idPrefix: "topic"
       })
     );
@@ -570,192 +605,90 @@ export function getTimelineTracks(
         placeholder: false
       });
 
-      const imageMeme = overlayFile(block, "meme", false);
-      const videoMeme = overlayFile(block, "meme", true);
-      const sfx = overlayFile(block, "sfx");
-
       const postVoiceStart =
         entry.start + block.audioStart + block.audioDuration;
+      const commentIndex = isTopic
+        ? TOPIC_POST_COMMENT_INDEX
+        : block.commentIndex;
 
-      if (isTopic) {
-        const introMeme = block.overlays.find(
-          (overlay) =>
-            overlay.type === "meme" &&
-            entry.start + overlay.start + 0.001 < postVoiceStart
-        );
-        if (introMeme) {
+      for (const [overlayIndex, overlay] of block.overlays.entries()) {
+        const trackId = overlayTrackId(overlay);
+        if (!trackId) {
+          continue;
+        }
+        const overlayStart = entry.start + overlay.start;
+        if (isTopic && overlayStart + 0.001 < postVoiceStart) {
+          if (overlay.type !== "meme") {
+            continue;
+          }
           topicMeme = true;
-          const video = isVideoAsset(introMeme.file);
           clips.push({
-            id: `topic-meme`,
-            trackId: video ? "video" : "meme",
-            start: entry.start + introMeme.start,
-            duration: introMeme.duration,
+            id: "topic-meme",
+            trackId,
+            start: overlayStart,
+            duration: overlay.duration,
             label: withAnimationLabel(
-              formatClipLabel(introMeme.file),
+              formatClipLabel(overlay.file),
               {
-                trackId: video ? "video" : "meme",
-                animation: introMeme.animation ?? "slide-up",
+                trackId,
+                animation: overlay.animation ?? "slide-up",
                 commentIndex: null
               }
             ),
-            file: introMeme.file,
+            file: overlay.file,
             editable: true,
             placeholder: false,
             target: { kind: "topic-meme" }
           });
+          continue;
         }
-
-        const imageMeme = block.overlays.find(
-          (overlay) =>
-            overlay.type === "meme" &&
-            !isVideoAsset(overlay.file) &&
-            entry.start + overlay.start + 0.001 >= postVoiceStart
-        );
-        const videoMeme = block.overlays.find(
-          (overlay) =>
-            overlay.type === "meme" &&
-            isVideoAsset(overlay.file) &&
-            entry.start + overlay.start + 0.001 >= postVoiceStart
-        );
-        const sfx = block.overlays.find(
-          (overlay) =>
-            overlay.type === "sfx" &&
-            entry.start + overlay.start + 0.001 >= postVoiceStart
-        );
-        if (imageMeme) {
-          clips.push({
-            id: "meme-topic-post",
-            trackId: "meme",
-            start: entry.start + imageMeme.start,
-            duration: imageMeme.duration,
-            label: formatClipLabel(imageMeme.file),
-            file: imageMeme.file,
-            editable: true,
-            placeholder: false,
-            target: { kind: "meme", commentIndex: TOPIC_POST_COMMENT_INDEX }
-          });
-        }
-        if (videoMeme) {
-          clips.push({
-            id: "video-topic-post",
-            trackId: "video",
-            start: entry.start + videoMeme.start,
-            duration: videoMeme.duration,
-            label: formatClipLabel(videoMeme.file),
-            file: videoMeme.file,
-            editable: true,
-            placeholder: false,
-            target: { kind: "video", commentIndex: TOPIC_POST_COMMENT_INDEX }
-          });
-        }
-        if (sfx) {
-          clips.push({
-            id: "sfx-topic-post",
-            trackId: "sfx",
-            start: entry.start + sfx.start,
-            duration: sfx.duration,
-            label: formatClipLabel(sfx.file),
-            file: sfx.file,
-            editable: true,
-            placeholder: false,
-            target: { kind: "sfx", commentIndex: TOPIC_POST_COMMENT_INDEX }
-          });
-        }
-        clips.push(
-          ...overlayPlaceholders({
-            commentIndex: TOPIC_POST_COMMENT_INDEX,
-            start: postVoiceStart,
-            hasMeme: Boolean(imageMeme),
-            hasVideo: Boolean(videoMeme),
-            hasSfx: Boolean(sfx),
-            idPrefix: "topic"
-          })
-        );
-        continue;
-      }
-
-      if (imageMeme) {
-        const overlay = block.overlays.find(
-          (item) => item.type === "meme" && !isVideoAsset(item.file)
-        );
+        const clipId = isTopic
+          ? `${trackId}-topic-post-${overlayIndex}`
+          : `${trackId}-${entry.scene.id}-${block.commentIndex}-${overlayIndex}`;
         clips.push({
-          id: `meme-${block.commentIndex}`,
-          trackId: "meme",
-          start: entry.start + (overlay?.start ?? block.audioStart + block.audioDuration),
-          duration: overlay?.duration ?? PLACEHOLDER_DURATION,
-          label: formatClipLabel(imageMeme),
-          file: imageMeme,
+          id: clipId,
+          trackId,
+          start: overlayStart,
+          duration: overlay.duration,
+          label: formatClipLabel(overlay.file),
+          file: overlay.file,
           editable: true,
           placeholder: false,
-          target: { kind: "meme", commentIndex: block.commentIndex }
-        });
-      } else {
-        clips.push({
-          id: `meme-add-${block.commentIndex}`,
-          trackId: "meme",
-          start: postVoiceStart,
-          duration: PLACEHOLDER_DURATION,
-          label: "+",
-          editable: true,
-          placeholder: true,
-          target: { kind: "meme", commentIndex: block.commentIndex }
+          target: {
+            kind: trackId,
+            commentIndex,
+            clipId
+          }
         });
       }
 
-      if (videoMeme) {
-        const overlay = block.overlays.find(
-          (item) => item.type === "meme" && isVideoAsset(item.file)
-        );
-        clips.push({
-          id: `video-${block.commentIndex}`,
-          trackId: "video",
-          start: entry.start + (overlay?.start ?? block.audioStart + block.audioDuration),
-          duration: overlay?.duration ?? PLACEHOLDER_DURATION,
-          label: formatClipLabel(videoMeme),
-          file: videoMeme,
-          editable: true,
-          placeholder: false,
-          target: { kind: "video", commentIndex: block.commentIndex }
-        });
-      } else {
-        clips.push({
-          id: `video-add-${block.commentIndex}`,
-          trackId: "video",
-          start: postVoiceStart,
-          duration: PLACEHOLDER_DURATION,
-          label: "+",
-          editable: true,
-          placeholder: true,
-          target: { kind: "video", commentIndex: block.commentIndex }
-        });
-      }
-
-      if (sfx) {
-        const overlay = block.overlays.find((item) => item.type === "sfx");
-        clips.push({
-          id: `sfx-${block.commentIndex}`,
-          trackId: "sfx",
-          start: entry.start + (overlay?.start ?? block.audioStart + block.audioDuration),
-          duration: overlay?.duration ?? PLACEHOLDER_DURATION,
-          label: formatClipLabel(sfx),
-          file: sfx,
-          editable: true,
-          placeholder: false,
-          target: { kind: "sfx", commentIndex: block.commentIndex }
-        });
-      } else if (!videoMeme) {
-        clips.push({
-          id: `sfx-add-${block.commentIndex}`,
-          trackId: "sfx",
-          start: postVoiceStart,
-          duration: PLACEHOLDER_DURATION,
-          label: "+",
-          editable: true,
-          placeholder: true,
-          target: { kind: "sfx", commentIndex: block.commentIndex }
-        });
-      }
+      clips.push(
+        ...overlayPlaceholders({
+          commentIndex,
+          memeStart: lastOverlayEnd(
+            block.overlays,
+            "meme",
+            entry.start,
+            postVoiceStart,
+            isTopic ? postVoiceStart : undefined
+          ),
+          videoStart: lastOverlayEnd(
+            block.overlays,
+            "video",
+            entry.start,
+            postVoiceStart,
+            isTopic ? postVoiceStart : undefined
+          ),
+          sfxStart: lastOverlayEnd(
+            block.overlays,
+            "sfx",
+            entry.start,
+            postVoiceStart,
+            isTopic ? postVoiceStart : undefined
+          ),
+          idPrefix: isTopic ? "topic" : undefined
+        })
+      );
     }
   }
 

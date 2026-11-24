@@ -57,7 +57,6 @@ import { suggestMemes } from "../ai/suggest-memes.js";
 import { autoFormat } from "../timeline/auto-format.js";
 import {
   clearCommentAnalysisAssets,
-  clearCommentMemesAndSfx,
   clearCommentReactionAssets,
   collectClearedOverlayKinds
 } from "../timeline/clear-comment-assets.js";
@@ -506,10 +505,7 @@ export function registerIpc(
           clearCommentReactionAssets(project.reactions, kinds)
         );
       }
-      return store.saveTimelineProjectAndLoad(
-        projectId,
-        clearCommentMemesAndSfx(source)
-      );
+      return store.rebuildTimeline(projectId);
     }
   );
 
@@ -887,7 +883,8 @@ export function registerIpc(
         project.analysis,
         assets,
         payload.target,
-        payload.assetId
+        payload.assetId,
+        project.timelineProject?.clips
       );
       await store.saveReactions(
         payload.projectId,

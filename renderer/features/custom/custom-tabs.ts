@@ -6,6 +6,10 @@ export const CUSTOM_TABS = [
   {
     id: "topic-title",
     label: "Topic Title"
+  },
+  {
+    id: "meme",
+    label: "Meme"
   }
 ] as const;
 

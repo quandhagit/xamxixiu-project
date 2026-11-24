@@ -33,6 +33,7 @@ import {
   previewFilesChanged
 } from "../../../src/timeline/persist";
 import type { TimelineProject } from "../../../src/timeline/project";
+import { createDefaultAnalysis } from "../../../src/ai/default-analysis";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
 import { Button } from "../ui/Button";
 import {
@@ -951,9 +952,13 @@ export function WorkflowWorkspace({
     target: AudioFailureTarget,
     voiceId: string
   ): void {
-    if (!selectedProject?.analysis) {
+    const content =
+      selectedProject?.content ??
+      selectedProject?.thread ??
+      draftContent;
+    if (!selectedProject || !content) {
       setError(
-        "Chưa có analysis. Hãy Analyze trước khi chọn voice."
+        "Chưa có content. Hãy capture thread trước khi chọn voice."
       );
       return;
     }
@@ -970,14 +975,20 @@ export function WorkflowWorkspace({
 
     const projectId = selectedProject.id;
     setSelectedProject((current) => {
-      if (!current?.analysis) {
+      if (!current) {
+        return current;
+      }
+
+      const nextContent =
+        current.content ?? current.thread ?? content;
+      if (!nextContent) {
         return current;
       }
 
       return {
         ...current,
         analysis: withVoiceAssignment(
-          current.analysis,
+          createDefaultAnalysis(nextContent, current.analysis),
           target,
           voiceId
         )

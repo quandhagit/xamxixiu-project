@@ -21,11 +21,33 @@ export interface MatchedReaction {
   commentIndex: number;
   emotion: ReactionEmotion;
   meme: Asset | null;
+  extraMemes?: Asset[];
   sfx: Asset | null;
+  extraSfx?: Asset[];
   animation: ReactionAnimation;
   duration: number;
   comboId?: string;
   comboLocked?: boolean;
+}
+
+export function resolveAssetsByIds(
+  ids: string[] | undefined,
+  assets: Asset[],
+  type: Asset["type"]
+): Asset[] {
+  if (!ids?.length) {
+    return [];
+  }
+  const found: Asset[] = [];
+  for (const id of ids) {
+    const asset = assets.find(
+      (candidate) => candidate.id === id && candidate.type === type
+    );
+    if (asset) {
+      found.push(asset);
+    }
+  }
+  return found;
 }
 
 function selectableOfType(
@@ -153,6 +175,23 @@ export function matchReactions(
     const query = [reaction.emotion, reaction.memeCategory, reaction.sfxCategory]
       .filter((value) => value && value !== "neutral")
       .join(" ");
+    const extraMemes = resolveAssetsByIds(
+      reaction.extraMemeAssetIds ??
+        previousByIndex.get(reaction.commentIndex)?.extraMemes?.map(
+          (item) => item.id
+        ),
+      assets,
+      "meme"
+    );
+    const extraSfx = resolveAssetsByIds(
+      reaction.extraSfxAssetIds ??
+        previousByIndex.get(reaction.commentIndex)?.extraSfx?.map(
+          (item) => item.id
+        ),
+      assets,
+      "sfx"
+    );
+
     let meme = pickRequestedAsset({
       requestedId: reaction.memeAssetId,
       category: reaction.memeCategory,
@@ -163,17 +202,18 @@ export function matchReactions(
       query
     });
 
-    let sfx = meme?.mediaKind === "video"
-      ? null
-      : pickRequestedAsset({
-        requestedId: reaction.sfxAssetId,
-        category: reaction.sfxCategory,
-        type: "sfx",
-        assets,
-        usedIds: usedSfxIds,
-        allowReuse: true,
-        query
-      });
+    let sfx = pickRequestedAsset({
+      requestedId: reaction.sfxAssetId,
+      category: reaction.sfxCategory,
+      type: "sfx",
+      assets,
+      usedIds: usedSfxIds,
+      allowReuse: true,
+      query
+    });
+    if (meme?.mediaKind === "video" && !reaction.sfxAssetId) {
+      sfx = null;
+    }
 
     if (meme?.mediaKind === "image" && !sfx) {
       sfx = pickUnusedAsset(
@@ -222,7 +262,9 @@ export function matchReactions(
       commentIndex: reaction.commentIndex,
       emotion: reaction.emotion,
       meme,
+      extraMemes,
       sfx,
+      extraSfx,
       animation: comboToReactionAnimation(applied.animation),
       duration: Math.max(1, applied.minDuration),
       comboId,

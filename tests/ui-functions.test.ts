@@ -89,6 +89,10 @@ import {
 } from "../src/timeline/clip-motion";
 import { videoTimelineToProject } from "../src/timeline/from-video-timeline";
 import {
+  sequenceCommentVisualClips,
+  sequenceMemeOverlays
+} from "../src/timeline/overlay-sequence";
+import {
   clipMutesVideoElement,
   cloneTimelineProject,
   createEmptyTimelineProject,
@@ -112,8 +116,18 @@ import {
 import {
   canMoveClipOnPreview,
   clampClipAxis,
-  clipPositionFromPointer
+  clipPositionFromPointer,
+  overlayRestLeftPercent,
+  overlayRestTopPercent
 } from "../src/timeline/clip-position";
+import { stackCommentPositions } from "../src/timeline/comment-stack";
+import {
+  applyMemeDefaultLayout,
+  clampMemeDefaultStyle,
+  DEFAULT_MEME_STYLE,
+  DEFAULT_OVERLAY_STYLE_DEFAULTS,
+  overlayStyleDefaultsFromSettings
+} from "../src/meme-style";
 import { applyMemeSuggestions } from "../src/ai/suggest-memes";
 import { sanitizeAnalysis } from "../src/assets/prompt-catalog";
 import {
@@ -210,6 +224,7 @@ import {
   withVoiceAssignment
 } from "../renderer/features/workflow/project-helpers";
 import { WORKFLOW_STEPS } from "../renderer/features/workflow/steps";
+import { pickPreviewMeme } from "../renderer/features/custom/preview-meme";
 import { createDefaultAnalysis } from "../src/ai/default-analysis";
 import {
   clampCommentCaptureStyle,
@@ -475,6 +490,17 @@ describe("workflow chrome", () => {
     assert.equal(kept.reactions[0]?.emotion, "laughing");
     assert.equal(kept.reactions[1]?.commentIndex, 1);
     assert.equal(kept.reactions[1]?.voiceId, "ngoc-huyen");
+
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/WorkflowWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(
+      workspace,
+      /createDefaultAnalysis\(nextContent, current\.analysis\)/
+    );
+    assert.doesNotMatch(workspace, /Chưa có analysis/);
+    assert.doesNotMatch(workspace, /Hãy Analyze/);
   });
 
   it("keeps the four workflow steps in pipeline order", () => {
@@ -500,6 +526,9 @@ describe("workflow chrome", () => {
       timeline,
       /\{toolbar\}\s*<TimelineTracks/s
     );
+    assert.match(timeline, /replacing \|\| loading/);
+    assert.match(timeline, /Đang cập nhật timeline/);
+    assert.match(timeline, /aria-busy="true"/);
   });
 
   it("blocks leaving Capture without a topic title and saves capture on next", () => {
@@ -842,7 +871,19 @@ describe("comment capture style", () => {
         border: 0,
         borderColor: "#ffffff",
         shadow: 13,
-        shadowColor: "#000000"
+        shadowColor: "#000000",
+        x: 0,
+        y: 0.5
+      }
+    );
+    assert.equal(DEFAULT_COMMENT_CAPTURE_STYLE.x, 0);
+    assert.equal(DEFAULT_COMMENT_CAPTURE_STYLE.y, 0.5);
+    assert.deepEqual(
+      clampCommentCaptureStyle({ x: 2, y: -3 }),
+      {
+        ...DEFAULT_COMMENT_CAPTURE_STYLE,
+        x: 1,
+        y: -1
       }
     );
     assert.equal(parseHexColor("#AbC"), "#aabbcc");
@@ -909,6 +950,10 @@ describe("comment capture style", () => {
     assert.match(workspace, /previewStageBoxStyle/);
     assert.match(workspace, /COMMENT_PREVIEW_WIDTH_FRACTION/);
     assert.match(workspace, /commentCaptureCardStyle\(style\)/);
+    assert.match(workspace, /overlayRestLeftPercent\(style\.x\)/);
+    assert.match(workspace, /overlayRestTopPercent\(style\.y\)/);
+    assert.match(workspace, /id="capture-x"/);
+    assert.match(workspace, /id="capture-y"/);
     assert.doesNotMatch(workspace, /CaptureStyleImage/);
     assert.match(workspace, /saveSettings/);
     assert.match(workspace, /commentCapture: next/);
@@ -1010,7 +1055,19 @@ describe("topic title style", () => {
         padding: 80,
         fontFamily: "Roboto, Arial, sans-serif",
         fontSize: 1,
-        color: "#aabbcc"
+        color: "#aabbcc",
+        x: 0,
+        y: TOPIC_TITLE_TRANSFORM_Y
+      }
+    );
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.x, 0);
+    assert.equal(DEFAULT_TOPIC_TITLE_STYLE.y, TOPIC_TITLE_TRANSFORM_Y);
+    assert.deepEqual(
+      clampTopicTitleStyle({ x: 4, y: -2 }),
+      {
+        ...DEFAULT_TOPIC_TITLE_STYLE,
+        x: 1,
+        y: -1
       }
     );
     assert.deepEqual(
@@ -1068,7 +1125,10 @@ describe("topic title style", () => {
     assert.match(workspace, /topicTitleCardStyle\(style\)/);
     assert.doesNotMatch(workspace, /CANVAS_CSS_PX_SCALE/);
     assert.match(workspace, /TOPIC_TITLE_WIDTH_FRACTION/);
-    assert.match(workspace, /TOPIC_TITLE_TRANSFORM_Y/);
+    assert.match(workspace, /overlayRestLeftPercent\(style\.x\)/);
+    assert.match(workspace, /overlayRestTopPercent\(style\.y\)/);
+    assert.match(workspace, /id="title-x"/);
+    assert.match(workspace, /id="title-y"/);
   });
 
   it("compiles title-card as live HTML CSS and leaves comment images alone", () => {
@@ -1511,6 +1571,131 @@ describe("topic title style", () => {
   });
 });
 
+describe("meme default style", () => {
+  it("clamps x, y, scale and fade in", () => {
+    assert.deepEqual(clampMemeDefaultStyle(undefined), DEFAULT_MEME_STYLE);
+    assert.equal(DEFAULT_MEME_STYLE.x, 0);
+    assert.equal(DEFAULT_MEME_STYLE.y, 0);
+    assert.equal(DEFAULT_MEME_STYLE.scale, 1);
+    assert.equal(DEFAULT_MEME_STYLE.fadeIn, 0);
+    assert.deepEqual(
+      clampMemeDefaultStyle({
+        x: 4,
+        y: -3,
+        scale: 0.05,
+        fadeIn: -1
+      }),
+      {
+        x: 1,
+        y: -1,
+        scale: 0.2,
+        fadeIn: 0
+      }
+    );
+    assert.deepEqual(
+      clampMemeDefaultStyle({
+        x: 0.25,
+        y: -0.4,
+        scale: 2,
+        fadeIn: 9
+      }),
+      {
+        x: 0.25,
+        y: -0.4,
+        scale: 1.2,
+        fadeIn: 5
+      }
+    );
+  });
+
+  it("renders Meme controls and live preview", () => {
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/CustomWorkspace.tsx"),
+      "utf8"
+    );
+    const tabs = readFileSync(
+      path.join(repoRoot, "renderer/features/custom/custom-tabs.ts"),
+      "utf8"
+    );
+    assert.match(tabs, /id: "meme"/);
+    assert.match(tabs, /Meme/);
+    assert.match(workspace, /meme: next/);
+    assert.match(workspace, /MEME_STYLE_CHANGED/);
+    assert.match(workspace, /id="meme-x"/);
+    assert.match(workspace, /id="meme-y"/);
+    assert.match(workspace, /id="meme-scale"/);
+    assert.match(workspace, /id="meme-fade-in"/);
+    assert.match(workspace, /overlayRestLeftPercent\(style\.x\)/);
+    assert.match(workspace, /overlayRestTopPercent\(style\.y\)/);
+    assert.match(workspace, /listAssets/);
+    assert.match(workspace, /getAssetPreview/);
+    assert.match(workspace, /pickPreviewMeme/);
+    assert.match(workspace, /alt="Preview meme"/);
+  });
+
+  it("picks a sample library image for the meme preview", () => {
+    const happy = {
+      id: "happy-sample",
+      type: "meme",
+      mediaKind: "image",
+      file: "assets/memes/happy/_sample.jpg"
+    };
+    const angry = {
+      id: "angry-sample",
+      type: "meme",
+      mediaKind: "image",
+      file: "assets/memes/angry/_sample.jpg"
+    };
+    const video = {
+      id: "video-meme",
+      type: "meme",
+      mediaKind: "video",
+      file: "assets/memes/video/clip.mp4"
+    };
+    const other = {
+      id: "laughing-01",
+      type: "meme",
+      mediaKind: "image",
+      file: "assets/memes/laughing/laughing-01.jpg"
+    };
+    assert.equal(
+      pickPreviewMeme([video, other, angry, happy])?.id,
+      "happy-sample"
+    );
+    assert.equal(pickPreviewMeme([video, other, angry])?.id, "angry-sample");
+    assert.equal(pickPreviewMeme([video, other])?.id, "laughing-01");
+    assert.equal(pickPreviewMeme([video]), undefined);
+  });
+
+  it("applies custom layout to none combos and keeps punch fade in", () => {
+    const defaults = {
+      x: 0.2,
+      y: -0.1,
+      scale: 0.8,
+      fadeIn: 0.15
+    };
+    const none = applyMemeDefaultLayout(
+      applyCombo({ file: "meme.png" }, getBuiltinCombo("none")),
+      defaults,
+      { keepComboFadeIn: false }
+    );
+    assert.equal(none.x, 0.2);
+    assert.equal(none.y, -0.1);
+    assert.equal(none.scale, 0.8);
+    assert.equal(none.fadeIn, 0.15);
+
+    const punch = applyCombo({ file: "meme.png" }, getBuiltinCombo("punch"));
+    const laid = applyMemeDefaultLayout(punch, defaults, {
+      keepComboFadeIn: true
+    });
+    assert.equal(laid.x, 0.2);
+    assert.equal(laid.y, -0.1);
+    assert.equal(laid.scale, 0.8);
+    assert.equal(laid.fadeIn, punch.fadeIn);
+    assert.equal(laid.animation, "zoom-in");
+  });
+});
+
 describe("voice assignment", () => {
   it("updates topic, title, and comment voices without touching the others", () => {
     const base = analysis({
@@ -1549,6 +1734,20 @@ describe("voice assignment", () => {
     const commentVoice = withVoiceAssignment(base, "comment-1", "minh-hoang");
     assert.equal(commentVoice.reactions[0].voiceId, "c");
     assert.equal(commentVoice.reactions[1].voiceId, "minh-hoang");
+  });
+
+  it("assigns a comment voice before any AI voice step has run", () => {
+    const seeded = createDefaultAnalysis({
+      topicTitle: "Hello",
+      comments: [comment("one"), comment("two")]
+    });
+    const next = withVoiceAssignment(seeded, "comment-1", "minh-hoang");
+    assert.equal(next.reactions[1]?.voiceId, "minh-hoang");
+
+    const empty = analysis({ reactions: [] });
+    const created = withVoiceAssignment(empty, "comment-0", "nam-khang");
+    assert.equal(created.reactions[0]?.commentIndex, 0);
+    assert.equal(created.reactions[0]?.voiceId, "nam-khang");
   });
 });
 
@@ -1745,9 +1944,17 @@ describe("timeline tracks", () => {
     assert.equal(byId.voice.clips.length, 2);
     const meme = byId.meme.clips.find((clip) => clip.file === "meme.png");
     assert.equal(meme?.editable, true);
-    assert.deepEqual(meme?.target, { kind: "meme", commentIndex: 0 });
+    assert.deepEqual(meme?.target, {
+      kind: "meme",
+      commentIndex: 0,
+      clipId: meme?.id
+    });
     const sfx = byId.sfx.clips.find((clip) => clip.file === "boom.mp3");
-    assert.deepEqual(sfx?.target, { kind: "sfx", commentIndex: 0 });
+    assert.deepEqual(sfx?.target, {
+      kind: "sfx",
+      commentIndex: 0,
+      clipId: sfx?.id
+    });
   });
 
   it("only allows removing meme, video, sfx, topic, and beep clips", () => {
@@ -1834,17 +2041,41 @@ describe("timeline tracks", () => {
     assert.equal(clipOpensAssetPicker(background!), true);
     assert.equal(canRemoveTimelineAsset(background!.target!), false);
 
-    assert.deepEqual(meme?.target, { kind: "meme", commentIndex: 0 });
+    assert.deepEqual(meme?.target, {
+      kind: "meme",
+      commentIndex: 0,
+      clipId: meme?.id
+    });
     assert.equal(clipOpensAssetPicker(meme!), true);
     assert.equal(canRemoveTimelineAsset(meme!.target!), true);
 
-    assert.deepEqual(video?.target, { kind: "video", commentIndex: 0 });
+    assert.deepEqual(video?.target, {
+      kind: "video",
+      commentIndex: 0,
+      clipId: video?.id
+    });
     assert.equal(clipOpensAssetPicker(video!), true);
     assert.equal(canRemoveTimelineAsset(video!.target!), true);
 
-    assert.deepEqual(sfx?.target, { kind: "sfx", commentIndex: 0 });
+    assert.deepEqual(sfx?.target, {
+      kind: "sfx",
+      commentIndex: 0,
+      clipId: sfx?.id
+    });
     assert.equal(clipOpensAssetPicker(sfx!), true);
     assert.equal(canRemoveTimelineAsset(sfx!.target!), true);
+    assert.equal(
+      byId.meme?.clips.some((clip) => clip.id === "meme-add-0" && clip.placeholder),
+      true
+    );
+    assert.equal(
+      byId.video?.clips.some((clip) => clip.id === "video-add-0" && clip.placeholder),
+      true
+    );
+    assert.equal(
+      byId.sfx?.clips.some((clip) => clip.id === "sfx-add-0" && clip.placeholder),
+      true
+    );
 
     assert.equal(clipOpensAssetPicker(voice!), false);
     assert.equal(
@@ -1872,7 +2103,7 @@ describe("timeline tracks", () => {
         kind: "video",
         commentIndex: 2
       }),
-      { kind: "video", commentIndex: 2 }
+      { kind: "video", commentIndex: 2, clipId: "video-1" }
     );
   });
 
@@ -1947,7 +2178,7 @@ describe("timeline tracks", () => {
     assert.equal(clipOpensAssetPicker(memeAdd!), true);
   });
 
-  it("does not add a topic-post meme placeholder when one already exists", () => {
+  it("keeps a topic-post meme placeholder after one already exists", () => {
     const source = timeline();
     const topic = source.scenes[0];
     if (topic) {
@@ -1968,27 +2199,137 @@ describe("timeline tracks", () => {
     assert.equal(postMeme?.trackId, "meme");
     const tracks = getProjectTracks(project);
     const memeTrack = tracks.find((track) => track.id === "meme");
-    assert.equal(
-      memeTrack?.clips.some((clip) => clip.id === "meme-add-topic"),
-      false
-    );
+    const add = memeTrack?.clips.find((clip) => clip.id === "meme-add-topic");
+    assert.equal(add?.placeholder, true);
+    assert.ok((add?.start ?? 0) >= (postMeme?.start ?? 0) + (postMeme?.duration ?? 0) - 0.0001);
     assert.equal(
       memeTrack?.clips.some((clip) => clip.file === "after-topic.png"),
       true
     );
   });
 
-  it("does not add a meme placeholder when that comment already has a meme", () => {
+  it("keeps a meme placeholder when that comment already has a meme", () => {
     const tracks = getProjectTracks(videoTimelineToProject(timeline()));
     const memeTrack = tracks.find((track) => track.id === "meme");
-    assert.equal(
-      memeTrack?.clips.some((clip) => clip.id === "meme-add-0"),
-      false
-    );
+    const existing = memeTrack?.clips.find((clip) => clip.file === "meme.png");
+    const add = memeTrack?.clips.find((clip) => clip.id === "meme-add-0");
+    assert.equal(add?.placeholder, true);
+    assert.ok((add?.start ?? 0) >= (existing?.start ?? 0) + (existing?.duration ?? 0) - 0.0001);
     assert.equal(
       memeTrack?.clips.some((clip) => clip.file === "meme.png"),
       true
     );
+  });
+
+  it("gives unique clip ids when a comment has two overlays of the same type", () => {
+    const source = timeline();
+    const comment = source.scenes[1];
+    if (comment) {
+      comment.overlays = [
+        { type: "meme", file: "meme.png", start: 1.5, duration: 0.5 },
+        { type: "meme", file: "meme.png", start: 2, duration: 0.5 },
+        { type: "sfx", file: "boom.mp3", start: 1.5, duration: 0.4 },
+        { type: "sfx", file: "boom.mp3", start: 2, duration: 0.4 }
+      ];
+    }
+    const project = videoTimelineToProject(source);
+    const memeIds = project.clips
+      .filter((clip) => clip.trackId === "meme" && clip.commentIndex === 0)
+      .map((clip) => clip.id);
+    const sfxIds = project.clips
+      .filter((clip) => clip.trackId === "sfx" && clip.commentIndex === 0)
+      .map((clip) => clip.id);
+    assert.equal(memeIds.length, 2);
+    assert.equal(new Set(memeIds).size, 2);
+    assert.equal(sfxIds.length, 2);
+    assert.equal(new Set(sfxIds).size, 2);
+    const topic = source.scenes[0];
+    if (topic) {
+      topic.overlays = [
+        {
+          type: "meme",
+          file: "after-topic.png",
+          start: topic.audioStart + topic.audioDuration,
+          duration: 1
+        },
+        {
+          type: "meme",
+          file: "after-topic.png",
+          start: topic.audioStart + topic.audioDuration + 1,
+          duration: 1
+        }
+      ];
+    }
+    const withTopic = videoTimelineToProject(source);
+    const topicIds = withTopic.clips
+      .filter((clip) => clip.commentIndex === TOPIC_POST_COMMENT_INDEX)
+      .map((clip) => clip.id);
+    assert.equal(topicIds.length, 2);
+    assert.equal(new Set(topicIds).size, 2);
+  });
+
+  it("places a later meme immediately after the previous meme", () => {
+    const overlays = [
+      { type: "meme", start: 1.5, duration: 1.2 },
+      { type: "meme", start: 1.5, duration: 1 },
+      { type: "sfx", start: 1.5, duration: 3 }
+    ];
+    sequenceMemeOverlays(overlays);
+    assert.equal(overlays[0]?.start, 1.5);
+    assert.equal(overlays[0]?.duration, 3);
+    assert.equal(overlays[1]?.start, 4.5);
+    assert.equal(overlays[1]?.duration, 1);
+    assert.equal(overlays[2]?.start, 1.5);
+    assert.equal(overlays[2]?.duration, 3);
+
+    const source = timeline();
+    const comment = source.scenes[1];
+    if (comment) {
+      comment.overlays = [
+        { type: "meme", file: "first.png", start: 1.5, duration: 1.2 },
+        { type: "meme", file: "second.png", start: 1.5, duration: 1 }
+      ];
+    }
+    const project = videoTimelineToProject(source);
+    const memes = project.clips
+      .filter((clip) => clip.trackId === "meme" && clip.commentIndex === 0)
+      .sort((left, right) => left.start - right.start);
+    assert.equal(memes.length, 2);
+    assert.equal(memes[1]?.start, (memes[0]?.start ?? 0) + (memes[0]?.duration ?? 0));
+    sequenceCommentVisualClips(project.clips);
+    const again = project.clips
+      .filter((clip) => clip.trackId === "meme" && clip.commentIndex === 0)
+      .sort((left, right) => left.start - right.start);
+    assert.equal(again[1]?.start, (again[0]?.start ?? 0) + (again[0]?.duration ?? 0));
+  });
+
+  it("matches each extra meme duration to its paired sfx, or the default", () => {
+    const overlays = [
+      { type: "meme", start: 2, duration: 1 },
+      { type: "meme", start: 2, duration: 1 },
+      { type: "meme", start: 2, duration: 1 },
+      { type: "sfx", start: 2, duration: 1.6 },
+      { type: "sfx", start: 2, duration: 0.8 }
+    ];
+    sequenceMemeOverlays(overlays);
+    assert.equal(overlays[0]?.duration, 1.6);
+    assert.equal(overlays[0]?.start, 2);
+    assert.equal(overlays[3]?.start, 2);
+    assert.equal(overlays[1]?.duration, 0.8);
+    assert.equal(overlays[1]?.start, 3.6);
+    assert.equal(overlays[4]?.start, 3.6);
+    assert.equal(overlays[2]?.duration, 1);
+    assert.equal(overlays[2]?.start, 4.4);
+  });
+
+  it("does not snap sfx-only overlays to the start of the video", () => {
+    const overlays = [
+      { type: "sfx", start: 2.4, duration: 0.8 },
+      { type: "sfx", start: 2.4, duration: 0.5 }
+    ];
+    sequenceMemeOverlays(overlays);
+    assert.equal(overlays[0]?.start, 2.4);
+    assert.equal(overlays[1]?.start, 3.2);
   });
 
   it("keeps a title-card clip when topic intro has no Open SFX", () => {
@@ -2020,6 +2361,60 @@ describe("timeline tracks", () => {
       ),
       true
     );
+  });
+
+  it("uses custom title x/y on first build and keeps previous title position", () => {
+    const source = timeline({
+      topicIntro: {
+        case: "short",
+        title: "Hello title",
+        titleVoiceDuration: 0,
+        titleCardFile: "processed/topic-title-card.png",
+        animationDuration: 0.35,
+        blocksDuration: 2,
+        captureStart: 0
+      }
+    });
+    const defaults = {
+      ...DEFAULT_OVERLAY_STYLE_DEFAULTS,
+      titleX: 0.15,
+      titleY: 0.4
+    };
+    const first = videoTimelineToProject(source, undefined, defaults);
+    const title = first.clips.find((clip) => clip.id === "title-card");
+    assert.equal(title?.x, 0.15);
+    assert.equal(title?.y, 0.4);
+
+    const previous = cloneTimelineProject(first);
+    const previousTitle = previous.clips.find((clip) => clip.id === "title-card");
+    if (previousTitle) {
+      previousTitle.x = -0.2;
+      previousTitle.y = -0.3;
+    }
+    const rebuilt = videoTimelineToProject(source, previous, defaults);
+    const kept = rebuilt.clips.find((clip) => clip.id === "title-card");
+    assert.equal(kept?.x, -0.2);
+    assert.equal(kept?.y, -0.3);
+  });
+
+  it("stacks child comments below the parent using the same x", () => {
+    assert.equal(overlayRestLeftPercent(0), 50);
+    assert.equal(overlayRestTopPercent(0.5), 25);
+    const stacked = stackCommentPositions([200, 150], 0.2, 0.5);
+    assert.equal(stacked[0]?.x, 0.2);
+    assert.equal(stacked[0]?.y, 0.5);
+    assert.equal(stacked[1]?.x, 0.2);
+    assert.ok((stacked[1]?.y ?? 0) < 0.5);
+    const fromSettings = overlayStyleDefaultsFromSettings({
+      commentCapture: { x: 0.1, y: 0.4 },
+      topicTitle: { x: -0.2, y: 0.3 },
+      meme: { x: 0.05, y: -0.1, scale: 0.9, fadeIn: 0.2 }
+    });
+    assert.equal(fromSettings.commentX, 0.1);
+    assert.equal(fromSettings.commentY, 0.4);
+    assert.equal(fromSettings.titleX, -0.2);
+    assert.equal(fromSettings.titleY, 0.3);
+    assert.equal(fromSettings.meme.scale, 0.9);
   });
 });
 
@@ -2171,10 +2566,22 @@ describe("asset picker", () => {
     );
     assert.equal(
       selectedAssetId({ kind: "sfx", commentIndex: 0 }, current, reactions),
-      "sfx-1"
+      undefined
     );
     assert.equal(
       selectedAssetId({ kind: "meme", commentIndex: 0 }, current, reactions),
+      undefined
+    );
+    assert.equal(
+      selectedAssetId(
+        { kind: "meme", commentIndex: 0, clipId: "meme-0" },
+        current,
+        reactions,
+        {
+          clips: [{ id: "meme-0", file: "meme-img.bin" }],
+          assets: library
+        }
+      ),
       "meme-img"
     );
     assert.equal(
@@ -2231,6 +2638,108 @@ describe("asset picker", () => {
     );
     assert.equal(video.selections?.topicPostMemeId, "meme-vid");
     assert.equal(video.selections?.topicPostSfxId, null);
+  });
+
+  it("appends extra meme, video, and sfx instead of replacing the primary slot", () => {
+    const first = applyTimelineAssetReplacement(
+      [],
+      analysis(),
+      library,
+      { kind: "meme", commentIndex: 0 },
+      "meme-img"
+    );
+    assert.equal(first.reactions[0]?.meme?.id, "meme-img");
+    const second = applyTimelineAssetReplacement(
+      first.reactions,
+      analysis(),
+      library,
+      { kind: "meme", commentIndex: 0 },
+      "meme-img"
+    );
+    assert.equal(second.reactions[0]?.meme?.id, "meme-img");
+    assert.equal(second.reactions[0]?.extraMemes?.[0]?.id, "meme-img");
+    const withVideo = applyTimelineAssetReplacement(
+      second.reactions,
+      analysis(),
+      library,
+      { kind: "video", commentIndex: 0 },
+      "meme-vid"
+    );
+    assert.equal(withVideo.reactions[0]?.meme?.id, "meme-img");
+    assert.equal(
+      withVideo.reactions[0]?.extraMemes?.map((item) => item.id).join(","),
+      "meme-img,meme-vid"
+    );
+    const withSfx = applyTimelineAssetReplacement(
+      withVideo.reactions,
+      analysis(),
+      library,
+      { kind: "sfx", commentIndex: 0 },
+      "sfx-1"
+    );
+    assert.ok(withSfx.reactions[0]?.sfx);
+    const extraSfx = applyTimelineAssetReplacement(
+      withSfx.reactions,
+      analysis(),
+      library,
+      { kind: "sfx", commentIndex: 0 },
+      "sfx-1"
+    );
+    assert.equal(extraSfx.reactions[0]?.extraSfx?.[0]?.id, "sfx-1");
+  });
+
+  it("replaces or removes only the clip matching clipId", () => {
+    const seeded = applyTimelineAssetReplacement(
+      applyTimelineAssetReplacement(
+        [],
+        analysis(),
+        library,
+        { kind: "meme", commentIndex: 0 },
+        "meme-img"
+      ).reactions,
+      analysis(),
+      library,
+      { kind: "meme", commentIndex: 0 },
+      "meme-img"
+    );
+    const extra = seeded.reactions[0]?.extraMemes?.[0];
+    assert.ok(extra);
+    const clips = [
+      {
+        id: "meme-primary",
+        file: seeded.reactions[0]!.meme!.file,
+        trackId: "meme",
+        commentIndex: 0,
+        start: 1
+      },
+      {
+        id: "meme-extra",
+        file: extra.file,
+        trackId: "meme",
+        commentIndex: 0,
+        start: 2
+      }
+    ];
+    const replaced = applyTimelineAssetReplacement(
+      seeded.reactions,
+      analysis(),
+      library,
+      { kind: "meme", commentIndex: 0, clipId: "meme-extra" },
+      "meme-img",
+      clips
+    );
+    assert.equal(replaced.reactions[0]?.meme?.id, "meme-img");
+    assert.equal(replaced.reactions[0]?.extraMemes?.[0]?.id, "meme-img");
+    const removed = applyTimelineAssetReplacement(
+      replaced.reactions,
+      analysis(),
+      library,
+      { kind: "meme", commentIndex: 0, clipId: "meme-extra" },
+      null,
+      clips
+    );
+    assert.equal(removed.reactions[0]?.meme?.id, "meme-img");
+    assert.equal(removed.reactions[0]?.extraMemes?.length ?? 0, 0);
   });
 });
 
@@ -2578,6 +3087,7 @@ describe("builtin meme combos", () => {
     assert.equal(getBuiltinCombo("shock").name, "Shake");
     assert.equal(getBuiltinCombo("soft").name, "Fade in");
     assert.equal(getBuiltinCombo("none").name, "None");
+    assert.equal(getBuiltinCombo("none").fadeIn, 0);
     const baked = applyCombo({ file: "meme.png" }, punch);
     assert.equal(baked.scale, 1);
     assert.equal(baked.x, 0);
@@ -3052,6 +3562,23 @@ describe("clear comment overlays", () => {
     assert.equal(cleared.topicMemeId, "topic-card");
     assert.equal(cleared.topicPostMemeId, null);
     assert.equal(cleared.topicPostSfxId, null);
+  });
+
+  it("rebuilds the timeline after clearing comment memes in IPC", () => {
+    const ipc = readFileSync(
+      path.join(repoRoot, "src/electron/ipc.ts"),
+      "utf8"
+    );
+    const handler = ipc.slice(
+      ipc.indexOf('"project:clear-comment-memes"')
+    );
+    assert.match(handler, /clearCommentAnalysisAssets/);
+    assert.match(handler, /clearCommentReactionAssets/);
+    assert.match(handler, /store\.rebuildTimeline\(projectId\)/);
+    assert.doesNotMatch(
+      handler.slice(0, handler.indexOf("project:save-timeline-project")),
+      /saveTimelineProjectAndLoad/
+    );
   });
 });
 

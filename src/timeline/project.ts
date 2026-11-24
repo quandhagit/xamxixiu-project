@@ -61,7 +61,7 @@ export const DEFAULT_AUTO_FORMAT: AutoFormatSettings = {
   memeGap: 0.1,
   memeMinDuration: 1,
   memeMaxDuration: 4,
-  fadeIn: 0.3,
+  fadeIn: 0,
   fadeOut: 0.3,
   preserveLocked: true,
   rippleVoiceTrim: true
