@@ -126,8 +126,25 @@ export function WorkflowWorkspace({
   const pendingTopicTitleSave = useRef(
     Promise.resolve()
   );
+  const pendingContentSave = useRef(
+    Promise.resolve()
+  );
+  const contentSaveTimerRef = useRef<number | null>(
+    null
+  );
   const draftTopicTitleRef = useRef(draftTopicTitle);
   draftTopicTitleRef.current = draftTopicTitle;
+  const selectedProjectRef = useRef(selectedProject);
+  selectedProjectRef.current = selectedProject;
+  const draftContentRef = useRef(draftContent);
+  draftContentRef.current = draftContent;
+  const imageSlotsRef = useRef(imageSlots);
+  imageSlotsRef.current = imageSlots;
+  const suppressAutoSaveRef = useRef(true);
+
+  function suppressNextAutoSave(): void {
+    suppressAutoSaveRef.current = true;
+  }
 
   const currentIndex = WORKFLOW_STEPS.indexOf(
     currentStep
@@ -415,6 +432,7 @@ export function WorkflowWorkspace({
         );
       setSelectedProject(project);
       if (project) {
+        suppressNextAutoSave();
         const content =
           project.content ?? project.thread;
         setDraftContent(content);
@@ -460,6 +478,7 @@ export function WorkflowWorkspace({
         );
       const content =
         project.content ?? project.thread;
+      suppressNextAutoSave();
       setSelectedProject(project);
       setDraftContent(content);
       setImageSlots(
@@ -553,61 +572,90 @@ export function WorkflowWorkspace({
   async function persistDraft(): Promise<
     ProjectState | undefined
   > {
-    if (!selectedProject || !draftContent) {
+    const currentProject = selectedProjectRef.current;
+    const currentContent = draftContentRef.current;
+    const currentSlots = imageSlotsRef.current;
+
+    if (!currentProject || !currentContent) {
       return undefined;
     }
 
+    const reordered = currentSlots.some(
+      (value, index) => value !== index
+    );
     const project =
       await window.xamxixiu.updateContent({
-        projectId: selectedProject.id,
+        projectId: currentProject.id,
         content: {
-          ...draftContent,
+          ...currentContent,
           topicTitle: normalizeTopicTitle(
             draftTopicTitleRef.current
           )
         },
-        imageOrder: imageSlots
+        imageOrder: currentSlots
       });
     const saved =
-      project.content ?? draftContent;
+      project.content ?? currentContent;
 
-    setImageSlots(
-      identityImageSlots(saved.comments.length)
-    );
-    await loadCaptureAssets(project);
+    if (reordered) {
+      suppressNextAutoSave();
+      setImageSlots(
+        identityImageSlots(saved.comments.length)
+      );
+      await loadCaptureAssets(project);
+    }
 
     return project;
   }
 
-  async function saveContent(): Promise<void> {
-    if (!selectedProject || !draftContent) {
+  useEffect(() => {
+    if (
+      currentStep !== "CAPTURE" ||
+      !selectedProject ||
+      !draftContent
+    ) {
       return;
     }
 
-    setError(undefined);
-    setOperationLoading(true);
-
-    try {
-      const project = await persistDraft();
-
-      if (!project) {
-        return;
-      }
-
-      setSelectedProject(project);
-      setDraftContent(
-        project.content ?? draftContent
-      );
-    } catch (reason: unknown) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Không thể lưu nội dung."
-      );
-    } finally {
-      setOperationLoading(false);
+    if (suppressAutoSaveRef.current) {
+      suppressAutoSaveRef.current = false;
+      return;
     }
-  }
+
+    if (contentSaveTimerRef.current !== null) {
+      window.clearTimeout(contentSaveTimerRef.current);
+    }
+
+    contentSaveTimerRef.current = window.setTimeout(() => {
+      contentSaveTimerRef.current = null;
+      pendingContentSave.current = pendingContentSave.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await persistDraft();
+          } catch (reason: unknown) {
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "Không thể lưu nội dung."
+            );
+          }
+        });
+    }, 450);
+
+    return () => {
+      if (contentSaveTimerRef.current !== null) {
+        window.clearTimeout(contentSaveTimerRef.current);
+        contentSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    currentStep,
+    selectedProject,
+    draftContent,
+    imageSlots,
+    draftTopicTitle
+  ]);
 
   async function resetContent(): Promise<void> {
     if (!selectedProject) {
@@ -615,7 +663,7 @@ export function WorkflowWorkspace({
     }
 
     const confirmed = window.confirm(
-      "Khôi phục nội dung đã lưu? Thứ tự kéo thả, comment thêm và sửa chưa lưu sẽ bị hủy."
+      "Reset về lúc mới capture? Mọi sửa, gộp, ẩn và comment thêm sẽ bị hủy."
     );
 
     if (!confirmed) {
@@ -644,6 +692,7 @@ export function WorkflowWorkspace({
       const saved =
         project.content ?? project.thread;
 
+      suppressNextAutoSave();
       setSelectedProject(project);
       setDraftContent(
         saved ? cloneContent(saved) : undefined
@@ -653,6 +702,8 @@ export function WorkflowWorkspace({
           saved?.comments.length ?? 0
         )
       );
+      setDraftTopicTitle(saved?.topicTitle ?? "");
+      setTextDiffs([]);
       await loadCaptureAssets(project);
     } catch (reason: unknown) {
       setError(
@@ -749,10 +800,16 @@ export function WorkflowWorkspace({
       setTitleMissing(false);
       setOperationLoading(true);
       try {
+        if (contentSaveTimerRef.current !== null) {
+          window.clearTimeout(contentSaveTimerRef.current);
+          contentSaveTimerRef.current = null;
+        }
+        await pendingContentSave.current.catch(() => undefined);
         const saved = await persistDraft();
         if (!saved) {
           return;
         }
+        suppressNextAutoSave();
         setSelectedProject(saved);
         setDraftContent(saved.content ?? draftContent);
         await persistTopicTitle(saved);
@@ -819,6 +876,7 @@ export function WorkflowWorkspace({
       setSelectedProject(curated);
 
       if (content) {
+        suppressNextAutoSave();
         setDraftContent(cloneContent(content));
         setImageSlots(
           identityImageSlots(content.comments.length)
@@ -1256,9 +1314,6 @@ export function WorkflowWorkspace({
                   }}
                   onCurate={() => {
                     void curateProject();
-                  }}
-                  onSave={() => {
-                    void saveContent();
                   }}
                   onTopicTextChange={(text) => {
                     if (!draftContent) {

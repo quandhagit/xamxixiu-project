@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import {
   DEFAULT_COMMENT_CAPTURE_STYLE,
   type CommentCaptureStyle
@@ -11,6 +12,8 @@ import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
 import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
 import { CaptureComments } from "../capture/CaptureComments";
 import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
+import { Input } from "../ui/Input";
 import { Panel } from "../ui/Panel";
 import { Textarea } from "../ui/Textarea";
 import { cn } from "../ui/cn";
@@ -30,7 +33,6 @@ export function CaptureStep({
   textDiffs,
   onReset,
   onCurate,
-  onSave,
   onTopicTextChange,
   onCommentsChange,
   onAddComment,
@@ -55,7 +57,6 @@ export function CaptureStep({
   textDiffs: SpeechTextDiff[];
   onReset: () => void;
   onCurate: () => void;
-  onSave: () => void;
   onTopicTextChange: (text: string) => void;
   onCommentsChange: (
     comments: ContentData["comments"],
@@ -71,6 +72,9 @@ export function CaptureStep({
 }): React.ReactElement {
   const titlePanelRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [replyUrl, setReplyUrl] = useState("");
 
   useEffect(() => {
     if (!titleInvalid) {
@@ -82,6 +86,37 @@ export function CaptureStep({
     });
     titleInputRef.current?.focus();
   }, [titleInvalid, titleInvalidNonce]);
+
+  useEffect(() => {
+    if (!addOpen) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      addInputRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [addOpen]);
+
+  function closeAddDialog(): void {
+    setAddOpen(false);
+  }
+
+  function handleAddComment(
+    event: FormEvent<HTMLFormElement>
+  ): void {
+    event.preventDefault();
+    const nextUrl = replyUrl.trim();
+
+    if (!nextUrl || addCommentLoading) {
+      return;
+    }
+
+    onAddComment(nextUrl);
+    setReplyUrl("");
+    setAddOpen(false);
+  }
 
   return (
     <div className="space-y-3">
@@ -117,13 +152,69 @@ export function CaptureStep({
           <Button
             variant="primary"
             size="sm"
-            onClick={onSave}
-            disabled={!draftContent || operationLoading}
+            onClick={() => setAddOpen(true)}
+            disabled={
+              !hasProject ||
+              !draftContent ||
+              addCommentLoading ||
+              operationLoading
+            }
           >
-            Lưu nội dung
+            {addCommentLoading ? "Đang thêm..." : "Thêm comment"}
           </Button>
         </div>
       </div>
+      <Dialog
+        open={addOpen}
+        onClose={closeAddDialog}
+        className="max-w-lg"
+        labelledBy="add-comment-title"
+      >
+        <form onSubmit={handleAddComment}>
+          <div className="border-b border-line px-4 py-3">
+            <h3
+              id="add-comment-title"
+              className="text-sm font-medium text-ink"
+            >
+              Thêm comment
+            </h3>
+            <p className="mt-0.5 text-[12px] text-ink-3">
+              Dán link reply Threads để capture thêm.
+            </p>
+          </div>
+          <div className="px-4 py-3">
+            <Input
+              ref={addInputRef}
+              value={replyUrl}
+              onChange={(event) =>
+                setReplyUrl(event.target.value)
+              }
+              placeholder="Dán link reply Threads"
+            />
+          </div>
+          <div className="flex justify-end gap-1.5 border-t border-line px-4 py-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={closeAddDialog}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={
+                addCommentLoading ||
+                replyUrl.trim().length === 0
+              }
+            >
+              Thêm
+            </Button>
+          </div>
+        </form>
+      </Dialog>
 
       {draftContent ? (
         <>
@@ -252,9 +343,7 @@ export function CaptureStep({
             imageSlots={imageSlots}
             assets={captureAssets}
             captureStyle={captureStyle}
-            addLoading={addCommentLoading}
             onChange={onCommentsChange}
-            onAdd={onAddComment}
           />
         </>
       ) : null}

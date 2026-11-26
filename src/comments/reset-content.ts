@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type {
-  ContentData
+  ContentData,
+  ThreadAnalysis,
+  ThreadData
 } from "../types.js";
+
+const ORIGINAL_COMMENT_DIR = "capture-original";
+const COMMENT_PNG = /^comment-(\d+)\.png$/i;
+const COMMENT_MP3 = /^comment-(\d+)\.mp3$/i;
 
 function errorCode(error: unknown): string | undefined {
   if (
@@ -100,16 +106,158 @@ export async function discardUnsavedCommentFiles(
 
   await discardFilesFrom(
     path.join(projectDirectory, "processed"),
-    /^comment-(\d+)\.png$/i,
+    COMMENT_PNG,
     (value) => Number(value) - 1,
     savedCount
   );
   await discardFilesFrom(
     path.join(projectDirectory, "audio"),
-    /^comment-(\d+)\.mp3$/i,
+    COMMENT_MP3,
     (value) => Number(value),
     savedCount
   );
 
   return savedCount;
+}
+
+async function directoryExists(
+  directory: string
+): Promise<boolean> {
+  try {
+    const stats = await fs.stat(directory);
+    return stats.isDirectory();
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+export async function snapshotOriginalCommentImages(
+  projectDirectory: string
+): Promise<void> {
+  const snapshotDirectory = path.join(
+    projectDirectory,
+    ORIGINAL_COMMENT_DIR
+  );
+
+  if (await directoryExists(snapshotDirectory)) {
+    return;
+  }
+
+  const processedDirectory = path.join(
+    projectDirectory,
+    "processed"
+  );
+  let entries: string[];
+
+  try {
+    entries = await fs.readdir(processedDirectory);
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  }
+
+  await fs.mkdir(snapshotDirectory, { recursive: true });
+
+  for (const file of entries) {
+    if (!/^comment-\d+\.png$/i.test(file)) {
+      continue;
+    }
+
+    await fs.copyFile(
+      path.join(processedDirectory, file),
+      path.join(snapshotDirectory, file)
+    );
+  }
+}
+
+async function restoreOriginalCommentImages(
+  projectDirectory: string,
+  originalCount: number
+): Promise<void> {
+  const snapshotDirectory = path.join(
+    projectDirectory,
+    ORIGINAL_COMMENT_DIR
+  );
+  const processedDirectory = path.join(
+    projectDirectory,
+    "processed"
+  );
+
+  if (await directoryExists(snapshotDirectory)) {
+    const entries = await fs.readdir(snapshotDirectory);
+    await fs.mkdir(processedDirectory, { recursive: true });
+
+    for (const file of entries) {
+      if (!/^comment-\d+\.png$/i.test(file)) {
+        continue;
+      }
+
+      await fs.copyFile(
+        path.join(snapshotDirectory, file),
+        path.join(processedDirectory, file)
+      );
+    }
+  }
+
+  await discardFilesFrom(
+    processedDirectory,
+    COMMENT_PNG,
+    (value) => Number(value) - 1,
+    originalCount
+  );
+  await discardFilesFrom(
+    path.join(projectDirectory, "audio"),
+    COMMENT_MP3,
+    (value) => Number(value),
+    originalCount
+  );
+}
+
+export async function restoreCapturedContent(
+  projectDirectory: string,
+  expand: (thread: ThreadData) => ThreadData
+): Promise<ContentData> {
+  const thread = await readJsonIfExists<ThreadData>(
+    path.join(projectDirectory, "thread.json")
+  );
+
+  if (!thread) {
+    throw new Error("Không có bản capture gốc để reset.");
+  }
+
+  const content = expand(thread);
+  await restoreOriginalCommentImages(
+    projectDirectory,
+    content.comments.length
+  );
+  await fs.writeFile(
+    path.join(projectDirectory, "content.json"),
+    JSON.stringify(content, null, 2),
+    "utf-8"
+  );
+
+  const analysisFile = path.join(
+    projectDirectory,
+    "analysis.json"
+  );
+  const analysis =
+    await readJsonIfExists<ThreadAnalysis>(analysisFile);
+
+  if (analysis) {
+    analysis.topicTitle = content.topicTitle ?? "";
+    await fs.writeFile(
+      analysisFile,
+      JSON.stringify(analysis, null, 2),
+      "utf-8"
+    );
+  }
+
+  return content;
 }

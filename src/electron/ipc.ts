@@ -44,7 +44,8 @@ import {
   inverseImageOrder
 } from "../comments/apply-image-order.js";
 import {
-  discardUnsavedCommentFiles
+  restoreCapturedContent,
+  snapshotOriginalCommentImages
 } from "../comments/reset-content.js";
 import {
   processProjectImages
@@ -246,6 +247,7 @@ export function registerIpc(
         ),
         "utf-8"
       );
+      await snapshotOriginalCommentImages(result.projectDir);
 
       const projectId =
         path.basename(result.projectDir);
@@ -909,6 +911,7 @@ export function registerIpc(
       const imageOrder = payload.imageOrder;
       const commentCount =
         payload.content.comments.length;
+      await snapshotOriginalCommentImages(directory);
       const applyingOrder =
         !!imageOrder &&
         imageOrder.some(
@@ -990,7 +993,13 @@ export function registerIpc(
       const directory =
         store.getProjectDirectory(projectId);
 
-      await discardUnsavedCommentFiles(directory);
+      const abbreviations = entriesToTable(
+        await loadAbbreviationEntries()
+      );
+      await restoreCapturedContent(
+        directory,
+        (thread) => expandThread(thread, abbreviations)
+      );
 
       const project =
         await store.getProject(projectId);

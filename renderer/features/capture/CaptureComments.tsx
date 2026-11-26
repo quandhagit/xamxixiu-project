@@ -7,10 +7,15 @@ import {
   useState
 } from "react";
 import type {
-  FormEvent,
   PointerEvent,
-  ReactElement
+  ReactElement,
+  ReactNode
 } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  EllipsisVertical
+} from "lucide-react";
 import {
   buildCommentForest,
   groupCommentsAsThread,
@@ -27,7 +32,7 @@ import type {
   ThreadComment
 } from "../../../src/types";
 import { Button } from "../ui/Button";
-import { Input } from "../ui/Input";
+import { Dialog } from "../ui/Dialog";
 import { Textarea } from "../ui/Textarea";
 import { cn } from "../ui/cn";
 
@@ -36,7 +41,7 @@ type CommentFilter = "all" | "used" | "excluded";
 const FILTER_LABELS: Record<CommentFilter, string> = {
   all: "Tất cả",
   used: "Được dùng",
-  excluded: "Bị loại"
+  excluded: "Ẩn"
 };
 
 const KIND_LABELS: Record<CommentCurationKind, string> = {
@@ -50,21 +55,18 @@ const KIND_LABELS: Record<CommentCurationKind, string> = {
 const SCROLL_EDGE_PX = 88;
 const SCROLL_MAX_PX = 28;
 
-function findScrollParent(
+function findOverflowParent(
   node: HTMLElement | null
 ): HTMLElement | null {
   let current = node;
 
   while (current) {
     const { overflowY } = getComputedStyle(current);
-    const canScroll =
-      overflowY === "auto" ||
-      overflowY === "scroll" ||
-      overflowY === "overlay";
 
     if (
-      canScroll &&
-      current.scrollHeight - current.clientHeight > 1
+      overflowY === "auto" ||
+      overflowY === "scroll" ||
+      overflowY === "overlay"
     ) {
       return current;
     }
@@ -73,6 +75,126 @@ function findScrollParent(
   }
 
   return null;
+}
+
+function findScrollParent(
+  node: HTMLElement | null
+): HTMLElement | null {
+  let current = findOverflowParent(node);
+
+  while (current) {
+    if (current.scrollHeight - current.clientHeight > 1) {
+      return current;
+    }
+
+    current = findOverflowParent(current.parentElement);
+  }
+
+  return null;
+}
+
+const TREE_RAIL_X = 12;
+const TREE_END_X = 32;
+const TREE_ELBOW_Y = 26;
+const TREE_RADIUS = 16;
+
+function ThreadTree({
+  children
+}: {
+  children: ReactNode;
+}): ReactElement {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [frame, setFrame] = useState<{
+    width: number;
+    height: number;
+    elbows: number[];
+  }>({ width: 0, height: 0, elbows: [] });
+
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+
+    if (!root) {
+      return;
+    }
+
+    function measure(): void {
+      const items = [
+        ...root.querySelectorAll(":scope > [data-tree-item]")
+      ] as HTMLElement[];
+
+      setFrame({
+        width: root.clientWidth,
+        height: root.clientHeight,
+        elbows: items.map((item) => item.offsetTop + TREE_ELBOW_Y)
+      });
+    }
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+
+    for (const child of root.children) {
+      if (child instanceof HTMLElement) {
+        observer.observe(child);
+      }
+    }
+
+    return () => observer.disconnect();
+  }, [children]);
+
+  const lastY = frame.elbows[frame.elbows.length - 1];
+  const path =
+    lastY === undefined
+      ? ""
+      : [
+          `M ${TREE_RAIL_X} 0`,
+          `L ${TREE_RAIL_X} ${Math.max(TREE_RADIUS, lastY - TREE_RADIUS)}`,
+          `Q ${TREE_RAIL_X} ${lastY} ${TREE_RAIL_X + TREE_RADIUS} ${lastY}`,
+          `L ${TREE_END_X} ${lastY}`,
+          ...frame.elbows
+            .slice(0, -1)
+            .map((y) => `M ${TREE_RAIL_X} ${y} L ${TREE_END_X} ${y}`)
+        ].join(" ");
+
+  return (
+    <div ref={rootRef} className="relative pt-3">
+      {path ? (
+        <svg
+          aria-hidden
+          className="pointer-events-none absolute inset-0 text-accent/70"
+          width={frame.width}
+          height={frame.height}
+          fill="none"
+        >
+          <path
+            d={path}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+function TreeBranch({
+  isLast,
+  children
+}: {
+  isLast: boolean;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <div
+      data-tree-item=""
+      className={cn("relative pl-8", !isLast && "pb-3")}
+    >
+      {children}
+    </div>
+  );
 }
 
 function scrollAtPointer(
@@ -138,12 +260,10 @@ interface CaptureCommentsProps {
   imageSlots: number[];
   assets: Record<string, string>;
   captureStyle?: CommentCaptureStyle;
-  addLoading: boolean;
   onChange: (
     comments: ThreadComment[],
     imageSlots: number[]
   ) => void;
-  onAdd: (url: string) => void;
 }
 
 function orderMoves(
@@ -169,14 +289,258 @@ function orderMoves(
   }
 }
 
+function moveItem<T>(
+  items: T[],
+  from: number,
+  to: number
+): T[] {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= items.length ||
+    to >= items.length
+  ) {
+    return items;
+  }
+
+  const next = items.slice();
+  const [item] = next.splice(from, 1);
+
+  if (item === undefined) {
+    return items;
+  }
+
+  next.splice(to, 0, item);
+  return next;
+}
+
+function previewText(comment: ThreadComment): string {
+  const text = comment.text.trim().replace(/\s+/g, " ");
+
+  if (text.length <= 80) {
+    return text;
+  }
+
+  return `${text.slice(0, 80)}…`;
+}
+
+function HideToggle({
+  hidden,
+  onChange
+}: {
+  hidden: boolean;
+  onChange: (hidden: boolean) => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={hidden}
+      onClick={() => onChange(!hidden)}
+      className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2"
+    >
+      <span
+        className={cn(
+          "relative h-5 w-9 shrink-0 rounded-full transition-colors",
+          hidden ? "bg-warning" : "bg-line"
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 left-0.5 block h-4 w-4 rounded-full bg-white transition-transform",
+            hidden && "translate-x-4"
+          )}
+        />
+      </span>
+      Ẩn
+    </button>
+  );
+}
+
+function GroupCommentsDialog({
+  open,
+  comments,
+  imageSlots,
+  assets,
+  captureStyle,
+  draftSlots,
+  onDraftSlotsChange,
+  onClose,
+  onConfirm
+}: {
+  open: boolean;
+  comments: ThreadComment[];
+  imageSlots: number[];
+  assets: Record<string, string>;
+  captureStyle: CommentCaptureStyle;
+  draftSlots: number[];
+  onDraftSlotsChange: (slots: number[]) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}): ReactElement | null {
+  const rows = draftSlots.flatMap((slot, draftIndex) => {
+    const index = imageSlots.indexOf(slot);
+    const comment = index >= 0 ? comments[index] : undefined;
+
+    if (!comment) {
+      return [];
+    }
+
+    return [
+      {
+        slot,
+        draftIndex,
+        comment,
+        screenshot: assets[`comment-${slot}`]
+      }
+    ];
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      className="max-w-lg"
+      labelledBy="group-comments-title"
+    >
+      <div className="border-b border-line px-4 py-3">
+        <h3
+          id="group-comments-title"
+          className="text-sm font-medium text-ink"
+        >
+          Gộp comment
+        </h3>
+        <p className="mt-0.5 text-[12px] text-ink-3">
+          Comment đầu là cha. Đổi vị trí trước khi gộp.
+        </p>
+      </div>
+      <div className="min-h-0 space-y-2 overflow-y-auto p-4">
+        {rows.map((row, position) => {
+          const isParent = position === 0;
+
+          return (
+            <div
+              key={row.slot}
+              className={cn(
+                "flex gap-3 rounded-lg border p-2.5",
+                isParent
+                  ? "border-accent/50 bg-accent/10"
+                  : "border-line bg-panel"
+              )}
+            >
+              <div className="flex h-[72px] w-[72px] shrink-0 items-center justify-center overflow-hidden rounded-md bg-app">
+                {row.screenshot ? (
+                  <CaptureStyleImage
+                    src={row.screenshot}
+                    alt={`Comment ${row.comment.author}`}
+                    className="max-h-full max-w-full object-contain"
+                    captureStyle={captureStyle}
+                    draggable={false}
+                  />
+                ) : (
+                  <span className="text-[11px] text-ink-3">
+                    …
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[11px] font-medium text-ink">
+                    {isParent ? "Cha" : "Con"}
+                  </span>
+                  <span className="truncate text-[12px] text-ink">
+                    {row.comment.author}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-[12px] text-ink-3">
+                  {previewText(row.comment)}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                {!isParent && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() =>
+                      onDraftSlotsChange(
+                        moveItem(
+                          draftSlots,
+                          row.draftIndex,
+                          0
+                        )
+                      )
+                    }
+                  >
+                    Đặt làm cha
+                  </Button>
+                )}
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 w-7 px-0"
+                    aria-label="Đưa lên"
+                    disabled={position === 0}
+                    onClick={() =>
+                      onDraftSlotsChange(
+                        moveItem(
+                          draftSlots,
+                          row.draftIndex,
+                          row.draftIndex - 1
+                        )
+                      )
+                    }
+                  >
+                    <ArrowUp className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 w-7 px-0"
+                    aria-label="Đưa xuống"
+                    disabled={position === rows.length - 1}
+                    onClick={() =>
+                      onDraftSlotsChange(
+                        moveItem(
+                          draftSlots,
+                          row.draftIndex,
+                          row.draftIndex + 1
+                        )
+                      )
+                    }
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-end gap-1.5 border-t border-line px-4 py-3">
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Hủy
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={rows.length < 2}
+          onClick={onConfirm}
+        >
+          Gộp
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
+
 export function CaptureComments({
   comments,
   imageSlots,
   assets,
   captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
-  addLoading,
-  onChange,
-  onAdd
+  onChange
 }: CaptureCommentsProps): ReactElement {
   const listRef = useRef<HTMLDivElement>(null);
   const commentsRef = useRef(comments);
@@ -193,7 +557,6 @@ export function CaptureComments({
     node: HTMLElement;
     top: number;
   } | null>(null);
-  const [replyUrl, setReplyUrl] = useState("");
   const [filter, setFilter] =
     useState<CommentFilter>("all");
   const [draggingIndex, setDraggingIndex] =
@@ -203,6 +566,20 @@ export function CaptureComments({
   const [selectedSlots, setSelectedSlots] = useState<
     number[]
   >([]);
+  const [groupDraftSlots, setGroupDraftSlots] = useState<
+    number[] | null
+  >(null);
+  const [commentMenu, setCommentMenu] = useState<{
+    index: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [scrollPort, setScrollPort] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
   const forest = buildCommentForest(comments);
   const selectedIndexes = selectedSlots.flatMap((slot) => {
     const index = imageSlots.indexOf(slot);
@@ -252,6 +629,38 @@ export function CaptureComments({
     pendingScrollRef.current = null;
   }, [comments, imageSlots]);
 
+  useLayoutEffect(() => {
+    if (selectedIndexes.length === 0) {
+      setScrollPort(null);
+      return;
+    }
+
+    const scroller = findOverflowParent(listRef.current);
+
+    if (!scroller) {
+      return;
+    }
+
+    function update(): void {
+      const rect = scroller.getBoundingClientRect();
+      setScrollPort({
+        top: rect.top,
+        left: rect.left,
+        width: rect.width
+      });
+    }
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(scroller);
+    window.addEventListener("resize", update);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [selectedIndexes.length]);
+
   useEffect(() => {
     setSelectedSlots((current) => {
       const next = current.filter((slot) =>
@@ -267,7 +676,75 @@ export function CaptureComments({
 
       return next;
     });
+    setGroupDraftSlots((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const next = current.filter((slot) =>
+        imageSlots.includes(slot)
+      );
+
+      if (next.length < 2) {
+        return null;
+      }
+
+      if (
+        next.length === current.length &&
+        next.every((slot, slotIndex) => slot === current[slotIndex])
+      ) {
+        return current;
+      }
+
+      return next;
+    });
   }, [imageSlots]);
+
+  useEffect(() => {
+    if (!commentMenu) {
+      return;
+    }
+
+    function closeMenu(): void {
+      setCommentMenu(null);
+    }
+
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    }
+
+    function onPointer(event: globalThis.PointerEvent): void {
+      const target = event.target;
+
+      if (
+        target instanceof Element &&
+        target.closest("[data-comment-menu]")
+      ) {
+        return;
+      }
+
+      const node = menuRef.current;
+
+      if (
+        node &&
+        target instanceof Node &&
+        node.contains(target)
+      ) {
+        return;
+      }
+
+      closeMenu();
+    }
+
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer, true);
+    };
+  }, [commentMenu]);
 
   function stopAutoScroll(): void {
     if (scrollFrameRef.current !== null) {
@@ -452,19 +929,6 @@ export function CaptureComments({
     };
   }, []);
 
-  function handleAdd(
-    event: FormEvent<HTMLFormElement>
-  ): void {
-    event.preventDefault();
-    const nextUrl = replyUrl.trim();
-
-    if (!nextUrl || addLoading) {
-      return;
-    }
-
-    onAdd(nextUrl);
-  }
-
   function toggleSelected(index: number): void {
     const slot = imageSlots[index];
 
@@ -488,14 +952,71 @@ export function CaptureComments({
       return;
     }
 
+    setCommentMenu(null);
+    setGroupDraftSlots(
+      selectedIndexes.flatMap((index) => {
+        const slot = imageSlots[index];
+        return slot === undefined ? [] : [slot];
+      })
+    );
+  }
+
+  function closeGroupModal(): void {
+    setGroupDraftSlots(null);
+  }
+
+  function confirmGroup(): void {
+    if (!groupDraftSlots || groupDraftSlots.length < 2) {
+      return;
+    }
+
+    const indexes = groupDraftSlots.flatMap((slot) => {
+      const index = imageSlots.indexOf(slot);
+      return index >= 0 ? [index] : [];
+    });
+
+    if (indexes.length < 2) {
+      return;
+    }
+
     rememberScroll();
     const next = groupCommentsAsThread(
       comments,
       imageSlots,
-      selectedIndexes
+      indexes
     );
     onChange(next.comments, next.imageSlots);
     setSelectedSlots([]);
+    setGroupDraftSlots(null);
+  }
+
+  function splitAsParent(index: number): void {
+    rememberScroll();
+    const next = setCommentShownAsRoot(
+      comments,
+      imageSlots,
+      index,
+      true
+    );
+    onChange(next.comments, next.imageSlots);
+    setCommentMenu(null);
+  }
+
+  function toggleCommentMenu(
+    index: number,
+    button: HTMLButtonElement
+  ): void {
+    const rect = button.getBoundingClientRect();
+    const width = 188;
+    const x = Math.min(
+      Math.max(8, rect.right - width),
+      window.innerWidth - width - 8
+    );
+    const y = Math.min(rect.bottom + 4, window.innerHeight - 48);
+
+    setCommentMenu((current) =>
+      current?.index === index ? null : { index, x, y }
+    );
   }
 
   function handlePointerDown(
@@ -507,6 +1028,7 @@ export function CaptureComments({
     }
 
     event.preventDefault();
+    setCommentMenu(null);
     dragIndexRef.current = index;
     pointerRef.current = {
       x: event.clientX,
@@ -521,7 +1043,8 @@ export function CaptureComments({
   }
 
   function renderComment(
-    index: number
+    index: number,
+    childCount: number
   ): ReactElement {
     const comment = comments[index];
     const fileIndex = imageSlots[index];
@@ -534,6 +1057,8 @@ export function CaptureComments({
     const isSelected = selectedIndexSet.has(index);
     const isGroupParent =
       isSelected && parentSelectedIndex === index;
+    const isReply = comment.parentCommentIndex !== undefined;
+    const isThreadParent = !isReply && childCount > 0;
 
     return (
       <div
@@ -577,24 +1102,26 @@ export function CaptureComments({
               >
                 ⋮⋮
               </button>
+              {isReply ? (
+                <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[11px] font-medium text-accent">
+                  Con
+                </span>
+              ) : isThreadParent ? (
+                <span className="rounded-md border border-accent/40 px-1.5 py-0.5 text-[11px] font-medium text-ink">
+                  Cha
+                </span>
+              ) : null}
               <span className="truncate">
-                {comment.parentCommentIndex !== undefined
-                  ? `Reply to comment #${comment.parentCommentIndex}`
+                {isReply
+                  ? `↳ #${comment.parentCommentIndex} · ${comment.author}`
                   : comment.originalParentCommentIndex !==
                       undefined
-                    ? `Tách từ comment #${comment.originalParentCommentIndex}`
+                    ? `Tách từ #${comment.originalParentCommentIndex} · ${comment.author}`
                     : comment.author}
               </span>
-              {(comment.parentCommentIndex !== undefined ||
-                comment.originalParentCommentIndex !==
-                  undefined) && (
-                <span className="truncate">
-                  {comment.author}
-                </span>
-              )}
               {isSelected && (
-                <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[11px] font-medium text-ink">
-                  {isGroupParent ? "Cha" : "Con"}
+                <span className="rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-medium text-white">
+                  {isGroupParent ? "Gộp cha" : "Gộp con"}
                 </span>
               )}
             </div>
@@ -608,61 +1135,40 @@ export function CaptureComments({
                 />
                 Chọn
               </label>
-              {(comment.parentCommentIndex !== undefined ||
-                comment.originalParentCommentIndex !==
-                  undefined) && (
-                <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2">
-                  <input
-                    type="checkbox"
-                    checked={
-                      comment.parentCommentIndex ===
-                        undefined &&
-                      comment.originalParentCommentIndex !==
-                        undefined
-                    }
-                    onChange={(event) => {
-                      const next = setCommentShownAsRoot(
-                        comments,
-                        imageSlots,
-                        index,
-                        event.target.checked
-                      );
-                      onChange(
-                        next.comments,
-                        next.imageSlots
-                      );
-                    }}
-                    className="accent-accent"
-                  />
-                  Hiện như comment cha
-                </label>
-              )}
-              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2">
-                <input
-                  type="checkbox"
-                  checked={comment.excluded === true}
-                  onChange={(event) => {
-                    onChange(
-                      comments.map(
-                        (item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                excluded:
-                                  event.target.checked,
-                                curation: {
-                                  source: "user"
-                                }
-                              }
-                            : item
-                      ),
-                      imageSlots
-                    );
-                  }}
-                  className="accent-warning"
-                />
-                Exclude khỏi video
-              </label>
+              <HideToggle
+                hidden={comment.excluded === true}
+                onChange={(hidden) => {
+                  onChange(
+                    comments.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? {
+                            ...item,
+                            excluded: hidden,
+                            curation: {
+                              source: "user"
+                            }
+                          }
+                        : item
+                    ),
+                    imageSlots
+                  );
+                }}
+              />
+              <button
+                type="button"
+                data-comment-menu=""
+                aria-label="Tùy chọn comment"
+                aria-expanded={commentMenu?.index === index}
+                onClick={(event) =>
+                  toggleCommentMenu(
+                    index,
+                    event.currentTarget
+                  )
+                }
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-line text-ink-2 hover:border-accent/50 hover:text-ink"
+              >
+                <EllipsisVertical className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
           <p className="mt-2 text-[12px] text-ink-3">
@@ -759,48 +1265,86 @@ export function CaptureComments({
     depth: number,
     trail: Set<number>
   ): ReactElement[] {
-    const branches: ReactElement[] = [];
+    const visible = nodes.filter(
+      (node) =>
+        !trail.has(node.index) &&
+        subtreeMatchesFilter(node, new Set(trail))
+    );
 
-    for (const node of nodes) {
-      if (trail.has(node.index)) {
-        continue;
-      }
-
-      if (!subtreeMatchesFilter(node, new Set(trail))) {
-        continue;
-      }
-
+    return visible.map((node, visibleIndex) => {
+      const isLast = visibleIndex === visible.length - 1;
       const nextTrail = new Set(trail);
       nextTrail.add(node.index);
-      branches.push(
-        <div
-          key={imageSlots[node.index] ?? node.index}
-          className={cn(
-            "space-y-3",
-            depth > 0 &&
-              "relative ml-6 border-l border-l-accent/40 pl-4 before:absolute before:-left-4 before:top-6 before:h-px before:w-4 before:bg-accent/40"
-          )}
-        >
-          {renderComment(node.index)}
-          {node.children.length > 0 &&
-            renderForest(
+      const childTree =
+        node.children.length > 0
+          ? renderForest(
               node.children,
               depth + 1,
               nextTrail
-            )}
-        </div>
+            )
+          : [];
+      const body = (
+        <>
+          {renderComment(node.index, node.children.length)}
+          {childTree.length > 0 ? (
+            <ThreadTree>{childTree}</ThreadTree>
+          ) : null}
+        </>
       );
-    }
+      const key = imageSlots[node.index] ?? node.index;
 
-    return branches;
+      if (depth === 0) {
+        return <div key={key}>{body}</div>;
+      }
+
+      return (
+        <TreeBranch key={key} isLast={isLast}>
+          {body}
+        </TreeBranch>
+      );
+    });
   }
 
   return (
-    <div ref={listRef} className="space-y-3">
+    <div ref={listRef} className="flex flex-col gap-3">
+      {selectedIndexes.length > 0 && scrollPort ? (
+        <div
+          className="fixed z-30 flex flex-wrap items-center justify-between gap-2 border-b border-line bg-app px-4 py-2 shadow-sm"
+          style={{
+            top: scrollPort.top,
+            left: scrollPort.left,
+            width: scrollPort.width
+          }}
+        >
+          <p className="text-[12px] text-ink-3">
+            Đã chọn {selectedIndexes.length}
+            {parentSelectedComment &&
+              ` · Cha: ${parentSelectedComment.author}`}
+          </p>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={selectedIndexes.length < 2}
+              onClick={groupSelected}
+            >
+              Gộp
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={clearSelected}
+            >
+              Bỏ chọn
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-ink">
           Comments ({comments.length}) · Dùng {usedCount} ·
-          Loại {excludedCount}
+          Ẩn {excludedCount}
         </h3>
         <div className="flex gap-1">
           {(
@@ -824,56 +1368,40 @@ export function CaptureComments({
           ))}
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[12px] text-ink-3">
-          Đã chọn {selectedIndexes.length}
-          {parentSelectedComment &&
-            ` · Cha: ${parentSelectedComment.author}`}
-        </p>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            disabled={selectedIndexes.length < 2}
-            onClick={groupSelected}
-          >
-            Gộp
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={selectedIndexes.length === 0}
-            onClick={clearSelected}
-          >
-            Bỏ chọn
-          </Button>
-        </div>
-      </div>
-      <form
-        className="flex gap-2"
-        onSubmit={handleAdd}
-      >
-        <Input
-          value={replyUrl}
-          onChange={(event) =>
-            setReplyUrl(event.target.value)
-          }
-          placeholder="Dán link reply Threads"
-          className="min-w-0 flex-1"
-        />
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={
-            addLoading ||
-            replyUrl.trim().length === 0
-          }
-        >
-          Thêm comment
-        </Button>
-      </form>
       {renderForest(forest, 0, new Set())}
+      {commentMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[188px] rounded-md border border-line bg-panel py-1 shadow-lg"
+          style={{
+            left: commentMenu.x,
+            top: commentMenu.y
+          }}
+        >
+          <button
+            type="button"
+            disabled={
+              comments[commentMenu.index]
+                ?.parentCommentIndex === undefined
+            }
+            className="block w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => splitAsParent(commentMenu.index)}
+          >
+            Tách làm comment cha
+          </button>
+        </div>
+      )}
+      <GroupCommentsDialog
+        open={groupDraftSlots !== null}
+        comments={comments}
+        imageSlots={imageSlots}
+        assets={assets}
+        captureStyle={captureStyle}
+        draftSlots={groupDraftSlots ?? []}
+        onDraftSlotsChange={(slots) => setGroupDraftSlots(slots)}
+        onClose={closeGroupModal}
+        onConfirm={confirmGroup}
+      />
     </div>
   );
 }
