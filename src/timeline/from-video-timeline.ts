@@ -73,6 +73,39 @@ function makeClip(
   };
 }
 
+function preserveImageEffects(
+  next: TimelineClip[],
+  previous: TimelineClip[]
+): TimelineClip[] {
+  if (previous.length === 0) {
+    return next;
+  }
+  return next.map((clip) => {
+    if (clip.trackId !== "images") {
+      return clip;
+    }
+    const prior =
+      previous.find((item) => item.id === clip.id) ??
+      previous.find(
+        (item) =>
+          item.trackId === "images" &&
+          item.commentIndex === clip.commentIndex &&
+          item.file === clip.file
+      );
+    if (
+      !prior ||
+      (prior.animation === undefined && prior.animationDuration === undefined)
+    ) {
+      return clip;
+    }
+    return {
+      ...clip,
+      animation: prior.animation,
+      animationDuration: prior.animationDuration
+    };
+  });
+}
+
 export function videoTimelineToProject(
   timeline: VideoTimeline,
   previous?: TimelineProject,
@@ -216,7 +249,11 @@ export function videoTimelineToProject(
   }
 
   const withCombos = preserveComboClips(clips, previous?.clips ?? []);
-  const merged = withCombos.map((clip) => locked.get(clip.id) ?? clip);
+  const withImageEffects = preserveImageEffects(
+    withCombos,
+    previous?.clips ?? []
+  );
+  const merged = withImageEffects.map((clip) => locked.get(clip.id) ?? clip);
   for (const clip of locked.values()) {
     if (!merged.some((item) => item.id === clip.id)) {
       merged.push(clip);

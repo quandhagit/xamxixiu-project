@@ -32,6 +32,8 @@ import type {
 import type { CommentCaptureStyle } from "../capture-style.js";
 import type { TopicTitleStyle } from "../topic-title-style.js";
 import type { MemeDefaultStyle } from "../meme-style.js";
+import type { ImageEffectStyle } from "../image-effect.js";
+import type { WatermarkStyle } from "../watermark-style.js";
 import type {
   MatchedReaction
 } from "../assets/matcher.js";
@@ -138,6 +140,8 @@ export interface AppSettings {
   commentCapture: CommentCaptureStyle;
   topicTitle: TopicTitleStyle;
   meme: MemeDefaultStyle;
+  imageEffect: ImageEffectStyle;
+  watermark: WatermarkStyle;
 }
 
 export interface SaveSettingsResult {

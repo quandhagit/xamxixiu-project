@@ -15,6 +15,11 @@ import type {
   TimelineProjectTrackId
 } from "../../../src/timeline/project";
 import {
+  clampWatermarkStyle,
+  watermarkHasText,
+  type WatermarkStyle
+} from "../../../src/watermark-style";
+import {
   TOPIC_POST_COMMENT_INDEX,
   isTopicVoiceClip
 } from "../../../src/timeline/topic-constants";
@@ -27,6 +32,7 @@ export const TRACK_IDS = [
   "images",
   "meme",
   "video",
+  "watermark",
   "voice",
   "sfx",
   "beep",
@@ -62,6 +68,7 @@ export const TRACK_LABELS: Record<TrackId, string> = {
   "title-card": "Title",
   meme: "Meme",
   video: "Video",
+  watermark: "Watermark",
   voice: "Voice",
   sfx: "SFX",
   beep: "Beep",
@@ -74,6 +81,7 @@ export const TRACK_COLORS: Record<TrackId, string> = {
   "title-card": "border-l-[3px] border-sky-400 bg-sky-500/25 text-sky-50",
   meme: "border-l-[3px] border-teal-400 bg-teal-500/25 text-teal-50",
   video: "border-l-[3px] border-indigo-400 bg-indigo-500/25 text-indigo-50",
+  watermark: "border-l-[3px] border-zinc-300 bg-zinc-400/25 text-zinc-50",
   voice: "border-l-[3px] border-amber-400 bg-amber-500/25 text-amber-50",
   sfx: "border-l-[3px] border-emerald-400 bg-emerald-500/25 text-emerald-50",
   beep: "border-l-[3px] border-rose-400 bg-rose-500/25 text-rose-50",
@@ -86,6 +94,7 @@ export const TRACK_PIPS: Record<TrackId, string> = {
   "title-card": "bg-sky-400",
   meme: "bg-teal-400",
   video: "bg-indigo-400",
+  watermark: "bg-zinc-300",
   voice: "bg-amber-400",
   sfx: "bg-emerald-400",
   beep: "bg-rose-400",
@@ -97,7 +106,8 @@ const VISUAL_TRACKS = new Set<TrackId>([
   "title-card",
   "images",
   "meme",
-  "video"
+  "video",
+  "watermark"
 ]);
 
 export const TRACK_LANE_VISUAL = 44;
@@ -226,7 +236,7 @@ export function clipCanRemove(clip: {
   locked?: boolean;
   target?: TimelineAssetTarget;
 }): boolean {
-  if (clip.placeholder) {
+  if (clip.placeholder || clip.trackId === "watermark") {
     return false;
   }
   if (clip.trackId === "beep") {
@@ -294,6 +304,26 @@ export function findTrackClip(
     }
   }
   return undefined;
+}
+
+function watermarkLaneClip(
+  duration: number,
+  watermark?: WatermarkStyle
+): TimelineTrackClip | undefined {
+  const style = clampWatermarkStyle(watermark);
+  if (!watermarkHasText(style)) {
+    return undefined;
+  }
+  return {
+    id: "watermark",
+    trackId: "watermark",
+    start: 0,
+    duration: Math.max(duration, PLACEHOLDER_DURATION),
+    label: style.text.trim(),
+    editable: false,
+    placeholder: false,
+    locked: true
+  };
 }
 
 function toProjectTrackClip(clip: TimelineClip): TimelineTrackClip {
@@ -385,9 +415,19 @@ function overlayPlaceholders(options: {
 }
 
 export function getProjectTracks(
-  project: TimelineProject
+  project: TimelineProject,
+  options: { watermark?: WatermarkStyle } = {}
 ): TimelineTrack[] {
-  const clips: TimelineTrackClip[] = project.clips.map(toProjectTrackClip);
+  const clips: TimelineTrackClip[] = project.clips
+    .filter((clip) => clip.trackId !== "watermark")
+    .map(toProjectTrackClip);
+  const watermarkClip = watermarkLaneClip(
+    project.totalDuration,
+    options.watermark
+  );
+  if (watermarkClip) {
+    clips.push(watermarkClip);
+  }
 
   for (const voice of project.clips) {
     if (voice.trackId !== "voice" || typeof voice.commentIndex !== "number") {
@@ -477,7 +517,8 @@ export function getProjectTracks(
 }
 
 export function getTimelineTracks(
-  timeline: VideoTimeline
+  timeline: VideoTimeline,
+  options: { watermark?: WatermarkStyle } = {}
 ): TimelineTrack[] {
   const clips: TimelineTrackClip[] = [];
   const entries = getTimelineSceneEntries(timeline);
@@ -707,12 +748,21 @@ export function getTimelineTracks(
     });
   }
 
+  const watermarkClip = watermarkLaneClip(
+    timeline.totalDuration,
+    options.watermark
+  );
+  if (watermarkClip) {
+    clips.push(watermarkClip);
+  }
+
   return TRACK_IDS.map((id) => ({
     id,
     label: TRACK_LABELS[id],
     clips: clips.filter((clip) => clip.trackId === id)
   })).filter((track) =>
     track.id === "beep" ||
+    track.id === "watermark" ||
     track.id !== "title-card" ||
     track.clips.length > 0
   );

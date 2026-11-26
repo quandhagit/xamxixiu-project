@@ -20,8 +20,6 @@ export function VoiceStep({
   draftTopicTitle,
   audioAssets,
   skipTopicTitleVoice,
-  titleVoiceMode,
-  defaultTitleVoiceEnabled,
   operationLoading,
   onGenerateAll,
   onTopicTitleChange,
@@ -38,8 +36,6 @@ export function VoiceStep({
   draftTopicTitle: string;
   audioAssets: Record<string, string>;
   skipTopicTitleVoice: boolean;
-  titleVoiceMode: "auto" | "on" | "off";
-  defaultTitleVoiceEnabled: boolean;
   operationLoading: boolean;
   onGenerateAll: () => void;
   onTopicTitleChange: (value: string) => void;
@@ -48,7 +44,7 @@ export function VoiceStep({
   onCommentTextChange: (index: number, text: string) => void;
   onVoiceChange: (target: AudioFailureTarget, voiceId: string) => void;
   onRetryAudio: (target: AudioFailureTarget) => void;
-  onTitleVoiceModeChange: (mode: "auto" | "on" | "off") => void;
+  onTitleVoiceModeChange: (mode: "on" | "off") => void;
   onAssignVoices: () => void;
 }): React.ReactElement {
   const topicFailure = project?.audioFailures.find(
@@ -116,24 +112,12 @@ export function VoiceStep({
                 onTitleVoiceModeChange(event.target.checked ? "on" : "off")
               }
             />
-            Generate topic title voice
+            Đọc title
           </label>
-          <span className="text-ink-3">
-            Mặc định {defaultTitleVoiceEnabled ? "bật" : "tắt"} vì topic
-            {defaultTitleVoiceEnabled ? " dài hơn 200 ký tự." : " ngắn ≤ 200 ký tự."}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={operationLoading || titleVoiceMode === "auto"}
-            onClick={() => onTitleVoiceModeChange("auto")}
-          >
-            Reset về mặc định
-          </Button>
         </div>
         {skipTopicTitleVoice ? (
           <p className="mt-2 text-[12px] text-warning">
-            Đang tắt title voice. Bật lại nếu vẫn muốn generate.
+            Title vẫn hiện, không đọc. Bật Đọc title nếu muốn generate voice.
           </p>
         ) : (
           <>

@@ -13,6 +13,7 @@ import type {
 } from "react";
 import {
   buildCommentForest,
+  groupCommentsAsThread,
   reorderComments,
   setCommentShownAsRoot
 } from "../../../src/comments/order";
@@ -199,7 +200,20 @@ export function CaptureComments({
     useState<number | null>(null);
   const [overIndex, setOverIndex] =
     useState<number | null>(null);
+  const [selectedSlots, setSelectedSlots] = useState<
+    number[]
+  >([]);
   const forest = buildCommentForest(comments);
+  const selectedIndexes = selectedSlots.flatMap((slot) => {
+    const index = imageSlots.indexOf(slot);
+    return index >= 0 ? [index] : [];
+  });
+  const selectedIndexSet = new Set(selectedIndexes);
+  const parentSelectedIndex = selectedIndexes[0];
+  const parentSelectedComment =
+    parentSelectedIndex === undefined
+      ? undefined
+      : comments[parentSelectedIndex];
 
   commentsRef.current = comments;
   imageSlotsRef.current = imageSlots;
@@ -237,6 +251,23 @@ export function CaptureComments({
     restoreScroll();
     pendingScrollRef.current = null;
   }, [comments, imageSlots]);
+
+  useEffect(() => {
+    setSelectedSlots((current) => {
+      const next = current.filter((slot) =>
+        imageSlots.includes(slot)
+      );
+
+      if (
+        next.length === current.length &&
+        next.every((slot, slotIndex) => slot === current[slotIndex])
+      ) {
+        return current;
+      }
+
+      return next;
+    });
+  }, [imageSlots]);
 
   function stopAutoScroll(): void {
     if (scrollFrameRef.current !== null) {
@@ -434,6 +465,39 @@ export function CaptureComments({
     onAdd(nextUrl);
   }
 
+  function toggleSelected(index: number): void {
+    const slot = imageSlots[index];
+
+    if (slot === undefined) {
+      return;
+    }
+
+    setSelectedSlots((current) =>
+      current.includes(slot)
+        ? current.filter((item) => item !== slot)
+        : [...current, slot]
+    );
+  }
+
+  function clearSelected(): void {
+    setSelectedSlots([]);
+  }
+
+  function groupSelected(): void {
+    if (selectedIndexes.length < 2) {
+      return;
+    }
+
+    rememberScroll();
+    const next = groupCommentsAsThread(
+      comments,
+      imageSlots,
+      selectedIndexes
+    );
+    onChange(next.comments, next.imageSlots);
+    setSelectedSlots([]);
+  }
+
   function handlePointerDown(
     event: PointerEvent<HTMLButtonElement>,
     index: number
@@ -467,6 +531,9 @@ export function CaptureComments({
         : assets[`comment-${fileIndex}`];
     const isDragging = draggingIndex === index;
     const isDropTarget = overIndex === index;
+    const isSelected = selectedIndexSet.has(index);
+    const isGroupParent =
+      isSelected && parentSelectedIndex === index;
 
     return (
       <div
@@ -477,7 +544,8 @@ export function CaptureComments({
             ? "border-warning/30 bg-warning/5 opacity-70"
             : "border-line bg-panel",
           isDragging && "opacity-50",
-          isDropTarget && "ring-1 ring-accent"
+          isDropTarget && "ring-1 ring-accent",
+          isSelected && "ring-1 ring-accent/70"
         )}
       >
         <div className="flex min-h-[160px] items-start justify-center rounded-md bg-app p-3">
@@ -524,8 +592,22 @@ export function CaptureComments({
                   {comment.author}
                 </span>
               )}
+              {isSelected && (
+                <span className="rounded-md bg-accent/15 px-1.5 py-0.5 text-[11px] font-medium text-ink">
+                  {isGroupParent ? "Cha" : "Con"}
+                </span>
+              )}
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleSelected(index)}
+                  className="accent-accent"
+                />
+                Chọn
+              </label>
               {(comment.parentCommentIndex !== undefined ||
                 comment.originalParentCommentIndex !==
                   undefined) && (
@@ -740,6 +822,32 @@ export function CaptureComments({
               {FILTER_LABELS[key]} ({filterCounts[key]})
             </button>
           ))}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[12px] text-ink-3">
+          Đã chọn {selectedIndexes.length}
+          {parentSelectedComment &&
+            ` · Cha: ${parentSelectedComment.author}`}
+        </p>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={selectedIndexes.length < 2}
+            onClick={groupSelected}
+          >
+            Gộp
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={selectedIndexes.length === 0}
+            onClick={clearSelected}
+          >
+            Bỏ chọn
+          </Button>
         </div>
       </div>
       <form

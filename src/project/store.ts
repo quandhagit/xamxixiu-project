@@ -577,7 +577,8 @@ export class ProjectStore {
       analysis.topicIntroEnabled = update.enabled;
     }
     if (update.topicTitleVoiceMode !== undefined) {
-      analysis.topicTitleVoiceMode = update.topicTitleVoiceMode;
+      analysis.topicTitleVoiceMode =
+        update.topicTitleVoiceMode === "on" ? "on" : "off";
     }
 
     await atomicWriteJson(analysisFile, analysis);

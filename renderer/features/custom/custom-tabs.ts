@@ -10,6 +10,10 @@ export const CUSTOM_TABS = [
   {
     id: "meme",
     label: "Meme"
+  },
+  {
+    id: "watermark",
+    label: "Watermark"
   }
 ] as const;
 

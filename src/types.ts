@@ -145,7 +145,7 @@ export type TopicTitleVoiceMode = "auto" | "on" | "off";
 export interface ThreadAnalysis {
   topicTitle?: string;
   topicIntroEnabled?: boolean;
-  /** Override for title-voice generation. Missing means follow app default. */
+  /** User toggle for reading the title. Missing or "auto" means off. */
   topicTitleVoiceMode?: TopicTitleVoiceMode;
   topicVoiceId?: string;
   topicTitleVoiceId?: string;

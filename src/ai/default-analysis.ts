@@ -53,7 +53,8 @@ export function createDefaultAnalysis(
     backgroundAssetId: existing?.backgroundAssetId,
     musicAssetId: existing?.musicAssetId,
     topicIntroEnabled: existing?.topicIntroEnabled ?? true,
-    topicTitleVoiceMode: existing?.topicTitleVoiceMode,
+    topicTitleVoiceMode:
+      existing?.topicTitleVoiceMode === "on" ? "on" : "off",
     reactions
   };
 }

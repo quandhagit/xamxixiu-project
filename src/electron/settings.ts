@@ -20,6 +20,14 @@ import {
   clampMemeDefaultStyle,
   DEFAULT_MEME_STYLE
 } from "../meme-style.js";
+import {
+  clampImageEffectStyle,
+  DEFAULT_IMAGE_EFFECT
+} from "../image-effect.js";
+import {
+  clampWatermarkStyle,
+  DEFAULT_WATERMARK_STYLE
+} from "../watermark-style.js";
 
 function defaultCapCutDraftsDirectory(): string {
   const localAppData =
@@ -85,7 +93,9 @@ export function settingsFromEnv(): AppSettings {
       defaultCapCutDraftsDirectory(),
     commentCapture: DEFAULT_COMMENT_CAPTURE_STYLE,
     topicTitle: DEFAULT_TOPIC_TITLE_STYLE,
-    meme: DEFAULT_MEME_STYLE
+    meme: DEFAULT_MEME_STYLE,
+    imageEffect: DEFAULT_IMAGE_EFFECT,
+    watermark: DEFAULT_WATERMARK_STYLE
   };
 }
 
@@ -196,7 +206,12 @@ export function normalizeSettings(
       input.topicTitle,
       fallback.topicTitle
     ),
-    meme: clampMemeDefaultStyle(input.meme, fallback.meme)
+    meme: clampMemeDefaultStyle(input.meme, fallback.meme),
+    imageEffect: clampImageEffectStyle(
+      input.imageEffect,
+      fallback.imageEffect
+    ),
+    watermark: clampWatermarkStyle(input.watermark, fallback.watermark)
   };
 }
 

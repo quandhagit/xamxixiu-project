@@ -5,6 +5,8 @@ import type { ExportProgress } from "../electron/ipc-types.js";
 import { exportTimelineVideo } from "../export/video-exporter.js";
 import type { TimelineProject } from "../timeline/project.js";
 import type { TopicTitleStyle } from "../topic-title-style.js";
+import type { ImageEffectStyle } from "../image-effect.js";
+import type { WatermarkStyle } from "../watermark-style.js";
 import { compileTimelineProject } from "./compile.js";
 import { getExportEngine } from "./engine.js";
 
@@ -12,13 +14,17 @@ export async function writeHyperframesProject(
   projectDirectory: string,
   timelineProject: TimelineProject,
   captureStyle?: CommentCaptureStyle,
-  titleStyle?: TopicTitleStyle
+  titleStyle?: TopicTitleStyle,
+  imageEffect?: ImageEffectStyle,
+  watermark?: WatermarkStyle
 ): Promise<string> {
   const outputDir = path.join(projectDirectory, "hyperframes");
   await fs.mkdir(outputDir, { recursive: true });
   const html = compileTimelineProject(timelineProject, {
     captureStyle,
     titleStyle,
+    imageEffect,
+    watermark,
     resolveSrc: (file) => {
       if (path.isAbsolute(file) || file.startsWith("data:")) {
         return file.replaceAll("\\", "/");
@@ -39,7 +45,9 @@ export async function exportWithHyperframes(
   outputPath: string,
   onProgress?: (progress: ExportProgress) => void,
   captureStyle?: CommentCaptureStyle,
-  titleStyle?: TopicTitleStyle
+  titleStyle?: TopicTitleStyle,
+  imageEffect?: ImageEffectStyle,
+  watermark?: WatermarkStyle
 ): Promise<string> {
   const engine = getExportEngine();
   if (engine === "ffmpeg") {
@@ -49,7 +57,9 @@ export async function exportWithHyperframes(
       onProgress,
       captureStyle,
       titleStyle,
-      timelineProject
+      timelineProject,
+      imageEffect,
+      watermark
     );
   }
 
@@ -58,7 +68,9 @@ export async function exportWithHyperframes(
     projectDirectory,
     timelineProject,
     captureStyle,
-    titleStyle
+    titleStyle,
+    imageEffect,
+    watermark
   );
 
   try {
@@ -99,6 +111,8 @@ export async function exportWithHyperframes(
     onProgress,
     captureStyle,
     titleStyle,
-    timelineProject
+    timelineProject,
+    imageEffect,
+    watermark
   );
 }

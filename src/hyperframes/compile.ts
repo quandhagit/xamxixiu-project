@@ -16,6 +16,22 @@ import {
   ZOOM_IN_FROM
 } from "../timeline/clip-motion.js";
 import {
+  clampImageEffectStyle,
+  DEFAULT_IMAGE_EFFECT,
+  POP_FROM,
+  POP_PEAK,
+  POP_PEAK_AT,
+  resolveClipImageEffect,
+  type ImageEffectStyle
+} from "../image-effect.js";
+import {
+  clampWatermarkStyle,
+  watermarkCssText,
+  watermarkHasText,
+  watermarkPoint,
+  type WatermarkStyle
+} from "../watermark-style.js";
+import {
   clipMutesVideoElement,
   clipsOnTrack,
   type TimelineClip,
@@ -27,6 +43,8 @@ export interface CompileOptions {
   compositionId?: string;
   captureStyle?: CommentCaptureStyle;
   titleStyle?: TopicTitleStyle;
+  imageEffect?: ImageEffectStyle;
+  watermark?: WatermarkStyle;
 }
 
 function escapeHtml(value: string): string {
@@ -163,16 +181,36 @@ function mediaTag(
 function gsapFades(
   clips: TimelineClip[],
   canvasHeight: number,
-  canvasWidth: number
+  canvasWidth: number,
+  imageEffect: ImageEffectStyle = DEFAULT_IMAGE_EFFECT
 ): string {
   const lines: string[] = [];
+  const fallback = clampImageEffectStyle(imageEffect);
   for (const clip of clips) {
     if (clip.kind === "audio") {
       continue;
     }
-    const duration = clip.animationDuration ?? DEFAULT_FLY_UP_DURATION;
-    const motion = clipMotionName(clip);
-    if (clipUsesFlyUp(clip) && duration > 0) {
+    const effect = resolveClipImageEffect(clip, fallback);
+    const useImage =
+      clip.trackId === "images" && effect.entrance !== "none";
+    const duration = useImage
+      ? effect.duration
+      : (clip.animationDuration ?? DEFAULT_FLY_UP_DURATION);
+    const motion = useImage ? effect.entrance : clipMotionName(clip);
+    if (motion === "pop" && duration > 0) {
+      const rise = duration * POP_PEAK_AT;
+      const fall = duration - rise;
+      lines.push(
+        `tl.fromTo("#${cssEscape(clip.id)}", { scale: ${POP_FROM} }, { scale: ${POP_PEAK}, duration: ${rise} }, ${clip.start});`
+      );
+      lines.push(
+        `tl.to("#${cssEscape(clip.id)}", { scale: 1, duration: ${fall} }, ${clip.start + rise});`
+      );
+    }
+    if (
+      (motion === "slide-up" || (!useImage && clipUsesFlyUp(clip))) &&
+      duration > 0
+    ) {
       const restTop = 50 - (clip.y ?? (clip.trackId === "title-card" ? 0.2 : 0)) * 50;
       const startTop = clipFlyUpTopPercent({
         restTopPercent: restTop,
@@ -183,10 +221,20 @@ function gsapFades(
         `tl.fromTo("#${cssEscape(clip.id)}", { y: ${fromY} }, { y: 0, duration: ${duration} }, ${clip.start});`
       );
     }
+    if (motion === "slide-down" && duration > 0) {
+      lines.push(
+        `tl.fromTo("#${cssEscape(clip.id)}", { y: ${-Math.round(canvasHeight)} }, { y: 0, duration: ${duration} }, ${clip.start});`
+      );
+    }
     if (motion === "slide-left" && duration > 0) {
       const fromX = -Math.round(canvasWidth);
       lines.push(
         `tl.fromTo("#${cssEscape(clip.id)}", { x: ${fromX} }, { x: 0, duration: ${duration} }, ${clip.start});`
+      );
+    }
+    if (motion === "slide-right" && duration > 0) {
+      lines.push(
+        `tl.fromTo("#${cssEscape(clip.id)}", { x: ${Math.round(canvasWidth)} }, { x: 0, duration: ${duration} }, ${clip.start});`
       );
     }
     if (motion === "zoom-in" && duration > 0) {
@@ -201,7 +249,11 @@ function gsapFades(
         `tl.fromTo("#${cssEscape(clip.id)}", { xPercent: -50, yPercent: -50, x: 0 }, { xPercent: -50, yPercent: -50, x: ${amplitude}, duration: ${beat}, repeat: 7, yoyo: true }, ${clip.start});`
       );
     }
-    if (clip.fadeIn > 0) {
+    if (motion === "fade" && duration > 0) {
+      lines.push(
+        `tl.fromTo("#${cssEscape(clip.id)}", { opacity: 0 }, { opacity: 1, duration: ${duration} }, ${clip.start});`
+      );
+    } else if (clip.fadeIn > 0) {
       lines.push(
         `tl.fromTo("#${cssEscape(clip.id)}", { opacity: 0 }, { opacity: 1, duration: ${clip.fadeIn} }, ${clip.start});`
       );
@@ -226,11 +278,42 @@ const TRACK_INDEX: Record<string, number> = {
   "title-card": 2,
   meme: 3,
   video: 4,
-  voice: 5,
-  sfx: 6,
-  beep: 7,
-  music: 8
+  watermark: 5,
+  voice: 6,
+  sfx: 7,
+  beep: 8,
+  music: 9
 };
+
+function gsapWatermark(
+  style: WatermarkStyle,
+  duration: number,
+  canvas: { width: number; height: number }
+): string {
+  if (!watermarkHasText(style)) {
+    return "";
+  }
+  const step = 0.1;
+  const lines: string[] = [];
+  for (let time = 0; time <= duration + 0.0001; time += step) {
+    const point = watermarkPoint(time, style, canvas);
+    lines.push(
+      `tl.set("#watermark", { x: ${Math.round(point.x)}, y: ${Math.round(point.y)} }, ${time.toFixed(3)});`
+    );
+  }
+  return lines.join("\n      ");
+}
+
+function watermarkTag(
+  style: WatermarkStyle,
+  duration: number
+): string {
+  if (!watermarkHasText(style)) {
+    return "";
+  }
+  const clamped = clampWatermarkStyle(style);
+  return `<div id="watermark" class="watermark" data-start="0" data-duration="${duration.toFixed(3)}" data-track-index="${TRACK_INDEX.watermark}" style="${watermarkCssText(clamped)}">${escapeHtml(clamped.text)}</div>`;
+}
 
 export function compileTimelineProject(
   project: TimelineProject,
@@ -249,7 +332,14 @@ export function compileTimelineProject(
       options.titleStyle
     )
   );
-  const duration = Math.max(project.totalDuration, 1).toFixed(3);
+  const durationValue = Math.max(project.totalDuration, 1);
+  const duration = durationValue.toFixed(3);
+  const watermark = clampWatermarkStyle(options.watermark);
+  const watermarkHtml = watermarkTag(watermark, durationValue);
+  const canvas = {
+    width: project.canvas.width,
+    height: project.canvas.height
+  };
 
   return `<!doctype html>
 <html lang="vi">
@@ -260,6 +350,7 @@ export function compileTimelineProject(
       #stage { position: relative; width: ${project.canvas.width}px; height: ${project.canvas.height}px; background: #000; }
       .clip { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
       img.clip, video.clip { object-fit: contain; }
+      .watermark { position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: none; }
       audio { display: none; }
     </style>
   </head>
@@ -274,10 +365,12 @@ export function compileTimelineProject(
       data-fps="${project.canvas.fps}"
     >
       ${tags.join("\n      ")}
+      ${watermarkHtml}
       <script src="https://cdn.jsdelivr.net/npm/gsap@3/dist/gsap.min.js"></script>
       <script>
         const tl = gsap.timeline({ paused: true });
-        ${gsapFades(expanded, project.canvas.height, project.canvas.width)}
+        ${gsapFades(expanded, project.canvas.height, project.canvas.width, options.imageEffect)}
+        ${gsapWatermark(watermark, durationValue, canvas)}
         window.__timelines = window.__timelines || {};
         window.__timelines.${compositionId} = tl;
       </script>

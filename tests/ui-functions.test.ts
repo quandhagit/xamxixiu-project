@@ -10,6 +10,7 @@ import {
 } from "../src/assets/matcher";
 import {
   buildCommentForest,
+  groupCommentsAsThread,
   reorderComments
 } from "../src/comments/order";
 import { isAnalysisStale } from "../src/comments/analysis-stale";
@@ -23,11 +24,9 @@ import {
   normalizeTopicTitle,
   resolveTimelineTopicTitle,
   resolveTopicTitleVoiceEnabled,
-  shouldGenerateTopicTitleVoice,
   TOPIC_POST_COMMENT_INDEX,
   TOPIC_TITLE_MAX_LENGTH,
-  TOPIC_TITLE_TRANSFORM_Y,
-  TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH
+  TOPIC_TITLE_TRANSFORM_Y
 } from "../src/timeline/topic-constants";
 import {
   applySpeechTextDiffs,
@@ -47,6 +46,7 @@ import {
   moveClip as moveEditorClip,
   removeClip as removeEditorClip,
   setClipFades,
+  setClipImageEffect,
   setClipLocked,
   setClipPosition,
   setClipSfxOffset,
@@ -128,6 +128,29 @@ import {
   DEFAULT_OVERLAY_STYLE_DEFAULTS,
   overlayStyleDefaultsFromSettings
 } from "../src/meme-style";
+import {
+  clampImageEffectStyle,
+  DEFAULT_IMAGE_EFFECT,
+  resolveClipImageEffect,
+  imageEffectLeftPercent,
+  imageEffectOpacity,
+  imageEffectPopScale,
+  imageEffectScale,
+  imageEffectTopPercent,
+  POP_FROM,
+  POP_PEAK
+} from "../src/image-effect";
+import {
+  clampWatermarkStyle,
+  DEFAULT_WATERMARK_STYLE,
+  pingPong,
+  watermarkCssText,
+  watermarkHasText,
+  watermarkOpacity,
+  watermarkPoint,
+  watermarkTextSize,
+  watermarkTravel
+} from "../src/watermark-style";
 import { applyMemeSuggestions } from "../src/ai/suggest-memes";
 import { sanitizeAnalysis } from "../src/assets/prompt-catalog";
 import {
@@ -168,6 +191,7 @@ import {
 import { getExportEngine } from "../src/hyperframes/engine";
 import { mediaType } from "../src/capcut/compile/spec-builder";
 import {
+  applyImageEffectToSpec,
   applyTimelineProjectLayout,
   isAnimatedVisual,
   overlayPixelFormat,
@@ -462,6 +486,21 @@ describe("workflow chrome", () => {
     });
     assert.equal(seeded.topicVoiceId, "ngoc-huyen");
     assert.equal(seeded.topicIntroEnabled, true);
+    assert.equal(seeded.topicTitleVoiceMode, "off");
+    assert.equal(
+      createDefaultAnalysis(
+        { comments: [] },
+        { topicTitleVoiceMode: "on" }
+      ).topicTitleVoiceMode,
+      "on"
+    );
+    assert.equal(
+      createDefaultAnalysis(
+        { comments: [] },
+        { topicTitleVoiceMode: "auto" }
+      ).topicTitleVoiceMode,
+      "off"
+    );
     assert.deepEqual(
       seeded.reactions.map((reaction) => reaction.commentIndex),
       [0, 2]
@@ -1619,8 +1658,16 @@ describe("meme default style", () => {
     );
     assert.match(tabs, /id: "meme"/);
     assert.match(tabs, /Meme/);
+    assert.match(tabs, /id: "comment-capture"/);
+    assert.doesNotMatch(tabs, /id: "images"/);
+    assert.match(tabs, /id: "watermark"/);
+    assert.match(tabs, /Watermark/);
     assert.match(workspace, /meme: next/);
     assert.match(workspace, /MEME_STYLE_CHANGED/);
+    assert.match(workspace, /IMAGE_EFFECT_CHANGED/);
+    assert.match(workspace, /WATERMARK_STYLE_CHANGED/);
+    assert.match(workspace, /id="image-entrance"/);
+    assert.match(workspace, /id="watermark-text"/);
     assert.match(workspace, /id="meme-x"/);
     assert.match(workspace, /id="meme-y"/);
     assert.match(workspace, /id="meme-scale"/);
@@ -1785,6 +1832,93 @@ describe("capture comment order", () => {
     assert.equal(forest[0].children.length, 1);
     assert.equal(forest[0].children[0].index, 1);
   });
+
+  it("groups two root comments under the first selected", () => {
+    const comments = [
+      comment("parent"),
+      comment("child")
+    ];
+    const next = groupCommentsAsThread(
+      comments,
+      [0, 1],
+      [0, 1]
+    );
+    assert.equal(next.comments[0]?.parentCommentIndex, undefined);
+    assert.equal(next.comments[1]?.parentCommentIndex, 0);
+    assert.deepEqual(next.imageSlots, [0, 1]);
+    const forest = buildCommentForest(next.comments);
+    assert.equal(forest.length, 1);
+    assert.equal(forest[0]?.children[0]?.index, 1);
+  });
+
+  it("keeps an existing reply nested instead of flattening it", () => {
+    const comments = [
+      comment("parent"),
+      comment("reply", { parentCommentIndex: 0 }),
+      comment("other")
+    ];
+    const next = groupCommentsAsThread(
+      comments,
+      [0, 1, 2],
+      [0, 1, 2]
+    );
+    assert.equal(next.comments[1]?.parentCommentIndex, 0);
+    assert.equal(next.comments[2]?.parentCommentIndex, 0);
+    const forest = buildCommentForest(next.comments);
+    assert.equal(forest.length, 1);
+    assert.deepEqual(
+      forest[0]?.children.map((node) => node.index),
+      [1, 2]
+    );
+  });
+
+  it("keeps a reply under its selected parent instead of flattening onto the group parent", () => {
+    const comments = [
+      comment("group-parent"),
+      comment("child"),
+      comment("grandchild", { parentCommentIndex: 1 })
+    ];
+    const next = groupCommentsAsThread(
+      comments,
+      [0, 1, 2],
+      [0, 1, 2]
+    );
+    assert.equal(next.comments[1]?.parentCommentIndex, 0);
+    assert.equal(next.comments[2]?.parentCommentIndex, 1);
+  });
+
+  it("inverts a reply into the parent when the reply is selected first", () => {
+    const comments = [
+      comment("old-parent"),
+      comment("reply", { parentCommentIndex: 0 })
+    ];
+    const next = groupCommentsAsThread(
+      comments,
+      [0, 1],
+      [1, 0]
+    );
+    assert.equal(next.comments[1]?.parentCommentIndex, undefined);
+    assert.equal(next.comments[0]?.parentCommentIndex, 1);
+    const forest = buildCommentForest(next.comments);
+    assert.equal(forest.length, 1);
+    assert.equal(forest[0]?.index, 1);
+    assert.equal(forest[0]?.children[0]?.index, 0);
+  });
+
+  it("does not attach a comment to itself and keeps image slots", () => {
+    const comments = [
+      comment("one"),
+      comment("two")
+    ];
+    const same = groupCommentsAsThread(
+      comments,
+      [3, 7],
+      [0, 0]
+    );
+    assert.equal(same.comments[0]?.parentCommentIndex, undefined);
+    assert.equal(same.comments[1]?.parentCommentIndex, undefined);
+    assert.deepEqual(same.imageSlots, [3, 7]);
+  });
 });
 
 describe("analyze freshness", () => {
@@ -1857,32 +1991,21 @@ describe("topic title helpers", () => {
     assert.equal(isTopicTitleMissing("\n\t"), true);
   });
 
-  it("skips title voice for short topic text", () => {
-    assert.equal(shouldGenerateTopicTitleVoice("short"), false);
+  it("reads the title only when the user turns it on", () => {
     assert.equal(
-      shouldGenerateTopicTitleVoice(
-        "a".repeat(TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH + 1)
-      ),
-      true
-    );
-  });
-
-  it("lets the user override the default title-voice rule", () => {
-    assert.equal(
-      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "on" }, "short"),
+      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "on" }),
       true
     );
     assert.equal(
-      resolveTopicTitleVoiceEnabled(
-        { topicTitleVoiceMode: "off" },
-        "a".repeat(TOPIC_TITLE_VOICE_MIN_TEXT_LENGTH + 1)
-      ),
+      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "off" }),
       false
     );
     assert.equal(
-      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "auto" }, "short"),
+      resolveTopicTitleVoiceEnabled({ topicTitleVoiceMode: "auto" }),
       false
     );
+    assert.equal(resolveTopicTitleVoiceEnabled({}), false);
+    assert.equal(resolveTopicTitleVoiceEnabled(undefined), false);
   });
 
   it("falls back to content title, then post text, then a default", () => {
@@ -1906,6 +2029,229 @@ describe("topic title helpers", () => {
   });
 });
 
+describe("image entrance effect", () => {
+  it("defaults to none and clamps unknown entrances", () => {
+    assert.equal(DEFAULT_IMAGE_EFFECT.entrance, "none");
+    assert.equal(DEFAULT_IMAGE_EFFECT.duration, 0.35);
+    assert.deepEqual(clampImageEffectStyle(undefined), DEFAULT_IMAGE_EFFECT);
+    assert.equal(
+      clampImageEffectStyle({ entrance: "spin", duration: 9 }).entrance,
+      "none"
+    );
+    assert.equal(
+      clampImageEffectStyle({ entrance: "pop", duration: 0.01 }).duration,
+      0.08
+    );
+  });
+
+  it("computes zoom, pop, fade, and four slide directions", () => {
+    assert.equal(imageEffectScale("zoom-in", 0), ZOOM_IN_FROM);
+    assert.equal(imageEffectScale("zoom-in", 1), 1);
+    assert.equal(imageEffectPopScale(0), POP_FROM);
+    assert.equal(imageEffectPopScale(0.7), POP_PEAK);
+    assert.equal(imageEffectPopScale(1), 1);
+    assert.equal(imageEffectOpacity("fade", 0), 0);
+    assert.equal(imageEffectOpacity("fade", 1), 1);
+    assert.equal(imageEffectOpacity("none", 0), 1);
+    assert.equal(imageEffectTopPercent("slide-up", 50, 0), 150);
+    assert.equal(imageEffectTopPercent("slide-up", 50, 1), 50);
+    assert.equal(imageEffectTopPercent("slide-down", 50, 0), -50);
+    assert.equal(imageEffectTopPercent("slide-down", 50, 1), 50);
+    assert.equal(imageEffectLeftPercent("slide-left", 50, 0), -50);
+    assert.equal(imageEffectLeftPercent("slide-left", 50, 1), 50);
+    assert.equal(imageEffectLeftPercent("slide-right", 50, 0), 150);
+    assert.equal(imageEffectLeftPercent("slide-right", 50, 1), 50);
+  });
+
+  it("lets a comment clip override the global entrance", () => {
+    const global = clampImageEffectStyle({
+      entrance: "zoom-in",
+      duration: 0.4
+    });
+    assert.deepEqual(
+      resolveClipImageEffect(
+        { trackId: "images" },
+        global
+      ),
+      global
+    );
+    assert.deepEqual(
+      resolveClipImageEffect(
+        {
+          trackId: "images",
+          animation: "pop",
+          animationDuration: 0.2
+        },
+        global
+      ),
+      { entrance: "pop", duration: 0.2 }
+    );
+    assert.equal(
+      resolveClipImageEffect(
+        { trackId: "images", animation: "none" },
+        global
+      ).entrance,
+      "none"
+    );
+    assert.equal(
+      clipAnimationLabel({
+        trackId: "images",
+        animation: "slide-down",
+        animationDuration: 0.3
+      }),
+      "Slide down"
+    );
+
+    const project = createEmptyTimelineProject();
+    project.clips = [
+      sceneClip({
+        id: "img-0",
+        trackId: "images",
+        start: 0,
+        duration: 3,
+        commentIndex: 0
+      })
+    ];
+    const next = setClipImageEffect(project, "img-0", {
+      entrance: "slide-left",
+      duration: 0.5
+    });
+    const clip = next.clips[0];
+    assert.equal(clip?.animation, "slide-left");
+    assert.equal(clip?.animationDuration, 0.5);
+    assert.equal(
+      setClipImageEffect(project, "voice-0", {
+        entrance: "pop",
+        duration: 0.2
+      }),
+      project
+    );
+
+    const spec = applyImageEffectToSpec(
+      {
+        name: "test",
+        width: 1080,
+        height: 1920,
+        fps: 30,
+        ratio: "9:16",
+        tracks: [
+          {
+            type: "video",
+            name: "images",
+            items: [
+              { start: 0, duration: 3, path: "img-0.bin", type: "photo" }
+            ]
+          }
+        ]
+      },
+      global,
+      next
+    );
+    assert.equal(spec.tracks[0]?.items[0]?.entrance, "slide-left");
+    assert.equal(spec.tracks[0]?.items[0]?.animationDuration, 0.5);
+
+    const source = timeline();
+    const built = videoTimelineToProject(source);
+    const image = built.clips.find((item) => item.trackId === "images");
+    assert.ok(image);
+    image.animation = "pop";
+    image.animationDuration = 0.22;
+    const rebuilt = videoTimelineToProject(source, built);
+    const kept = rebuilt.clips.find((item) => item.id === image.id);
+    assert.equal(kept?.animation, "pop");
+    assert.equal(kept?.animationDuration, 0.22);
+
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(workspace, /id="clip-image-entrance"/);
+    assert.match(workspace, /id="clip-image-duration"/);
+    assert.match(workspace, /setClipImageEffect/);
+  });
+});
+
+describe("watermark drift", () => {
+  it("clamps text and keeps ping-pong inside the frame", () => {
+    assert.equal(DEFAULT_WATERMARK_STYLE.text, "");
+    assert.equal(watermarkHasText(DEFAULT_WATERMARK_STYLE), false);
+    const style = clampWatermarkStyle({
+      text: "X".repeat(100),
+      fontSize: 4,
+      blur: 90,
+      speed: 10,
+      color: "red"
+    });
+    assert.equal(style.text.length, 80);
+    assert.equal(style.fontSize, 12);
+    assert.equal(style.blur, 24);
+    assert.equal(watermarkOpacity(DEFAULT_WATERMARK_STYLE), 1);
+    assert.equal(watermarkOpacity({ ...DEFAULT_WATERMARK_STYLE, blur: 12 }), 0.5);
+    assert.equal(watermarkOpacity(style), 0);
+    assert.match(
+      watermarkCssText({ ...DEFAULT_WATERMARK_STYLE, text: "x", blur: 12 }),
+      /opacity:0.5/
+    );
+    assert.doesNotMatch(
+      watermarkCssText({ ...DEFAULT_WATERMARK_STYLE, text: "x", blur: 12 }),
+      /filter:blur/
+    );
+    assert.equal(style.speed, 40);
+    assert.equal(style.color, DEFAULT_WATERMARK_STYLE.color);
+
+    const moving = clampWatermarkStyle({
+      text: "XamXiXiu",
+      fontSize: 32,
+      speed: 80
+    });
+    const canvas = { width: 1080, height: 1920 };
+    const size = watermarkTextSize(moving);
+    for (let time = 0; time <= 20; time += 0.25) {
+      const point = watermarkPoint(time, moving, canvas);
+      assert.ok(point.x >= size.pad - 0.001);
+      assert.ok(point.y >= size.pad - 0.001);
+      assert.ok(point.x + size.width <= canvas.width - size.pad + 0.001);
+      assert.ok(point.y + size.height <= canvas.height - size.pad + 0.001);
+    }
+  });
+
+  it("changes direction after hitting an edge", () => {
+    assert.equal(pingPong(100, 50, 0), 0);
+    assert.equal(pingPong(100, 50, 2), 100);
+    assert.equal(pingPong(100, 50, 3), 50);
+    const moving = clampWatermarkStyle({
+      text: "XamXiXiu",
+      fontSize: 32,
+      speed: 80
+    });
+    const canvas = { width: 1080, height: 1920 };
+    const travel = watermarkTravel(moving, canvas);
+    const bounceX = travel.travelX / travel.vx;
+    const before = watermarkPoint(bounceX - 0.2, moving, canvas);
+    const peak = watermarkPoint(bounceX, moving, canvas);
+    const after = watermarkPoint(bounceX + 0.2, moving, canvas);
+    assert.ok(before.x < peak.x);
+    assert.ok(after.x < peak.x);
+  });
+
+  it("adds a locked watermark lane clip from settings, not the project file", () => {
+    const project = createEmptyTimelineProject();
+    project.totalDuration = 8;
+    const tracks = getProjectTracks(project, {
+      watermark: clampWatermarkStyle({ text: "xamxixiu" })
+    });
+    const lane = tracks.find((track) => track.id === "watermark");
+    assert.equal(lane?.clips.length, 1);
+    assert.equal(lane?.clips[0]?.locked, true);
+    assert.equal(lane?.clips[0]?.editable, false);
+    assert.equal(
+      clipCanRemove({ trackId: "watermark", locked: true }),
+      false
+    );
+    assert.equal(project.clips.some((clip) => clip.trackId === "watermark"), false);
+  });
+});
+
 describe("timeline tracks", () => {
   it("exposes the track ids including beep", () => {
     assert.deepEqual([...TRACK_IDS], [
@@ -1914,6 +2260,7 @@ describe("timeline tracks", () => {
       "images",
       "meme",
       "video",
+      "watermark",
       "voice",
       "sfx",
       "beep",
@@ -1921,8 +2268,10 @@ describe("timeline tracks", () => {
     ]);
     assert.equal(TRACK_LABELS.voice, "Voice");
     assert.equal(TRACK_LABELS.beep, "Beep");
+    assert.equal(TRACK_LABELS.watermark, "Watermark");
     assert.equal(trackLaneHeight("meme"), 44);
     assert.equal(trackLaneHeight("images"), 44);
+    assert.equal(trackLaneHeight("watermark"), 44);
     assert.equal(trackLaneHeight("voice"), 32);
   });
 

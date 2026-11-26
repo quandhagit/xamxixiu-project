@@ -13,6 +13,7 @@ export interface CompileItem {
   fadeIn?: number;
   flyUp?: boolean;
   animationDuration?: number;
+  entrance?: string;
   text?: string;
   fontSize?: number;
   color?: string;

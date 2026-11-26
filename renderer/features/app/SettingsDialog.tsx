@@ -9,6 +9,8 @@ import {
 import { DEFAULT_COMMENT_CAPTURE_STYLE } from "../../../src/capture-style";
 import { DEFAULT_TOPIC_TITLE_STYLE } from "../../../src/topic-title-style";
 import { DEFAULT_MEME_STYLE } from "../../../src/meme-style";
+import { DEFAULT_IMAGE_EFFECT } from "../../../src/image-effect";
+import { DEFAULT_WATERMARK_STYLE } from "../../../src/watermark-style";
 import type {
   AiProvider,
   AppSettings
@@ -46,7 +48,9 @@ const EMPTY_SETTINGS: AppSettings = {
   capcutDraftsDir: "",
   commentCapture: DEFAULT_COMMENT_CAPTURE_STYLE,
   topicTitle: DEFAULT_TOPIC_TITLE_STYLE,
-  meme: DEFAULT_MEME_STYLE
+  meme: DEFAULT_MEME_STYLE,
+  imageEffect: DEFAULT_IMAGE_EFFECT,
+  watermark: DEFAULT_WATERMARK_STYLE
 };
 
 type TabId =

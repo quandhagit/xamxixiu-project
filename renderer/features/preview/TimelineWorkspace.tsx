@@ -13,6 +13,14 @@ import type { ProjectState } from "../../../src/project/store";
 import type { VideoTimeline } from "../../../src/types";
 import type { CommentCaptureStyle } from "../../../src/capture-style";
 import type { TopicTitleStyle } from "../../../src/topic-title-style";
+import {
+  IMAGE_EFFECT_LABELS,
+  IMAGE_EFFECT_LIMITS,
+  IMAGE_ENTRANCES,
+  resolveClipImageEffect,
+  type ImageEffectStyle
+} from "../../../src/image-effect";
+import type { WatermarkStyle } from "../../../src/watermark-style";
 import type { TimelineProject } from "../../../src/timeline/project";
 import {
   DEFAULT_AUTO_FORMAT
@@ -25,6 +33,7 @@ import {
   setClipAnimationDuration,
   /* setClipComboLocked, */
   setClipFades,
+  setClipImageEffect,
   /* setClipLocked, */
   setClipPosition,
   setClipScale,
@@ -96,6 +105,8 @@ interface TimelineWorkspaceProps {
   previewAssets: Record<string, string>;
   captureStyle?: CommentCaptureStyle;
   titleStyle?: TopicTitleStyle;
+  imageEffect?: ImageEffectStyle;
+  watermarkStyle?: WatermarkStyle;
   analysis?: ProjectState["analysis"];
   reactions?: ProjectState["reactions"];
   visible?: boolean;
@@ -112,6 +123,8 @@ export function TimelineWorkspace({
   previewAssets,
   captureStyle,
   titleStyle,
+  imageEffect,
+  watermarkStyle,
   analysis,
   reactions,
   visible = true,
@@ -730,6 +743,8 @@ export function TimelineWorkspace({
               selectedClipId={selectedClipId}
               captureStyle={captureStyle}
               titleStyle={titleStyle}
+              imageEffect={imageEffect}
+              watermarkStyle={watermarkStyle}
               onToggle={preview.togglePreview}
               onSelectClip={setSelectedClipId}
               onPositionCommit={(clipId, x, y) => {
@@ -795,6 +810,7 @@ export function TimelineWorkspace({
                 <ClipFadePanel
                   project={editorProject}
                   clipId={selectedClipId}
+                  imageEffect={imageEffect}
                   disabled={busy}
                   userCombos={userCombos}
                   onCombosChange={setUserCombos}
@@ -840,6 +856,7 @@ export function TimelineWorkspace({
             selectedClipId={selectedClipId}
             voicePeaks={voicePeaks}
             disabled={busy}
+            watermarkStyle={watermarkStyle}
             onSeek={(time) => {
               preview.setPreviewPlaying(false);
               preview.setPreviewTime(time);
@@ -996,6 +1013,7 @@ export function TimelineWorkspace({
 function ClipFadePanel({
   project,
   clipId,
+  imageEffect,
   disabled,
   userCombos,
   onCombosChange,
@@ -1008,6 +1026,7 @@ function ClipFadePanel({
 }: {
   project: TimelineProject;
   clipId: string;
+  imageEffect?: ImageEffectStyle;
   disabled: boolean;
   userCombos: MemeCombo[];
   onCombosChange: (combos: MemeCombo[]) => void;
@@ -1057,6 +1076,10 @@ function ClipFadePanel({
     clip.commentIndex !== undefined &&
     clip.commentIndex !== null;
   const videoMeme = clip.trackId === "video";
+  const commentImage = clip.trackId === "images";
+  const clipImageEffect = commentImage
+    ? resolveClipImageEffect(clip, imageEffect)
+    : undefined;
   const custom = isCustomCombo(clip, userCombos);
   const selectedComboId = custom
     ? CUSTOM_COMBO_ID
@@ -1106,6 +1129,31 @@ function ClipFadePanel({
             </Button>
           ) : null}
         </div>
+      ) : null}
+      {commentImage && clipImageEffect ? (
+        <label className="mt-2 block text-[11px] text-ink-2">
+          Effect
+          <select
+            id="clip-image-entrance"
+            className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+            disabled={disabled || clip.locked}
+            value={clipImageEffect.entrance}
+            onChange={(event) =>
+              onChange(
+                setClipImageEffect(project, clipId, {
+                  ...clipImageEffect,
+                  entrance: event.target.value as ImageEffectStyle["entrance"]
+                })
+              )
+            }
+          >
+            {IMAGE_ENTRANCES.map((entrance) => (
+              <option key={entrance} value={entrance}>
+                {IMAGE_EFFECT_LABELS[entrance]}
+              </option>
+            ))}
+          </select>
+        </label>
       ) : null}
       {imageMeme || videoMeme ? (
         <label className="mt-2 block text-[11px] text-ink-2">
@@ -1186,7 +1234,31 @@ function ClipFadePanel({
             }
           />
         </label>
-        {clipHasTimedMotion(clip) ? (
+        {commentImage && clipImageEffect ? (
+          <label>
+            Duration
+            <input
+              id="clip-image-duration"
+              type="number"
+              min={IMAGE_EFFECT_LIMITS.duration.min}
+              max={IMAGE_EFFECT_LIMITS.duration.max}
+              step={0.01}
+              value={clipImageEffect.duration}
+              disabled={disabled || clip.locked}
+              className="mt-1 w-full rounded-md border border-line bg-app px-2 py-1"
+              onBlur={() => onFlushDraft?.()}
+              onChange={(event) =>
+                draftChange(
+                  setClipImageEffect(project, clipId, {
+                    ...clipImageEffect,
+                    duration: Number(event.target.value)
+                  })
+                )
+              }
+            />
+          </label>
+        ) : null}
+        {!commentImage && clipHasTimedMotion(clip) ? (
           <label>
             Animation
             <input

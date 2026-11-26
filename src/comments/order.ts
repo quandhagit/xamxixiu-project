@@ -517,3 +517,158 @@ export function setCommentShownAsRoot(
     imageSlots: imageSlots.slice()
   };
 }
+
+function uniqueValidIndexes(
+  comments: ThreadComment[],
+  selectedIndexes: number[]
+): number[] {
+  const seen = new Set<number>();
+  const selected: number[] = [];
+
+  for (const index of selectedIndexes) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= comments.length ||
+      seen.has(index)
+    ) {
+      continue;
+    }
+
+    seen.add(index);
+    selected.push(index);
+  }
+
+  return selected;
+}
+
+function hasSelectedAncestor(
+  comments: ThreadComment[],
+  index: number,
+  parentIndex: number,
+  selectedSet: Set<number>
+): boolean {
+  let current = effectiveParentIndex(comments, index);
+
+  while (current !== undefined) {
+    if (current === parentIndex || selectedSet.has(current)) {
+      return true;
+    }
+
+    current = effectiveParentIndex(comments, current);
+  }
+
+  return false;
+}
+
+/**
+ * Groups selected comments under the first selected index. Nested replies
+ * already under another selected comment stay put. If the new parent is a
+ * reply of another selected comment, that link is cut first so the group
+ * can invert without forming a cycle.
+ */
+export function groupCommentsAsThread(
+  comments: ThreadComment[],
+  imageSlots: number[],
+  selectedIndexes: number[]
+): {
+  comments: ThreadComment[];
+  imageSlots: number[];
+} {
+  if (imageSlots.length !== comments.length) {
+    throw new Error(
+      `imageSlots length ${imageSlots.length} does not match comments length ${comments.length}`
+    );
+  }
+
+  const selected = uniqueValidIndexes(
+    comments,
+    selectedIndexes
+  );
+
+  if (selected.length < 2) {
+    return unchanged(comments, imageSlots);
+  }
+
+  const parentIndex = selected[0];
+
+  if (parentIndex === undefined) {
+    return unchanged(comments, imageSlots);
+  }
+
+  const selectedSet = new Set(selected);
+  const nextComments = comments.map((comment) => ({
+    ...comment
+  }));
+  let changed = false;
+  const parentComment = nextComments[parentIndex];
+  const parentOfParent = effectiveParentIndex(
+    nextComments,
+    parentIndex
+  );
+
+  if (
+    parentComment &&
+    parentOfParent !== undefined &&
+    selectedSet.has(parentOfParent)
+  ) {
+    const detached: ThreadComment = { ...parentComment };
+    delete detached.parentCommentIndex;
+
+    if (detached.originalParentCommentIndex === parentOfParent) {
+      delete detached.originalParentCommentIndex;
+    }
+
+    nextComments[parentIndex] = detached;
+    changed = true;
+  }
+
+  for (const index of selected) {
+    if (index === parentIndex) {
+      continue;
+    }
+
+    if (
+      hasSelectedAncestor(
+        nextComments,
+        index,
+        parentIndex,
+        selectedSet
+      )
+    ) {
+      continue;
+    }
+
+    if (parentCreatesCycle(nextComments, index, parentIndex)) {
+      continue;
+    }
+
+    const comment = nextComments[index];
+
+    if (!comment) {
+      continue;
+    }
+
+    const attached: ThreadComment = { ...comment };
+    attached.parentCommentIndex = parentIndex;
+    delete attached.originalParentCommentIndex;
+    nextComments[index] = attached;
+    changed = true;
+  }
+
+  if (!changed) {
+    return unchanged(comments, imageSlots);
+  }
+
+  const identity = nextComments.map(
+    (_item, itemIndex) => itemIndex
+  );
+
+  return {
+    comments: reorderCommentsByOrder(
+      nextComments,
+      identity
+    ),
+    imageSlots: imageSlots.slice()
+  };
+}

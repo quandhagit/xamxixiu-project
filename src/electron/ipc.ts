@@ -1210,7 +1210,9 @@ export function registerIpc(
         outputPath,
         sendProgress,
         settings.commentCapture,
-        settings.topicTitle
+        settings.topicTitle,
+        settings.imageEffect,
+        settings.watermark
       );
     }
   );

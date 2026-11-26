@@ -17,6 +17,25 @@ import type { VideoTimeline } from "../types.js";
 import { clipUsesFlyUp } from "../timeline/clip-motion.js";
 import type { TimelineClip, TimelineProject } from "../timeline/project.js";
 import {
+  clampImageEffectStyle,
+  DEFAULT_IMAGE_EFFECT,
+  imageEffectGlobalProgressExpr,
+  imageEffectLocalProgressExpr,
+  imageEffectScaleFfmpeg,
+  imageEffectUsesFade,
+  imageEffectUsesScale,
+  resolveClipImageEffect,
+  type ImageEffectStyle
+} from "../image-effect.js";
+import {
+  clampWatermarkStyle,
+  watermarkHasText,
+  watermarkOpacity,
+  watermarkOverlayExpressions,
+  type WatermarkStyle
+} from "../watermark-style.js";
+import { renderWatermarkPng } from "../watermark-render.js";
+import {
   TOPIC_TITLE_ANIMATION_DURATION,
   TOPIC_TITLE_WIDTH_FRACTION
 } from "../timeline/topic-constants.js";
@@ -59,7 +78,10 @@ interface SizedLayer {
 }
 
 export interface VisualFilterLayer {
-  item: Pick<CompileItem, "start" | "duration" | "opacity">;
+  item: Pick<
+    CompileItem,
+    "start" | "duration" | "opacity" | "entrance" | "animationDuration"
+  >;
   width: number;
   height: number;
   preScaled?: boolean;
@@ -179,7 +201,7 @@ function targetWidth(
   nativeWidth: number,
   canvasWidth: number
 ): number {
-  if (item.ref === "topic-title-card") {
+  if (item.ref === "topic-title-card" || item.ref === "watermark") {
     return nativeWidth * (item.scale ?? 1);
   }
   return (item.scale ?? 1) * canvasWidth;
@@ -250,6 +272,35 @@ export function applyTimelineProjectLayout(
         item.animationDuration =
           clip.animationDuration ?? item.animationDuration;
       }
+    }
+  }
+  return spec;
+}
+
+export function applyImageEffectToSpec(
+  spec: CompileSpec,
+  imageEffect?: ImageEffectStyle,
+  project?: TimelineProject
+): CompileSpec {
+  const fallback = clampImageEffectStyle(imageEffect, DEFAULT_IMAGE_EFFECT);
+  for (const track of spec.tracks) {
+    if (track.name !== "images") {
+      continue;
+    }
+    for (const item of track.items) {
+      const matched = project ? matchExportClip(project, item) : undefined;
+      const effect = resolveClipImageEffect(
+        matched?.trackId === "images"
+          ? matched
+          : { trackId: "images" },
+        fallback
+      );
+      if (effect.entrance === "none") {
+        item.entrance = undefined;
+        continue;
+      }
+      item.entrance = effect.entrance;
+      item.animationDuration = effect.duration;
     }
   }
   return spec;
@@ -458,6 +509,8 @@ export function visualFilters(
   fps: number
 ): string {
   const start = seconds(layer.item.start);
+  const entrance = layer.item.entrance;
+  const motionDuration = layer.item.animationDuration ?? 0.35;
   const parts = [
     `fps=${fps}`,
     "setpts=PTS-STARTPTS",
@@ -469,6 +522,18 @@ export function visualFilters(
       `scale=${layer.width}:${layer.height}:flags=lanczos`
     );
   }
+  if (entrance && imageEffectUsesScale(entrance as ImageEffectStyle["entrance"])) {
+    const progress = imageEffectLocalProgressExpr(motionDuration);
+    const scale = imageEffectScaleFfmpeg(
+      entrance as ImageEffectStyle["entrance"],
+      progress
+    );
+    if (scale) {
+      parts.push(
+        `scale=w='max(2\\,2*floor(iw*(${scale})/2))':h='max(2\\,2*floor(ih*(${scale})/2))':eval=frame`
+      );
+    }
+  }
   parts.push(
     `format=${overlayPixelFormat(layer.item.opacity)}`,
     "setsar=1"
@@ -478,29 +543,122 @@ export function visualFilters(
       `colorchannelmixer=aa=${layer.item.opacity}`
     );
   }
+  if (entrance && imageEffectUsesFade(entrance as ImageEffectStyle["entrance"])) {
+    parts.push(`fade=t=in:st=0:d=${seconds(motionDuration)}`);
+  }
   if (layer.item.start > 0) {
     parts.push(`setpts=PTS+${start}/TB`);
   }
   return parts.join(",");
 }
 
+function interpolateOverlay(
+  from: number,
+  to: number,
+  start: number,
+  duration: number
+): string {
+  return `'${from}+(${to - from})*min(1\\,max(0\\,(t-${seconds(
+    start
+  )})/${seconds(duration)}))'`;
+}
+
+function overlayScaleCompensation(
+  rest: number,
+  size: number,
+  layer: SizedLayer
+): string | undefined {
+  const entrance = layer.item.entrance;
+  if (
+    !entrance ||
+    !imageEffectUsesScale(entrance as ImageEffectStyle["entrance"])
+  ) {
+    return undefined;
+  }
+  const progress = imageEffectGlobalProgressExpr(
+    layer.item.start,
+    layer.item.animationDuration ?? 0.35
+  );
+  const scale = imageEffectScaleFfmpeg(
+    entrance as ImageEffectStyle["entrance"],
+    progress
+  );
+  if (!scale) {
+    return undefined;
+  }
+  return `'${rest}+${size}*(1-(${scale}))/2'`;
+}
+
+function overlayXExpression(
+  layer: SizedLayer,
+  canvasWidth: number
+): string {
+  const entrance = layer.item.entrance;
+  const restX = layer.x;
+  const animation = Math.max(
+    0.001,
+    layer.item.animationDuration ?? 0.35
+  );
+  if (entrance === "slide-left") {
+    return interpolateOverlay(
+      restX - canvasWidth,
+      restX,
+      layer.item.start,
+      animation
+    );
+  }
+  if (entrance === "slide-right") {
+    return interpolateOverlay(
+      restX + canvasWidth,
+      restX,
+      layer.item.start,
+      animation
+    );
+  }
+  return overlayScaleCompensation(restX, layer.width, layer) ?? String(restX);
+}
+
 function overlayYExpression(
   layer: SizedLayer,
   canvasHeight: number
 ): string {
-  if (!layer.item.flyUp) {
-    return String(layer.y);
-  }
+  const entrance = layer.item.entrance;
+  const restY = layer.y;
   const animation = Math.max(
     0.001,
     layer.item.animationDuration ??
     TOPIC_TITLE_ANIMATION_DURATION
   );
-  const restY = layer.y;
+  if (entrance === "slide-up") {
+    return interpolateOverlay(
+      restY + canvasHeight,
+      restY,
+      layer.item.start,
+      animation
+    );
+  }
+  if (entrance === "slide-down") {
+    return interpolateOverlay(
+      restY - canvasHeight,
+      restY,
+      layer.item.start,
+      animation
+    );
+  }
+  const scaled = overlayScaleCompensation(restY, layer.height, layer);
+  if (scaled) {
+    return scaled;
+  }
+  if (!layer.item.flyUp) {
+    return String(layer.y);
+  }
   const startY = restY + canvasHeight;
-  return `'${startY}+(${restY - startY})*min(1\\,max(0\\,(t-${seconds(
-    layer.item.start
-  )})/${seconds(animation)}))'`;
+  return interpolateOverlay(
+    startY,
+    restY,
+    layer.item.start,
+    animation
+  );
 }
 
 function audioFilters(item: CompileItem): string {
@@ -532,7 +690,9 @@ function timelineDuration(spec: CompileSpec): number {
 async function buildGraph(
   spec: CompileSpec,
   stagingDirectory: string,
-  captureStyle?: CommentCaptureStyle
+  captureStyle?: CommentCaptureStyle,
+  watermark?: WatermarkStyle,
+  watermarkPad = 0
 ): Promise<{
   inputArgs: string[];
   filterScript: string;
@@ -649,6 +809,23 @@ async function buildGraph(
             "-t",
             seconds(item.duration)
           ];
+      if (track.name === "watermark") {
+        visualJobs.push((async () => {
+          const native = await probeMedia(item.path as string);
+          return {
+            item,
+            extraArgs,
+            file: item.path as string,
+            width: even(item.width ?? native.width),
+            height: even(item.height ?? native.height),
+            x: 0,
+            y: 0,
+            preScaled: true,
+            attachAudio: false
+          };
+        })());
+        continue;
+      }
       visualJobs.push((async () => {
         const native = await probeMedia(item.path as string);
         const width = even(
@@ -768,11 +945,24 @@ async function buildGraph(
       filters.push(
         `[${layer.input.index}:v]${visualFilters(layer, spec.fps)}[${scaledLabel}]`
       );
+      const overlayX =
+        layer.item.ref === "watermark" && watermark
+          ? watermarkOverlayExpressions(
+              watermark,
+              { width: spec.width, height: spec.height },
+              watermarkPad
+            ).x
+          : overlayXExpression(layer, spec.width);
+      const overlayY =
+        layer.item.ref === "watermark" && watermark
+          ? watermarkOverlayExpressions(
+              watermark,
+              { width: spec.width, height: spec.height },
+              watermarkPad
+            ).y
+          : overlayYExpression(layer, spec.height);
       filters.push(
-        `[${lastLabel}][${scaledLabel}]overlay=x=${layer.x}:y=${overlayYExpression(
-          layer,
-          spec.height
-        )}:enable='between(t,${seconds(
+        `[${lastLabel}][${scaledLabel}]overlay=x=${overlayX}:y=${overlayY}:enable='between(t,${seconds(
           layer.item.start
         )},${seconds(end)})':format=auto[${outputLabel}]`
       );
@@ -815,7 +1005,9 @@ export async function exportTimelineVideo(
   onProgress?: (progress: VideoExportProgress) => void,
   captureStyle?: CommentCaptureStyle,
   titleStyle?: TopicTitleStyle,
-  timelineProject?: TimelineProject
+  timelineProject?: TimelineProject,
+  imageEffect?: ImageEffectStyle,
+  watermarkStyle?: WatermarkStyle
 ): Promise<string> {
   onProgress?.({
     phase: "preparing",
@@ -829,23 +1021,52 @@ export async function exportTimelineVideo(
         titleStyle
       )
     : undefined;
-  const spec = applyTimelineProjectLayout(
-    await buildCompileSpec(
-      projectDirectory,
-      timeline,
-      topicTitleCardFile,
-      { preserveVideoMemeDuration: true }
+  const spec = applyImageEffectToSpec(
+    applyTimelineProjectLayout(
+      await buildCompileSpec(
+        projectDirectory,
+        timeline,
+        topicTitleCardFile,
+        { preserveVideoMemeDuration: true }
+      ),
+      timelineProject
     ),
+    imageEffect,
     timelineProject
   );
   const stagingDirectory = await fs.mkdtemp(
     path.join(os.tmpdir(), "xamxixiu-export-")
   );
   try {
+    const watermark = clampWatermarkStyle(watermarkStyle);
+    let watermarkPad = 0;
+    if (watermarkHasText(watermark)) {
+      const rendered = await renderWatermarkPng(
+        watermark,
+        path.join(stagingDirectory, "watermark.png")
+      );
+      watermarkPad = rendered.pad;
+      spec.tracks.push({
+        type: "video",
+        name: "watermark",
+        items: [{
+          path: rendered.file,
+          start: 0,
+          duration: Math.max(timelineDuration(spec), timeline.totalDuration),
+          type: "photo",
+          ref: "watermark",
+          width: rendered.width,
+          height: rendered.height,
+          opacity: watermarkOpacity(watermark)
+        }]
+      });
+    }
     const graph = await buildGraph(
       spec,
       stagingDirectory,
-      captureStyle
+      captureStyle,
+      watermarkHasText(watermark) ? watermark : undefined,
+      watermarkPad
     );
     await fs.mkdir(path.dirname(outputPath), {
       recursive: true

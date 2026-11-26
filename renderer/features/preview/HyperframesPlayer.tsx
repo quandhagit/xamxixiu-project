@@ -49,16 +49,36 @@ import {
 } from "../../../src/capture-style";
 import {
   DEFAULT_TOPIC_TITLE_STYLE,
+  overlayCanvasPx,
   topicTitleCardStyle,
   type TopicTitleStyle
 } from "../../../src/topic-title-style";
+import {
+  DEFAULT_IMAGE_EFFECT,
+  imageEffectLeftPercent,
+  imageEffectOpacity,
+  imageEffectProgress,
+  imageEffectScale,
+  imageEffectTopPercent,
+  resolveClipImageEffect,
+  type ImageEffectStyle
+} from "../../../src/image-effect";
+import {
+  DEFAULT_WATERMARK_STYLE,
+  WATERMARK_CANVAS,
+  watermarkHasText,
+  watermarkOpacity,
+  watermarkPoint,
+  type WatermarkStyle
+} from "../../../src/watermark-style";
 
 const TRACK_Z: Record<string, number> = {
   background: 0,
   images: 1,
   "title-card": 2,
   meme: 3,
-  video: 4
+  video: 4,
+  watermark: 5
 };
 
 function clipActive(clip: TimelineClip, time: number): boolean {
@@ -97,9 +117,10 @@ function visualStyle(
   clip: TimelineClip,
   time: number,
   captureStyle: CommentCaptureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
-  titleStyle: TopicTitleStyle = DEFAULT_TOPIC_TITLE_STYLE
+  titleStyle: TopicTitleStyle = DEFAULT_TOPIC_TITLE_STYLE,
+  imageEffect: ImageEffectStyle = DEFAULT_IMAGE_EFFECT
 ): CSSProperties {
-  const opacity = clipOpacity(clip, time);
+  let opacity = clipOpacity(clip, time);
   if (clip.trackId === "background") {
     return {
       position: "absolute",
@@ -120,24 +141,42 @@ function visualStyle(
     (clip.trackId === "title-card" ? 1 - TOPIC_TITLE_CENTER_FRACTION * 2 : 0);
   let top = 50 - y * 50;
   let left = 50 + x * 50;
-  const progress = clipFlyUpProgress(
-    time - clip.start,
-    clip.animationDuration
-  );
-  const motion = clipMotionName(clip);
-  if (clipUsesFlyUp(clip)) {
-    top = clipFlyUpTopPercent({
-      restTopPercent: top,
-      progress
-    });
+  let zoom = 1;
+  const clipEffect = resolveClipImageEffect(clip, imageEffect);
+  const useImageEffect =
+    clip.trackId === "images" && clipEffect.entrance !== "none";
+  if (useImageEffect) {
+    const progress = imageEffectProgress(
+      time - clip.start,
+      clipEffect.duration
+    );
+    left = imageEffectLeftPercent(clipEffect.entrance, left, progress);
+    top = imageEffectTopPercent(clipEffect.entrance, top, progress);
+    zoom = imageEffectScale(clipEffect.entrance, progress);
+    opacity *= imageEffectOpacity(clipEffect.entrance, progress);
+  } else {
+    const progress = clipFlyUpProgress(
+      time - clip.start,
+      clip.animationDuration
+    );
+    const motion = clipMotionName(clip);
+    if (clipUsesFlyUp(clip)) {
+      top = clipFlyUpTopPercent({
+        restTopPercent: top,
+        progress
+      });
+    }
+    if (motion === "slide-left") {
+      left = clipSlideLeftPercent(left, progress);
+    }
+    zoom = motion === "zoom-in" ? clipZoomMultiplier(progress) : 1;
   }
-  if (motion === "slide-left") {
-    left = clipSlideLeftPercent(left, progress);
-  }
-  const zoom =
-    motion === "zoom-in" ? clipZoomMultiplier(progress) : 1;
   const shake =
-    motion === "shake" ? clipShakeOffsetPercent(progress) : 0;
+    !useImageEffect && clipMotionName(clip) === "shake"
+      ? clipShakeOffsetPercent(
+          clipFlyUpProgress(time - clip.start, clip.animationDuration)
+        )
+      : 0;
   const shakeShift = shake ? ` translateX(${shake}%)` : "";
   return {
     position: "absolute",
@@ -169,6 +208,7 @@ function PreviewClip({
   dragging,
   captureStyle,
   titleStyle,
+  imageEffect,
   onMedia,
   onMovePointerDown,
   onMovePointerMove,
@@ -184,6 +224,7 @@ function PreviewClip({
   dragging?: boolean;
   captureStyle?: CommentCaptureStyle;
   titleStyle?: TopicTitleStyle;
+  imageEffect?: ImageEffectStyle;
   onMedia?: (element: HTMLMediaElement | null) => void;
   onMovePointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onMovePointerMove?: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -257,7 +298,8 @@ function PreviewClip({
     clip,
     time,
     captureStyle,
-    titleStyle
+    titleStyle,
+    imageEffect
   );
   const style: CSSProperties = {
     ...clipStyle,
@@ -339,6 +381,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   selectedClipId,
   captureStyle = DEFAULT_COMMENT_CAPTURE_STYLE,
   titleStyle = DEFAULT_TOPIC_TITLE_STYLE,
+  imageEffect = DEFAULT_IMAGE_EFFECT,
+  watermarkStyle = DEFAULT_WATERMARK_STYLE,
   onToggle,
   onSelectClip,
   onPositionCommit
@@ -350,6 +394,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   selectedClipId?: string;
   captureStyle?: CommentCaptureStyle;
   titleStyle?: TopicTitleStyle;
+  imageEffect?: ImageEffectStyle;
+  watermarkStyle?: WatermarkStyle;
   onToggle: () => void;
   onSelectClip?: (clipId: string) => void;
   onPositionCommit?: (clipId: string, x: number, y: number) => void;
@@ -609,6 +655,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
               dragging={draggingId === clip.id}
               captureStyle={captureStyle}
               titleStyle={titleStyle}
+              imageEffect={imageEffect}
               onMovePointerDown={(event) => beginOverlayDrag(event, clip)}
               onMovePointerMove={moveOverlayDrag}
               onMovePointerUp={endOverlayDrag}
@@ -622,6 +669,26 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
             />
           );
         })}
+        {watermarkHasText(watermarkStyle) ? (
+          <div
+            style={{
+              position: "absolute",
+              left: `${watermarkPoint(currentTime, watermarkStyle, WATERMARK_CANVAS).x}px`,
+              top: `${watermarkPoint(currentTime, watermarkStyle, WATERMARK_CANVAS).y}px`,
+              fontFamily: watermarkStyle.fontFamily,
+              fontSize: `${overlayCanvasPx(watermarkStyle.fontSize)}px`,
+              fontWeight: 700,
+              color: watermarkStyle.color,
+              whiteSpace: "nowrap",
+              lineHeight: 1.25,
+              pointerEvents: "none",
+              zIndex: TRACK_Z.watermark,
+              opacity: watermarkOpacity(watermarkStyle)
+            }}
+          >
+            {watermarkStyle.text}
+          </div>
+        ) : null}
         </div>
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent p-1.5"

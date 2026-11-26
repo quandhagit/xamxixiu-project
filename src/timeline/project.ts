@@ -4,6 +4,7 @@ export const TIMELINE_PROJECT_TRACK_IDS = [
   "images",
   "meme",
   "video",
+  "watermark",
   "voice",
   "sfx",
   "beep",

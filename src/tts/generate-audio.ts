@@ -239,7 +239,7 @@ export async function generateAudio(
 
   if (
     analysis?.topicTitle &&
-    resolveTopicTitleVoiceEnabled(analysis, thread.text) &&
+      resolveTopicTitleVoiceEnabled(analysis) &&
     (!onlyTarget || onlyTarget === "topic-title") &&
     (onlyTarget === "topic-title" || isTopicIntroEnabled(analysis))
   ) {

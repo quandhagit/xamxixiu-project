@@ -32,8 +32,20 @@ export function clipMotionName(clip: {
   if (clip.animation === "slide-left") {
     return "slide-left";
   }
+  if (clip.animation === "slide-right") {
+    return "slide-right";
+  }
+  if (clip.animation === "slide-down") {
+    return "slide-down";
+  }
   if (clip.animation === "fade-in") {
     return "fade-in";
+  }
+  if (clip.animation === "fade") {
+    return "fade";
+  }
+  if (clip.animation === "pop") {
+    return "pop";
   }
   return undefined;
 }
@@ -79,6 +91,18 @@ export function clipAnimationLabel(clip: {
   }
   if (motion === "slide-left") {
     return "Slide left";
+  }
+  if (motion === "slide-right") {
+    return "Slide right";
+  }
+  if (motion === "slide-down") {
+    return "Slide down";
+  }
+  if (motion === "fade") {
+    return "Fade";
+  }
+  if (motion === "pop") {
+    return "Pop";
   }
   return undefined;
 }
@@ -130,6 +154,20 @@ export function clipSlideLeftPercent(
   progress: number
 ): number {
   return restLeftPercent - (1 - progress) * 100;
+}
+
+export function clipSlideRightPercent(
+  restLeftPercent: number,
+  progress: number
+): number {
+  return restLeftPercent + (1 - progress) * 100;
+}
+
+export function clipSlideDownTopPercent(
+  restTopPercent: number,
+  progress: number
+): number {
+  return restTopPercent - (1 - progress) * 100;
 }
 
 export function clipHasTimedMotion(clip: {

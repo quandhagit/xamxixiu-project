@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { TimelineProject } from "../../../src/timeline/project";
 import type { VideoTimeline } from "../../../src/types";
+import type { WatermarkStyle } from "../../../src/watermark-style";
 import {
   TRACK_COLORS,
   TRACK_PIPS,
@@ -38,6 +39,7 @@ const TRACK_ICONS: Record<TrackId, typeof Image> = {
   images: Images,
   meme: Smile,
   video: Film,
+  watermark: Type,
   voice: Mic,
   sfx: Volume2,
   beep: AudioLines,
@@ -63,6 +65,7 @@ interface TimelineTracksProps {
   onToggleLock?: (clipId: string) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  watermarkStyle?: WatermarkStyle;
 }
 
 interface DragState {
@@ -155,14 +158,15 @@ function TimelineTracksComponent({
   onSelectClip,
   onToggleLock,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  watermarkStyle
 }: TimelineTracksProps): React.ReactElement {
   const tracks = useMemo(
     () =>
       timelineProject
-        ? getProjectTracks(timelineProject)
-        : getTimelineTracks(timeline),
-    [timeline, timelineProject]
+        ? getProjectTracks(timelineProject, { watermark: watermarkStyle })
+        : getTimelineTracks(timeline, { watermark: watermarkStyle }),
+    [timeline, timelineProject, watermarkStyle]
   );
   const canvasRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
@@ -528,7 +532,11 @@ function TimelineTracksComponent({
                         if (disabled) {
                           return;
                         }
-                        const canLock = Boolean(onToggleLock && !clip.placeholder);
+                        const canLock = Boolean(
+                          onToggleLock &&
+                          !clip.placeholder &&
+                          clip.trackId !== "watermark"
+                        );
                         const canRemove = clipCanRemove(clip) && !clip.locked;
                         if (!canLock && !canRemove) {
                           return;

@@ -20,6 +20,10 @@ import {
   packTimelineScenes,
   type ScenePackComment
 } from "../../../src/timeline/scene-pack";
+import {
+  clampImageEffectStyle,
+  type ImageEffectStyle
+} from "../../../src/image-effect";
 
 export function autoFormat(
   project: TimelineProject,
@@ -177,6 +181,22 @@ export function setClipAnimationDuration(
     return project;
   }
   clip.animationDuration = roundTime(Math.max(0, duration));
+  return next;
+}
+
+export function setClipImageEffect(
+  project: TimelineProject,
+  clipId: string,
+  effect: ImageEffectStyle
+): TimelineProject {
+  const next = cloneTimelineProject(project);
+  const clip = next.clips.find((item) => item.id === clipId);
+  if (!clip || clip.locked || clip.trackId !== "images") {
+    return project;
+  }
+  const clamped = clampImageEffectStyle(effect);
+  clip.animation = clamped.entrance;
+  clip.animationDuration = clamped.duration;
   return next;
 }
 

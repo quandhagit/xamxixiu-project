@@ -21,12 +21,12 @@ import {
   getSceneDuration
 } from "./timing.js";
 import { getTopicMemeLayout } from "./topic-layout.js";
-import {
-  TOPIC_TITLE_ANIMATION_DURATION,
-  isTopicIntroEnabled,
-  resolveTimelineTopicTitle,
-  shouldGenerateTopicTitleVoice
-} from "./topic-constants.js";
+  import {
+    TOPIC_TITLE_ANIMATION_DURATION,
+    isTopicIntroEnabled,
+    resolveTimelineTopicTitle,
+    resolveTopicTitleVoiceEnabled
+  } from "./topic-constants.js";
 import { readMediaDuration } from "../media-duration.js";
 import { renderTopicTitleCard } from "../capcut/compile/title-card.js";
 import { randomBackgroundStart } from "./background-start.js";
@@ -622,9 +622,7 @@ export async function buildTimeline(
   let topicIntro: VideoTimeline["topicIntro"];
   let topicCaptureStart = 0;
   let topicAudioStart = 0;
-  const introCase = shouldGenerateTopicTitleVoice(
-    thread.text
-  )
+  const introCase = resolveTopicTitleVoiceEnabled(inputs.analysis)
     ? "long"
     : "short";
   const hasTitleAudio =

@@ -829,10 +829,8 @@ Rules for intensity:
   } else {
     analysis.topicTitle = "";
   }
-  if (existingAnalysis?.topicTitleVoiceMode) {
-    analysis.topicTitleVoiceMode =
-      existingAnalysis.topicTitleVoiceMode;
-  }
+  analysis.topicTitleVoiceMode =
+    existingAnalysis?.topicTitleVoiceMode === "on" ? "on" : "off";
 
   analysis.reactions = (analysis.reactions ?? []).map((reaction) => ({
     ...reaction,

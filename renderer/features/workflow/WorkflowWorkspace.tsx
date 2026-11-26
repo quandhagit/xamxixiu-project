@@ -26,8 +26,7 @@ import {
   TOPIC_TITLE_CARD_FILE,
   isTopicTitleMissing,
   normalizeTopicTitle,
-  resolveTopicTitleVoiceEnabled,
-  shouldGenerateTopicTitleVoice
+  resolveTopicTitleVoiceEnabled
 } from "../../../src/timeline/topic-constants";
 import {
   previewFilesChanged
@@ -49,6 +48,8 @@ import {
 } from "./steps";
 import { useCommentCaptureStyle } from "../custom/use-comment-capture-style";
 import { useTopicTitleStyle } from "../custom/use-topic-title-style";
+import { useImageEffect } from "../custom/use-image-effect";
+import { useWatermarkStyle } from "../custom/use-watermark-style";
 import { CaptureStep } from "./CaptureStep";
 import { InputStep } from "./InputStep";
 import {
@@ -75,6 +76,8 @@ export function WorkflowWorkspace({
 }): React.ReactElement {
   const captureStyle = useCommentCaptureStyle(visible);
   const titleStyle = useTopicTitleStyle(visible);
+  const imageEffect = useImageEffect(visible);
+  const watermarkStyle = useWatermarkStyle(visible);
   const [currentStep, setCurrentStep] =
     useState<WorkflowStep>("INPUT");
   const [projects, setProjects] =
@@ -1171,13 +1174,8 @@ export function WorkflowWorkspace({
     }
   }
 
-  const topicText =
-    draftContent?.text ??
-    selectedProject?.content?.text ??
-    selectedProject?.thread?.text;
   const skipTopicTitleVoice = !resolveTopicTitleVoiceEnabled(
-    selectedProject?.analysis,
-    topicText
+    selectedProject?.analysis
   );
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1314,10 +1312,6 @@ export function WorkflowWorkspace({
                   draftTopicTitle={draftTopicTitle}
                   audioAssets={audioAssets}
                   skipTopicTitleVoice={skipTopicTitleVoice}
-                  titleVoiceMode={
-                    selectedProject?.analysis?.topicTitleVoiceMode ?? "auto"
-                  }
-                  defaultTitleVoiceEnabled={shouldGenerateTopicTitleVoice(topicText)}
                   operationLoading={operationLoading}
                   onGenerateAll={() => {
                     void generateAllAudio();
@@ -1368,6 +1362,8 @@ export function WorkflowWorkspace({
                       previewAssets={previewAssets}
                       captureStyle={captureStyle}
                       titleStyle={titleStyle}
+                      imageEffect={imageEffect}
+                      watermarkStyle={watermarkStyle}
                       analysis={selectedProject.analysis}
                       reactions={selectedProject.reactions}
                       visible={visible}
