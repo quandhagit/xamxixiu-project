@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { DragEvent } from "react";
 import {
   DEFAULT_COMMENT_CAPTURE_STYLE,
   type CommentCaptureStyle
 } from "../../../src/capture-style";
+import {
+  COMMENT_IMAGE_MAX_BYTES,
+  isCommentImageMime
+} from "../../../src/comments/comment-constants";
 import { CaptureStyleImage } from "../custom/CaptureStyleImage";
 import type { ContentData } from "../../../src/types";
 import { TOPIC_TITLE_MAX_LENGTH } from "../../../src/timeline/topic-constants";
@@ -13,10 +17,29 @@ import type { SpeechTextDiff } from "../../../src/comments/clean-speech-text";
 import { CaptureComments } from "../capture/CaptureComments";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
-import { Input } from "../ui/Input";
 import { Panel } from "../ui/Panel";
 import { Textarea } from "../ui/Textarea";
 import { cn } from "../ui/cn";
+
+function isImageFile(file: File): boolean {
+  if (isCommentImageMime(file.type) || file.type.startsWith("image/")) {
+    return true;
+  }
+
+  return file.type === "" && /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+}
+
+function firstImageFile(files: FileList | null | undefined): File | undefined {
+  if (!files) {
+    return undefined;
+  }
+
+  return Array.from(files).find(isImageFile);
+}
+
+async function fileToBytes(file: File): Promise<Uint8Array> {
+  return new Uint8Array(await file.arrayBuffer());
+}
 
 export function CaptureStep({
   draftContent,
@@ -62,7 +85,7 @@ export function CaptureStep({
     comments: ContentData["comments"],
     slots: number[]
   ) => void;
-  onAddComment: (url: string) => void;
+  onAddComment: (bytes: Uint8Array, text: string) => void;
   onTopicTitleChange: (value: string) => void;
   onCleanText: () => void;
   onAcceptDiff: (index: number) => void;
@@ -72,9 +95,15 @@ export function CaptureStep({
 }): React.ReactElement {
   const titlePanelRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
-  const addInputRef = useRef<HTMLInputElement>(null);
+  const addFileRef = useRef<HTMLInputElement>(null);
+  const addTextRef = useRef<HTMLTextAreaElement>(null);
+  const previewUrlRef = useRef<string | undefined>(undefined);
   const [addOpen, setAddOpen] = useState(false);
-  const [replyUrl, setReplyUrl] = useState("");
+  const [addDragging, setAddDragging] = useState(false);
+  const [addError, setAddError] = useState<string>();
+  const [pendingBytes, setPendingBytes] = useState<Uint8Array>();
+  const [previewUrl, setPreviewUrl] = useState<string>();
+  const [draftComment, setDraftComment] = useState("");
 
   useEffect(() => {
     if (!titleInvalid) {
@@ -88,34 +117,111 @@ export function CaptureStep({
   }, [titleInvalid, titleInvalidNonce]);
 
   useEffect(() => {
+    return () => revokePreview();
+  }, []);
+
+  useEffect(() => {
     if (!addOpen) {
       return;
     }
 
-    const frame = window.requestAnimationFrame(() => {
-      addInputRef.current?.focus();
-    });
+    function handlePaste(event: ClipboardEvent): void {
+      const file = firstImageFile(event.clipboardData?.files);
 
-    return () => window.cancelAnimationFrame(frame);
-  }, [addOpen]);
+      if (!file) {
+        const items = event.clipboardData?.items;
+        const fromItems = items
+          ? Array.from(items)
+              .map((item) => item.getAsFile())
+              .find(
+                (candidate): candidate is File =>
+                  candidate != null && isImageFile(candidate)
+              )
+          : undefined;
 
-  function closeAddDialog(): void {
-    setAddOpen(false);
+        if (!fromItems) {
+          return;
+        }
+
+        event.preventDefault();
+        void stageImage(fromItems);
+        return;
+      }
+
+      event.preventDefault();
+      void stageImage(file);
+    }
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [addOpen, addCommentLoading]);
+
+  function revokePreview(): void {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = undefined;
+    }
   }
 
-  function handleAddComment(
-    event: FormEvent<HTMLFormElement>
-  ): void {
-    event.preventDefault();
-    const nextUrl = replyUrl.trim();
+  function closeAddDialog(): void {
+    revokePreview();
+    setAddOpen(false);
+    setAddDragging(false);
+    setAddError(undefined);
+    setPendingBytes(undefined);
+    setPreviewUrl(undefined);
+    setDraftComment("");
+  }
 
-    if (!nextUrl || addCommentLoading) {
+  async function stageImage(file: File): Promise<void> {
+    if (addCommentLoading) {
       return;
     }
 
-    onAddComment(nextUrl);
-    setReplyUrl("");
-    setAddOpen(false);
+    if (!isImageFile(file)) {
+      setAddError("Hãy chọn một file ảnh.");
+      return;
+    }
+
+    if (file.size > COMMENT_IMAGE_MAX_BYTES) {
+      setAddError("Ảnh quá lớn (tối đa 10MB).");
+      return;
+    }
+
+    const bytes = await fileToBytes(file);
+    const nextUrl = URL.createObjectURL(file);
+    revokePreview();
+    previewUrlRef.current = nextUrl;
+    setPendingBytes(bytes);
+    setPreviewUrl(nextUrl);
+    setAddError(undefined);
+    window.requestAnimationFrame(() => {
+      addTextRef.current?.focus();
+    });
+  }
+
+  function savePendingComment(): void {
+    const text = draftComment.trim();
+
+    if (!pendingBytes || !text || addCommentLoading) {
+      return;
+    }
+
+    onAddComment(pendingBytes, text);
+    closeAddDialog();
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    setAddDragging(false);
+    const file = firstImageFile(event.dataTransfer.files);
+
+    if (!file) {
+      setAddError("Hãy thả một file ảnh.");
+      return;
+    }
+
+    void stageImage(file);
   }
 
   return (
@@ -152,7 +258,11 @@ export function CaptureStep({
           <Button
             variant="primary"
             size="sm"
-            onClick={() => setAddOpen(true)}
+            onClick={() => {
+              setAddError(undefined);
+              setDraftComment("");
+              setAddOpen(true);
+            }}
             disabled={
               !hasProject ||
               !draftContent ||
@@ -170,50 +280,179 @@ export function CaptureStep({
         className="max-w-lg"
         labelledBy="add-comment-title"
       >
-        <form onSubmit={handleAddComment}>
-          <div className="border-b border-line px-4 py-3">
-            <h3
-              id="add-comment-title"
-              className="text-sm font-medium text-ink"
-            >
-              Thêm comment
-            </h3>
-            <p className="mt-0.5 text-[12px] text-ink-3">
-              Dán link reply Threads để capture thêm.
-            </p>
-          </div>
-          <div className="px-4 py-3">
-            <Input
-              ref={addInputRef}
-              value={replyUrl}
-              onChange={(event) =>
-                setReplyUrl(event.target.value)
+        <div className="border-b border-line px-4 py-3">
+          <h3
+            id="add-comment-title"
+            className="text-sm font-medium text-ink"
+          >
+            Thêm comment
+          </h3>
+          <p className="mt-0.5 text-[12px] text-ink-3">
+            Dán ảnh (Ctrl+V), thả file, hoặc chọn từ máy, rồi điền comment
+            và bấm Lưu.
+          </p>
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          <input
+            ref={addFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            onChange={(event) => {
+              const file = firstImageFile(event.target.files);
+              event.target.value = "";
+
+              if (!file) {
+                setAddError("Hãy chọn một file ảnh.");
+                return;
               }
-              placeholder="Dán link reply Threads"
-            />
-          </div>
-          <div className="flex justify-end gap-1.5 border-t border-line px-4 py-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={closeAddDialog}
+
+              void stageImage(file);
+            }}
+          />
+          {previewUrl ? (
+            <div
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setAddDragging(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setAddDragging(true);
+              }}
+              onDragLeave={(event) => {
+                if (
+                  event.currentTarget.contains(
+                    event.relatedTarget as Node
+                  )
+                ) {
+                  return;
+                }
+                setAddDragging(false);
+              }}
+              onDrop={handleDrop}
+              className={cn(
+                "flex min-h-[140px] items-center justify-center overflow-hidden rounded-lg border bg-app p-3",
+                addDragging ? "border-accent" : "border-line"
+              )}
             >
-              Hủy
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              disabled={
-                addCommentLoading ||
-                replyUrl.trim().length === 0
-              }
+              <img
+                src={previewUrl}
+                alt="Ảnh comment sẽ thêm"
+                className="max-h-[220px] max-w-full object-contain"
+              />
+            </div>
+          ) : (
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => addFileRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  addFileRef.current?.click();
+                }
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setAddDragging(true);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+                setAddDragging(true);
+              }}
+              onDragLeave={(event) => {
+                if (
+                  event.currentTarget.contains(
+                    event.relatedTarget as Node
+                  )
+                ) {
+                  return;
+                }
+                setAddDragging(false);
+              }}
+              onDrop={handleDrop}
+              className={cn(
+                "flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-4 py-6 text-center",
+                addDragging
+                  ? "border-accent bg-accent/10"
+                  : "border-line bg-app"
+              )}
             >
-              Thêm
-            </Button>
-          </div>
-        </form>
+              <p className="text-[13px] text-ink">
+                Dán, thả, hoặc chọn ảnh comment
+              </p>
+              <p className="mt-1 text-[12px] text-ink-3">
+                PNG, JPG, WebP, GIF · tối đa 10MB
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="mt-3"
+                disabled={addCommentLoading}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  addFileRef.current?.click();
+                }}
+              >
+                Chọn từ máy
+              </Button>
+            </div>
+          )}
+          {previewUrl ? (
+            <>
+              <Textarea
+                ref={addTextRef}
+                value={draftComment}
+                onChange={(event) =>
+                  setDraftComment(event.target.value)
+                }
+                placeholder="Nội dung comment"
+                className="min-h-[96px] leading-5"
+              />
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={addCommentLoading}
+                  onClick={() => addFileRef.current?.click()}
+                >
+                  Đổi ảnh
+                </Button>
+              </div>
+            </>
+          ) : null}
+          {addError ? (
+            <p className="text-[12px] text-danger">{addError}</p>
+          ) : null}
+        </div>
+        <div className="flex justify-end gap-1.5 border-t border-line px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={closeAddDialog}
+          >
+            Hủy
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            disabled={
+              addCommentLoading ||
+              !pendingBytes ||
+              draftComment.trim().length === 0
+            }
+            onClick={savePendingComment}
+          >
+            {addCommentLoading ? "Đang thêm..." : "Lưu"}
+          </Button>
+        </div>
       </Dialog>
 
       {draftContent ? (

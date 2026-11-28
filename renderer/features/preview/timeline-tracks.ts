@@ -15,31 +15,33 @@ import type {
   TimelineProjectTrackId
 } from "../../../src/timeline/project";
 import {
-  clampWatermarkStyle,
-  watermarkHasText,
-  type WatermarkStyle
-} from "../../../src/watermark-style";
-import {
   TOPIC_POST_COMMENT_INDEX,
   isTopicVoiceClip
 } from "../../../src/timeline/topic-constants";
 
 export const PLACEHOLDER_DURATION = 1;
 
+export const TIMELINE_SELECTION_KEEP_SELECTOR =
+  "[data-clip-id], [data-keep-selection], [data-scene-band], [role='dialog']";
+
 export const TRACK_IDS = [
   "background",
   "title-card",
   "images",
   "meme",
+  "sfx",
   "video",
   "watermark",
   "voice",
-  "sfx",
   "beep",
   "music"
 ] as const;
 
 export type TrackId = (typeof TRACK_IDS)[number];
+
+export function isEditorTimelineTrack(id: TrackId): boolean {
+  return id !== "watermark";
+}
 
 export interface TimelineTrackClip {
   id: string;
@@ -75,18 +77,26 @@ export const TRACK_LABELS: Record<TrackId, string> = {
   music: "Music"
 };
 
-export const TRACK_COLORS: Record<TrackId, string> = {
-  background: "border-l-[3px] border-slate-400 bg-slate-500/30 text-slate-50",
-  images: "border-l-[3px] border-stone-300 bg-stone-400/25 text-stone-50",
-  "title-card": "border-l-[3px] border-sky-400 bg-sky-500/25 text-sky-50",
-  meme: "border-l-[3px] border-teal-400 bg-teal-500/25 text-teal-50",
-  video: "border-l-[3px] border-indigo-400 bg-indigo-500/25 text-indigo-50",
-  watermark: "border-l-[3px] border-zinc-300 bg-zinc-400/25 text-zinc-50",
-  voice: "border-l-[3px] border-amber-400 bg-amber-500/25 text-amber-50",
-  sfx: "border-l-[3px] border-emerald-400 bg-emerald-500/25 text-emerald-50",
-  beep: "border-l-[3px] border-rose-400 bg-rose-500/25 text-rose-50",
-  music: "border-l-[3px] border-violet-400 bg-violet-500/25 text-violet-50"
-};
+const VISUAL_TRACKS = new Set<TrackId>([
+  "background",
+  "title-card",
+  "images",
+  "meme",
+  "video",
+  "watermark"
+]);
+
+const CLIP_COLOR_VISUAL =
+  "border-l-[3px] border-slate-400/80 bg-slate-500/28 text-slate-50";
+const CLIP_COLOR_AUDIO =
+  "border-l-[3px] border-zinc-400/70 bg-zinc-500/20 text-zinc-100";
+
+export const TRACK_COLORS: Record<TrackId, string> = Object.fromEntries(
+  TRACK_IDS.map((id) => [
+    id,
+    VISUAL_TRACKS.has(id) ? CLIP_COLOR_VISUAL : CLIP_COLOR_AUDIO
+  ])
+) as Record<TrackId, string>;
 
 export const TRACK_PIPS: Record<TrackId, string> = {
   background: "bg-slate-400",
@@ -101,20 +111,221 @@ export const TRACK_PIPS: Record<TrackId, string> = {
   music: "bg-violet-400"
 };
 
-const VISUAL_TRACKS = new Set<TrackId>([
-  "background",
-  "title-card",
-  "images",
-  "meme",
-  "video",
-  "watermark"
-]);
+export const TRACK_TITLE_COLORS: Record<TrackId, string> = {
+  background: "text-slate-300",
+  images: "text-stone-300",
+  "title-card": "text-sky-400",
+  meme: "text-teal-400",
+  video: "text-indigo-400",
+  watermark: "text-zinc-300",
+  voice: "text-amber-400",
+  sfx: "text-emerald-400",
+  beep: "text-rose-400",
+  music: "text-violet-400"
+};
 
-export const TRACK_LANE_VISUAL = 44;
-export const TRACK_LANE_AUDIO = 32;
+export const TRACK_LANE_HEIGHT = 44;
 
-export function trackLaneHeight(id: TrackId): number {
-  return VISUAL_TRACKS.has(id) ? TRACK_LANE_VISUAL : TRACK_LANE_AUDIO;
+export function trackLaneHeight(_id: TrackId): number {
+  return TRACK_LANE_HEIGHT;
+}
+
+const BED_TRACK_IDS = new Set(["background", "music", "watermark"]);
+
+export interface SceneBand {
+  id: string;
+  label: string;
+  start: number;
+  end: number;
+  kind: "topic" | "comment";
+  commentIndexes: number[];
+}
+
+function sceneBandLabel(
+  kind: SceneBand["kind"],
+  commentIndexes: number[]
+): string {
+  if (kind === "topic") {
+    return "Topic";
+  }
+  if (commentIndexes.length === 0) {
+    return "Cmt";
+  }
+  if (commentIndexes.length === 1) {
+    return `Cmt #${commentIndexes[0]}`;
+  }
+  return `Cmt #${commentIndexes[0]}–#${commentIndexes[commentIndexes.length - 1]}`;
+}
+
+function sceneKeyFromClipId(id: string): string | undefined {
+  if (
+    id === "title-card" ||
+    id.startsWith("topic-") ||
+    /^(?:meme|video|sfx)-topic-post-\d+$/.test(id)
+  ) {
+    return "topic";
+  }
+  const prefixed = /^(image|voice|meme|video|sfx|beep)-(.+)$/.exec(id);
+  if (!prefixed) {
+    return undefined;
+  }
+  const kind = prefixed[1];
+  const rest = prefixed[2];
+  if (!kind || !rest) {
+    return undefined;
+  }
+  if (rest.startsWith("topic")) {
+    return "topic";
+  }
+  if (kind === "image" || kind === "voice") {
+    return /^(.+)-(-?\d+)$/.exec(rest)?.[1];
+  }
+  return /^(.+)-(-?\d+)-(\d+)$/.exec(rest)?.[1];
+}
+
+function sceneKeyFromClip(clip: {
+  id: string;
+  trackId: string;
+  commentIndex?: number | null;
+}): string | undefined {
+  if (BED_TRACK_IDS.has(clip.trackId)) {
+    return undefined;
+  }
+  const fromId = sceneKeyFromClipId(clip.id);
+  if (fromId) {
+    return fromId;
+  }
+  if (
+    clip.trackId === "title-card" ||
+    clip.commentIndex === null ||
+    clip.commentIndex === TOPIC_POST_COMMENT_INDEX
+  ) {
+    return "topic";
+  }
+  if (typeof clip.commentIndex === "number" && clip.commentIndex >= 0) {
+    return `c:${clip.commentIndex}`;
+  }
+  return undefined;
+}
+
+function mergeOverlappingCommentBands(bands: SceneBand[]): SceneBand[] {
+  const merged: SceneBand[] = [];
+  for (const band of bands) {
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      last.kind === "comment" &&
+      band.kind === "comment" &&
+      band.start < last.end - 0.0001
+    ) {
+      last.end = Math.max(last.end, band.end);
+      last.commentIndexes = [
+        ...new Set([...last.commentIndexes, ...band.commentIndexes])
+      ].sort((left, right) => left - right);
+      last.label = sceneBandLabel("comment", last.commentIndexes);
+      last.id = `${last.id}+${band.id}`;
+      continue;
+    }
+    merged.push({
+      ...band,
+      commentIndexes: [...band.commentIndexes]
+    });
+  }
+  return merged;
+}
+
+export function getSceneBands(project: TimelineProject): SceneBand[] {
+  const groups = new Map<string, TimelineClip[]>();
+  for (const clip of project.clips) {
+    const key = sceneKeyFromClip(clip);
+    if (!key) {
+      continue;
+    }
+    const members = groups.get(key) ?? [];
+    members.push(clip);
+    groups.set(key, members);
+  }
+
+  const bands: SceneBand[] = [];
+  for (const [id, members] of groups) {
+    let start = Number.POSITIVE_INFINITY;
+    let end = 0;
+    const indexes: number[] = [];
+    for (const clip of members) {
+      start = Math.min(start, clip.start);
+      end = Math.max(end, clip.start + clip.duration);
+      if (typeof clip.commentIndex === "number" && clip.commentIndex >= 0) {
+        indexes.push(clip.commentIndex);
+      }
+    }
+    if (!Number.isFinite(start) || end <= start) {
+      continue;
+    }
+    const kind = id === "topic" ? "topic" : "comment";
+    const commentIndexes = [...new Set(indexes)].sort(
+      (left, right) => left - right
+    );
+    bands.push({
+      id,
+      kind,
+      start,
+      end,
+      commentIndexes,
+      label: sceneBandLabel(kind, commentIndexes)
+    });
+  }
+
+  bands.sort((left, right) => left.start - right.start || left.end - right.end);
+  return fillSceneBandGaps(mergeOverlappingCommentBands(bands));
+}
+
+function fillSceneBandGaps(bands: SceneBand[]): SceneBand[] {
+  if (bands.length < 2) {
+    return bands;
+  }
+  return bands.map((band, index) => {
+    const next = bands[index + 1];
+    if (!next || band.end >= next.start - 0.0001) {
+      return band;
+    }
+    return { ...band, end: next.start };
+  });
+}
+
+export function getTimelineSceneBands(timeline: VideoTimeline): SceneBand[] {
+  return fillSceneBandGaps(getTimelineSceneEntries(timeline).map((entry) => {
+    const isTopic =
+      entry.scene.id === "topic" || entry.scene.commentIndex === null;
+    const commentIndexes = [
+      ...new Set(
+        getSceneBlocks(entry.scene)
+          .map((block) => block.commentIndex)
+          .filter((index) => index >= 0)
+      )
+    ].sort((left, right) => left - right);
+    const kind = isTopic ? "topic" : "comment";
+    return {
+      id: entry.scene.id,
+      kind,
+      start: entry.start,
+      end: entry.end,
+      commentIndexes,
+      label: sceneBandLabel(kind, commentIndexes)
+    };
+  }));
+}
+
+export function activeSceneBandId(
+  bands: SceneBand[],
+  time: number
+): string | undefined {
+  const covering = bands.find(
+    (band) => time >= band.start && time < band.end
+  );
+  if (covering) {
+    return covering.id;
+  }
+  return [...bands].reverse().find((band) => time >= band.start)?.id;
 }
 
 export function isVideoAsset(file: string): boolean {
@@ -306,26 +517,6 @@ export function findTrackClip(
   return undefined;
 }
 
-function watermarkLaneClip(
-  duration: number,
-  watermark?: WatermarkStyle
-): TimelineTrackClip | undefined {
-  const style = clampWatermarkStyle(watermark);
-  if (!watermarkHasText(style)) {
-    return undefined;
-  }
-  return {
-    id: "watermark",
-    trackId: "watermark",
-    start: 0,
-    duration: Math.max(duration, PLACEHOLDER_DURATION),
-    label: style.text.trim(),
-    editable: false,
-    placeholder: false,
-    locked: true
-  };
-}
-
 function toProjectTrackClip(clip: TimelineClip): TimelineTrackClip {
   return {
     id: clip.id,
@@ -415,19 +606,11 @@ function overlayPlaceholders(options: {
 }
 
 export function getProjectTracks(
-  project: TimelineProject,
-  options: { watermark?: WatermarkStyle } = {}
+  project: TimelineProject
 ): TimelineTrack[] {
   const clips: TimelineTrackClip[] = project.clips
     .filter((clip) => clip.trackId !== "watermark")
     .map(toProjectTrackClip);
-  const watermarkClip = watermarkLaneClip(
-    project.totalDuration,
-    options.watermark
-  );
-  if (watermarkClip) {
-    clips.push(watermarkClip);
-  }
 
   for (const voice of project.clips) {
     if (voice.trackId !== "voice" || typeof voice.commentIndex !== "number") {
@@ -504,7 +687,7 @@ export function getProjectTracks(
     );
   }
 
-  return TRACK_IDS.map((id) => ({
+  return TRACK_IDS.filter(isEditorTimelineTrack).map((id) => ({
     id,
     label: TRACK_LABELS[id],
     clips: clips
@@ -517,8 +700,7 @@ export function getProjectTracks(
 }
 
 export function getTimelineTracks(
-  timeline: VideoTimeline,
-  options: { watermark?: WatermarkStyle } = {}
+  timeline: VideoTimeline
 ): TimelineTrack[] {
   const clips: TimelineTrackClip[] = [];
   const entries = getTimelineSceneEntries(timeline);
@@ -748,21 +930,12 @@ export function getTimelineTracks(
     });
   }
 
-  const watermarkClip = watermarkLaneClip(
-    timeline.totalDuration,
-    options.watermark
-  );
-  if (watermarkClip) {
-    clips.push(watermarkClip);
-  }
-
-  return TRACK_IDS.map((id) => ({
+  return TRACK_IDS.filter(isEditorTimelineTrack).map((id) => ({
     id,
     label: TRACK_LABELS[id],
     clips: clips.filter((clip) => clip.trackId === id)
   })).filter((track) =>
     track.id === "beep" ||
-    track.id === "watermark" ||
     track.id !== "title-card" ||
     track.clips.length > 0
   );

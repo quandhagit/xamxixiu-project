@@ -32,6 +32,7 @@ export interface UseTimelinePreviewResult {
   previewAudioRefs: React.MutableRefObject<PreviewAudioRefs>;
   setPreviewTime: (time: number) => void;
   setPreviewPlaying: (playing: boolean) => void;
+  setPreviewScrubbing: (scrubbing: boolean) => void;
   togglePreview: () => void;
 }
 
@@ -40,6 +41,13 @@ export function playingIfActive(
   active: boolean
 ): boolean {
   return active ? playing : false;
+}
+
+export function shouldAdvancePreviewClock(
+  playing: boolean,
+  scrubbing: boolean
+): boolean {
+  return playing && !scrubbing;
 }
 
 export function useTimelinePreview({
@@ -52,6 +60,7 @@ export function useTimelinePreview({
     useState(0);
   const [previewPlaying, setPreviewPlaying] =
     useState(false);
+  const scrubbingRef = useRef(false);
   const previewVideoRef =
     useRef<HTMLVideoElement>(null);
   const previewAudioRefs =
@@ -96,6 +105,12 @@ export function useTimelinePreview({
     const tick = (now: number): void => {
       const delta = (now - last) / 1000;
       last = now;
+      if (
+        !shouldAdvancePreviewClock(previewPlaying, scrubbingRef.current)
+      ) {
+        frame = window.requestAnimationFrame(tick);
+        return;
+      }
       setPreviewTime((time) => {
         if (time >= totalDuration) {
           setPreviewPlaying(false);
@@ -200,6 +215,10 @@ export function useTimelinePreview({
     };
   }, [assets, previewAudioTracks, previewPlaying, previewTime]);
 
+  function setPreviewScrubbing(scrubbing: boolean): void {
+    scrubbingRef.current = scrubbing;
+  }
+
   function togglePreview(): void {
     const nextPlaying = !previewPlaying;
     setPreviewPlaying(nextPlaying);
@@ -230,6 +249,7 @@ export function useTimelinePreview({
     previewAudioRefs,
     setPreviewTime,
     setPreviewPlaying,
+    setPreviewScrubbing,
     togglePreview
   };
 }

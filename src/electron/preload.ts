@@ -4,8 +4,8 @@ import {
 } from "electron";
 
 import type {
-  CaptureCommentPayload,
   DesktopApi,
+  ImportCommentImagePayload,
   ImportAssetsPayload,
   ReplaceTimelineAssetPayload,
   SaveAssetAssignmentsPayload,
@@ -30,11 +30,11 @@ const api: DesktopApi = {
       viewport
     ),
 
-  captureComment: (
-    payload: CaptureCommentPayload
+  importCommentImage: (
+    payload: ImportCommentImagePayload
   ) =>
     ipcRenderer.invoke(
-      "capture:comment",
+      "capture:comment-image",
       payload
     ),
 

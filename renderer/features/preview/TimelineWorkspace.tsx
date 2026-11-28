@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import { Redo2, Undo2 } from "lucide-react";
 import type { Asset } from "../../../src/assets/library";
 import type {
@@ -98,6 +104,19 @@ import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 import { Textarea } from "../ui/Textarea";
 
+const TIMELINE_PANE_MIN = 180;
+const TIMELINE_PANE_DEFAULT = 300;
+const PREVIEW_PANE_MIN = 140;
+const TIMELINE_PANE_KEY = "xamxixiu.timelinePaneHeight";
+
+function clampTimelinePaneHeight(
+  height: number,
+  layoutHeight: number
+): number {
+  const max = Math.max(TIMELINE_PANE_MIN, layoutHeight - PREVIEW_PANE_MIN);
+  return Math.min(max, Math.max(TIMELINE_PANE_MIN, Math.round(height)));
+}
+
 interface TimelineWorkspaceProps {
   projectId: string;
   timeline?: VideoTimeline;
@@ -141,6 +160,13 @@ export function TimelineWorkspace({
   const [history, setHistory] = useState<TimelineHistory>(emptyTimelineHistory);
   const [selectedClipId, setSelectedClipId] = useState<string>();
   const [zoom, setZoom] = useState(64);
+  const [paneHeight, setPaneHeight] = useState(TIMELINE_PANE_DEFAULT);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const paneResize = useRef<{
+    pointerId: number;
+    originY: number;
+    originHeight: number;
+  } | null>(null);
   const [voicePeaks, setVoicePeaks] = useState<Record<string, number[]>>({});
   const [formatOpen, setFormatOpen] = useState(false);
   const [sceneGap, setSceneGap] = useState(
@@ -194,6 +220,14 @@ export function TimelineWorkspace({
       burstTimerRef.current = undefined;
     }
   }, [projectId]);
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(TIMELINE_PANE_KEY);
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= TIMELINE_PANE_MIN) {
+      setPaneHeight(value);
+    }
+  }, []);
 
   useEffect(() => {
     if (draggingRef.current) {
@@ -601,8 +635,66 @@ export function TimelineWorkspace({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [visible, busy, projectId, history, timelineProject]);
 
+  function movePaneResize(event: PointerEvent): void {
+    const current = paneResize.current;
+    const layout = layoutRef.current;
+    if (
+      !current ||
+      event.pointerId !== current.pointerId ||
+      !layout
+    ) {
+      return;
+    }
+    setPaneHeight(
+      clampTimelinePaneHeight(
+        current.originHeight + (current.originY - event.clientY),
+        layout.clientHeight
+      )
+    );
+  }
+
+  function endPaneResize(event: PointerEvent): void {
+    const current = paneResize.current;
+    if (!current || event.pointerId !== current.pointerId) {
+      return;
+    }
+    const layout = layoutRef.current;
+    const next = layout
+      ? clampTimelinePaneHeight(
+        current.originHeight + (current.originY - event.clientY),
+        layout.clientHeight
+      )
+      : paneHeight;
+    paneResize.current = null;
+    window.removeEventListener("pointermove", movePaneResize, true);
+    window.removeEventListener("pointerup", endPaneResize, true);
+    window.removeEventListener("pointercancel", endPaneResize, true);
+    setPaneHeight(next);
+    window.localStorage.setItem(TIMELINE_PANE_KEY, String(next));
+  }
+
+  function beginPaneResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    if (event.button !== 0) {
+      return;
+    }
+    const layout = layoutRef.current;
+    if (!layout) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    paneResize.current = {
+      pointerId: event.pointerId,
+      originY: event.clientY,
+      originHeight: paneHeight
+    };
+    window.addEventListener("pointermove", movePaneResize, true);
+    window.addEventListener("pointerup", endPaneResize, true);
+    window.addEventListener("pointercancel", endPaneResize, true);
+  }
+
   const toolbar = (
-    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border border-line bg-sidebar px-2 py-1">
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line bg-sidebar px-2 py-1">
       <button
         type="button"
         title="Undo (Ctrl+Z)"
@@ -722,19 +814,21 @@ export function TimelineWorkspace({
               ? "Đang chuẩn bị media..."
               : exportProgress.phase === "done"
                 ? "Hoàn tất xuất video."
-                : `Đang render ${exportProgress.percent}%${
-                    exportProgress.time !== undefined &&
-                    exportProgress.duration
-                      ? ` · ${exportProgress.time.toFixed(1)}s / ${exportProgress.duration.toFixed(1)}s`
-                      : ""
-                  }`}
+                : `Đang render ${exportProgress.percent}%${exportProgress.time !== undefined &&
+                  exportProgress.duration
+                  ? ` · ${exportProgress.time.toFixed(1)}s / ${exportProgress.duration.toFixed(1)}s`
+                  : ""
+                }`}
           </p>
         </div>
       ) : null}
 
       {timeline ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-          <div className="flex min-h-0 shrink-0 gap-3">
+        <div
+          ref={layoutRef}
+          className="flex min-h-0 flex-1 flex-col gap-2 p-2"
+        >
+          <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
             <HyperframesPlayer
               project={editorProject}
               assets={previewAssets}
@@ -746,6 +840,8 @@ export function TimelineWorkspace({
               imageEffect={imageEffect}
               watermarkStyle={watermarkStyle}
               onToggle={preview.togglePreview}
+              onSeek={preview.setPreviewTime}
+              onScrubbingChange={preview.setPreviewScrubbing}
               onSelectClip={setSelectedClipId}
               onPositionCommit={(clipId, x, y) => {
                 const current = draftRef.current ?? editorProject;
@@ -783,7 +879,7 @@ export function TimelineWorkspace({
                   </Button>
                 </div>
               ) : null}
-              {exportOutput ? (
+              {exportOutput && (
                 <div className="rounded-lg border border-line bg-panel p-2.5">
                   <p className="text-[11px] text-ink-3">Video đã xuất</p>
                   <p className="mt-1 break-all text-[12px] text-ink">
@@ -800,11 +896,6 @@ export function TimelineWorkspace({
                     Mở thư mục
                   </Button>
                 </div>
-              ) : (
-                <p className="text-[12px] leading-5 text-ink-3">
-                  Kéo clip để dời, kéo mép để cắt voice, thêm beep tại playhead.
-                  Xuất video bằng Hyperframes (ffmpeg là fallback).
-                </p>
               )}
               {selectedClipId && editorProject ? (
                 <ClipFadePanel
@@ -835,83 +926,98 @@ export function TimelineWorkspace({
                     setEditingTitle(analysis?.topicTitle ?? "");
                   }}
                   onRemove={removeTrackClip}
-                  /* onSplit={() => {
-                    if (!editorProject) {
-                      return;
-                    }
-                    persistEditor(
-                      splitClip(editorProject, selectedClipId, preview.previewTime)
-                    );
-                  }} */
+                /* onSplit={() => {
+                  if (!editorProject) {
+                    return;
+                  }
+                  persistEditor(
+                    splitClip(editorProject, selectedClipId, preview.previewTime)
+                  );
+                }} */
                 />
               ) : null}
             </div>
           </div>
-          {toolbar}
-          <TimelineTracks
-            timeline={timeline}
-            timelineProject={editorProject}
-            previewTime={preview.previewTime}
-            pixelsPerSecond={zoom}
-            selectedClipId={selectedClipId}
-            voicePeaks={voicePeaks}
-            disabled={busy}
-            watermarkStyle={watermarkStyle}
-            onSeek={(time) => {
-              preview.setPreviewPlaying(false);
-              preview.setPreviewTime(time);
-            }}
-            onRemoveClip={removeTrackClip}
-            onSelectClip={setSelectedClipId}
-            onDragStart={() => {
-              draggingRef.current = true;
-              preview.setPreviewPlaying(false);
-              const current = draftRef.current ?? timelineProject;
-              if (current) {
-                historySnapshotRef.current = cloneTimelineProject(current);
-              }
-            }}
-            onMoveClip={(clipId, start) => {
-              const current = draftRef.current ?? timelineProject;
-              if (!current) {
-                return;
-              }
-              applyDraft(moveClip(current, clipId, start));
-            }}
-            onTrimClip={(clipId, edge, time) => {
-              const current = draftRef.current ?? timelineProject;
-              if (!current) {
-                return;
-              }
-              applyDraft(trimClip(current, clipId, edge, time));
-            }}
-            onDragEnd={() => {
-              draggingRef.current = false;
-              const snapshot = historySnapshotRef.current;
-              historySnapshotRef.current = undefined;
-              const next = draftRef.current;
-              if (!next) {
-                return;
-              }
-              if (snapshot && !timelineProjectsEqual(snapshot, next)) {
-                setHistory((current) => pushHistory(current, snapshot));
-              }
-              persistEditor(next, false);
-            }}
-            /* onToggleLock={(clipId) => {
-              if (!editorProject) {
-                return;
-              }
-              const clip = editorProject.clips.find((item) => item.id === clipId);
-              persistEditor(
-                setClipLocked(editorProject, clipId, !clip?.locked)
-              );
-            }} */
-          />
+          <div
+            className="relative flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-line"
+            style={{ height: paneHeight }}
+          >
+            <button
+              type="button"
+              aria-label="Kéo để đổi chiều cao timeline"
+              className="absolute inset-x-0 top-0 z-10 h-2 cursor-ns-resize bg-transparent"
+              onPointerDown={beginPaneResize}
+            />
+            <div className="flex min-h-0 flex-1 flex-col gap-0.5">
+              {toolbar}
+              <TimelineTracks
+                timeline={timeline}
+                timelineProject={editorProject}
+                previewTime={preview.previewTime}
+                pixelsPerSecond={zoom}
+                selectedClipId={selectedClipId}
+                voicePeaks={voicePeaks}
+                disabled={busy}
+                onSeek={(time) => {
+                  preview.setPreviewPlaying(false);
+                  preview.setPreviewTime(time);
+                }}
+                onRemoveClip={removeTrackClip}
+                onSelectClip={setSelectedClipId}
+                onDragStart={() => {
+                  draggingRef.current = true;
+                  preview.setPreviewPlaying(false);
+                  const current = draftRef.current ?? timelineProject;
+                  if (current) {
+                    historySnapshotRef.current = cloneTimelineProject(current);
+                  }
+                }}
+                onMoveClip={(clipId, start) => {
+                  const current = draftRef.current ?? timelineProject;
+                  if (!current) {
+                    return;
+                  }
+                  applyDraft(moveClip(current, clipId, start));
+                }}
+                onTrimClip={(clipId, edge, time) => {
+                  const current = draftRef.current ?? timelineProject;
+                  if (!current) {
+                    return;
+                  }
+                  applyDraft(trimClip(current, clipId, edge, time));
+                }}
+                framed={false}
+                onDragEnd={() => {
+                  draggingRef.current = false;
+                  const snapshot = historySnapshotRef.current;
+                  historySnapshotRef.current = undefined;
+                  const next = draftRef.current;
+                  if (!next) {
+                    return;
+                  }
+                  if (snapshot && !timelineProjectsEqual(snapshot, next)) {
+                    setHistory((current) => pushHistory(current, snapshot));
+                  }
+                  persistEditor(next, false);
+                }}
+              /* onToggleLock={(clipId) => {
+                if (!editorProject) {
+                  return;
+                }
+                const clip = editorProject.clips.find((item) => item.id === clipId);
+                persistEditor(
+                  setClipLocked(editorProject, clipId, !clip?.locked)
+                );
+              }} */
+              />
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-          {toolbar}
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 p-2">
+          <div className="overflow-hidden rounded-lg border border-line">
+            {toolbar}
+          </div>
           <p className="rounded-lg border border-dashed border-line bg-panel p-6 text-[13px] text-ink-3">
             Chưa có timeline. Bấm Create timeline sau khi voice đã sẵn sàng.
           </p>
@@ -983,9 +1089,9 @@ export function TimelineWorkspace({
         selectedId={
           target
             ? selectedAssetId(target, analysis, reactions, {
-                clips: (draftRef.current ?? timelineProject)?.clips,
-                assets: pickerAssets
-              })
+              clips: (draftRef.current ?? timelineProject)?.clips,
+              assets: pickerAssets
+            })
             : undefined
         }
         onClose={() => setTarget(undefined)}
@@ -997,11 +1103,11 @@ export function TimelineWorkspace({
         }}
         onRemove={
           target &&
-          canRemoveTimelineAsset(target) &&
-          selectedAssetId(target, analysis, reactions, {
-            clips: (draftRef.current ?? timelineProject)?.clips,
-            assets: pickerAssets
-          })
+            canRemoveTimelineAsset(target) &&
+            selectedAssetId(target, analysis, reactions, {
+              clips: (draftRef.current ?? timelineProject)?.clips,
+              assets: pickerAssets
+            })
             ? () => void replaceAsset(target, null)
             : undefined
         }
@@ -1053,7 +1159,10 @@ function ClipFadePanel({
 
   if (!clip) {
     return (
-      <div className="rounded-lg border border-line bg-panel p-2.5">
+      <div
+        data-keep-selection=""
+        className="rounded-lg border border-line bg-panel p-2.5"
+      >
         <p className="text-[12px] font-medium text-ink">
           {trackClip?.label ?? "Clip"}
         </p>
@@ -1105,7 +1214,10 @@ function ClipFadePanel({
   }
 
   return (
-    <div className="rounded-lg border border-line bg-panel p-2.5">
+    <div
+      data-keep-selection=""
+      className="rounded-lg border border-line bg-panel p-2.5"
+    >
       <p className="text-[12px] font-medium text-ink">{clip.label}</p>
       {canChoose || removable ? (
         <div className="mt-2 flex flex-wrap gap-1.5">

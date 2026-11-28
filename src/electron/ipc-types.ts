@@ -55,14 +55,10 @@ export interface UpdateVoicePayload {
   voiceId: string;
 }
 
-export interface CaptureCommentPayload {
+export interface ImportCommentImagePayload {
   projectId: string;
-  url: string;
   imageIndex: number;
-  existing: Array<{
-    author: string;
-    text: string;
-  }>;
+  bytes: Uint8Array;
 }
 
 export interface ImportAssetsPayload {
@@ -182,8 +178,8 @@ export interface DesktopApi {
     commentLimit?: number,
     viewport?: CaptureViewport
   ): Promise<ProjectState>;
-  captureComment(
-    payload: CaptureCommentPayload
+  importCommentImage(
+    payload: ImportCommentImagePayload
   ): Promise<ThreadComment>;
   curateComments(
     projectId: string

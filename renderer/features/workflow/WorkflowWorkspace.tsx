@@ -717,7 +717,8 @@ export function WorkflowWorkspace({
   }
 
   async function addComment(
-    replyUrl: string
+    bytes: Uint8Array,
+    text: string
   ): Promise<void> {
     if (!selectedProject || !draftContent) {
       return;
@@ -725,24 +726,21 @@ export function WorkflowWorkspace({
 
     const projectId = selectedProject.id;
     const imageIndex = draftContent.comments.length;
-    const existing = draftContent.comments.map(
-      (item) => ({
-        author: item.author,
-        text: item.originalText ?? item.text
-      })
-    );
 
     setError(undefined);
     setAddCommentLoading(true);
 
     try {
       const comment =
-        await window.xamxixiu.captureComment({
+        await window.xamxixiu.importCommentImage({
           projectId,
-          url: replyUrl,
           imageIndex,
-          existing
+          bytes
         });
+      const nextComment = {
+        ...comment,
+        text
+      };
 
       setDraftContent((current) => {
         if (!current) {
@@ -753,7 +751,7 @@ export function WorkflowWorkspace({
           ...current,
           comments: [
             ...current.comments,
-            comment
+            nextComment
           ]
         };
       });
@@ -1334,8 +1332,8 @@ export function WorkflowWorkspace({
                     });
                     setImageSlots(slots);
                   }}
-                  onAddComment={(commentUrl) => {
-                    void addComment(commentUrl);
+                  onAddComment={(bytes, text) => {
+                    void addComment(bytes, text);
                   }}
                   onTopicTitleChange={(value) => {
                     setDraftTopicTitle(value);

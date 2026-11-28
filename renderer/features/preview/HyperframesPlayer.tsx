@@ -33,7 +33,11 @@ import {
   TOPIC_TITLE_TRANSFORM_Y,
   TOPIC_TITLE_WIDTH_FRACTION
 } from "../../../src/timeline/topic-constants";
-import { previewSeekThreshold } from "./preview-timeline";
+import {
+  previewProgressPercent,
+  previewSeekThreshold,
+  previewTimeFromBar
+} from "./preview-timeline";
 import {
   isPreviewFullscreen,
   previewFrameClass,
@@ -210,6 +214,7 @@ function PreviewClip({
   titleStyle,
   imageEffect,
   onMedia,
+  onSelect,
   onMovePointerDown,
   onMovePointerMove,
   onMovePointerUp
@@ -226,6 +231,7 @@ function PreviewClip({
   titleStyle?: TopicTitleStyle;
   imageEffect?: ImageEffectStyle;
   onMedia?: (element: HTMLMediaElement | null) => void;
+  onSelect?: () => void;
   onMovePointerDown?: (event: ReactPointerEvent<HTMLElement>) => void;
   onMovePointerMove?: (event: ReactPointerEvent<HTMLElement>) => void;
   onMovePointerUp?: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -309,18 +315,26 @@ function PreviewClip({
       : {}),
     touchAction: movable ? "none" : undefined
   };
-  const moveProps = movable
-    ? {
-        draggable: false as const,
-        onDragStart: (event: ReactDragEvent<HTMLElement>) => {
-          event.preventDefault();
-        },
-        onPointerDown: onMovePointerDown,
-        onPointerMove: onMovePointerMove,
-        onPointerUp: onMovePointerUp,
-        onPointerCancel: onMovePointerUp
+  const moveProps = {
+    "data-clip-id": clip.id,
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button === 0) {
+        onSelect?.();
       }
-    : undefined;
+      onMovePointerDown?.(event);
+    },
+    ...(movable
+      ? {
+          draggable: false as const,
+          onDragStart: (event: ReactDragEvent<HTMLElement>) => {
+            event.preventDefault();
+          },
+          onPointerMove: onMovePointerMove,
+          onPointerUp: onMovePointerUp,
+          onPointerCancel: onMovePointerUp
+        }
+      : {})
+  };
   if (clip.kind === "video") {
     return (
       <video
@@ -373,6 +387,85 @@ function paintOverlayPosition(element: HTMLElement, x: number, y: number): void 
   element.style.top = `${50 - y * 50}%`;
 }
 
+function PreviewSeekBar({
+  time,
+  duration,
+  onSeek,
+  onScrubbingChange
+}: {
+  time: number;
+  duration: number;
+  onSeek: (time: number) => void;
+  onScrubbingChange?: (scrubbing: boolean) => void;
+}): React.ReactElement {
+  const barRef = useRef<HTMLDivElement>(null);
+  const percent = previewProgressPercent(time, duration);
+
+  useEffect(() => {
+    return () => onScrubbingChange?.(false);
+  }, [onScrubbingChange]);
+
+  function seekAt(clientX: number): void {
+    const bar = barRef.current;
+    if (!bar) {
+      return;
+    }
+    onSeek(previewTimeFromBar(clientX, bar.getBoundingClientRect(), duration));
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onScrubbingChange?.(true);
+    seekAt(event.clientX);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    seekAt(event.clientX);
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onScrubbingChange?.(false);
+  }
+
+  return (
+    <div
+      ref={barRef}
+      role="slider"
+      aria-label="Tua preview"
+      aria-valuemin={0}
+      aria-valuemax={duration}
+      aria-valuenow={time}
+      className="relative h-5 cursor-pointer touch-none py-1.5"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25" />
+      <div
+        className="absolute top-1/2 left-0 h-1 -translate-y-1/2 rounded-full bg-white"
+        style={{ width: `${percent}%` }}
+      />
+      <div
+        className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow"
+        style={{ left: `${percent}%` }}
+      />
+    </div>
+  );
+}
+
 export const HyperframesPlayer = memo(function HyperframesPlayer({
   project,
   assets,
@@ -384,6 +477,8 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   imageEffect = DEFAULT_IMAGE_EFFECT,
   watermarkStyle = DEFAULT_WATERMARK_STYLE,
   onToggle,
+  onSeek,
+  onScrubbingChange,
   onSelectClip,
   onPositionCommit
 }: {
@@ -397,7 +492,9 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
   imageEffect?: ImageEffectStyle;
   watermarkStyle?: WatermarkStyle;
   onToggle: () => void;
-  onSelectClip?: (clipId: string) => void;
+  onSeek?: (time: number) => void;
+  onScrubbingChange?: (scrubbing: boolean) => void;
+  onSelectClip?: (clipId: string | undefined) => void;
   onPositionCommit?: (clipId: string, x: number, y: number) => void;
 }): React.ReactElement {
   const mediaRefs = useRef<Record<string, HTMLMediaElement | null>>({});
@@ -656,6 +753,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
               captureStyle={captureStyle}
               titleStyle={titleStyle}
               imageEffect={imageEffect}
+              onSelect={() => onSelectClip?.(clip.id)}
               onMovePointerDown={(event) => beginOverlayDrag(event, clip)}
               onMovePointerMove={moveOverlayDrag}
               onMovePointerUp={endOverlayDrag}
@@ -691,10 +789,22 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
         ) : null}
         </div>
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent p-1.5"
+          className={[
+            "pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent",
+            expanded ? "p-3" : "p-1.5"
+          ].join(" ")}
           onDoubleClick={(event) => event.stopPropagation()}
         >
-          <div className="pointer-events-auto flex items-center gap-1">
+          <div className="pointer-events-auto flex flex-col gap-1">
+            {expanded && onSeek ? (
+              <PreviewSeekBar
+                time={currentTime}
+                duration={duration}
+                onSeek={onSeek}
+                onScrubbingChange={onScrubbingChange}
+              />
+            ) : null}
+            <div className="flex items-center gap-1">
             <button
               type="button"
               title={playing ? "Pause" : "Play"}
@@ -727,6 +837,7 @@ export const HyperframesPlayer = memo(function HyperframesPlayer({
                 <Maximize2 className="h-3.5 w-3.5" />
               )}
             </button>
+            </div>
           </div>
         </div>
       </div>

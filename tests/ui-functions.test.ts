@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import type { Asset } from "../src/assets/library";
@@ -14,6 +17,11 @@ import {
   reorderComments
 } from "../src/comments/order";
 import { isAnalysisStale } from "../src/comments/analysis-stale";
+import {
+  commentProcessedPngName,
+  emptyImportedComment,
+  importCommentImage
+} from "../src/comments/import-comment-image";
 import {
   applyTimelineAssetReplacement,
   canRemoveTimelineAsset
@@ -218,18 +226,30 @@ import {
   findTrackClip,
   formatClipLabel,
   getProjectTracks,
+  getSceneBands,
+  getTimelineSceneBands,
   getTimelineTracks,
+  activeSceneBandId,
+  TIMELINE_SELECTION_KEEP_SELECTOR,
   isVideoAsset,
   targetFromProjectClip,
   TRACK_IDS,
   TRACK_LABELS,
+  isEditorTimelineTrack,
   trackLaneHeight
 } from "../renderer/features/preview/timeline-tracks";
 import {
   getPreviewAudioTracks,
   getPreviewScene,
-  previewSeekThreshold
+  previewProgressPercent,
+  previewSeekThreshold,
+  previewTimeFromBar
 } from "../renderer/features/preview/preview-timeline";
+import {
+  sampleWaveformPeaks,
+  waveformBarCount,
+  waveformBarHeightPercent
+} from "../renderer/features/preview/waveform";
 import {
   isPreviewFullscreen,
   previewCaptureStyleScale,
@@ -279,7 +299,10 @@ import {
   isAppViewVisible,
   keptAppViewPanels
 } from "../renderer/features/app/app-view";
-import { playingIfActive } from "../renderer/features/preview/use-timeline-preview";
+import {
+  playingIfActive,
+  shouldAdvancePreviewClock
+} from "../renderer/features/preview/use-timeline-preview";
 
 const testsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(testsDir, "..");
@@ -565,6 +588,9 @@ describe("workflow chrome", () => {
       timeline,
       /\{toolbar\}\s*<TimelineTracks/s
     );
+    assert.match(timeline, /cursor-ns-resize/);
+    assert.match(timeline, /xamxixiu\.timelinePaneHeight/);
+    assert.match(timeline, /data-keep-selection/);
     assert.match(timeline, /replacing \|\| loading/);
     assert.match(timeline, /Đang cập nhật timeline/);
     assert.match(timeline, /aria-busy="true"/);
@@ -746,9 +772,18 @@ describe("capture viewport", () => {
       /viewport: CaptureViewport = DEFAULT_CAPTURE_VIEWPORT/
     );
     assert.match(capture, /thread\.viewport = captureViewport/);
-    assert.match(capture, /parseCaptureViewport\(input\.viewport\)/);
+    assert.match(capture, /parseCaptureViewport\(viewport\)/);
     assert.match(ipc, /parseCaptureViewport\(viewport\)/);
-    assert.match(ipc, /project\?\.content\?\.viewport/);
+    assert.match(
+      readFileSync(
+        path.join(
+          repoRoot,
+          "renderer/features/workflow/project-helpers.ts"
+        ),
+        "utf8"
+      ),
+      /project\?\.content\?\.viewport/
+    );
     assert.match(types, /viewport\?: CaptureViewport/);
     assert.match(
       preload,
@@ -757,18 +792,54 @@ describe("capture viewport", () => {
     assert.match(createProject, /DEFAULT_CAPTURE_VIEWPORT/);
   });
 
+  it("adds extra comments from a pasted image instead of a Threads URL", () => {
+    const captureStep = readFileSync(
+      path.join(repoRoot, "renderer/features/workflow/CaptureStep.tsx"),
+      "utf8"
+    );
+    const workspace = readFileSync(
+      path.join(
+        repoRoot,
+        "renderer/features/workflow/WorkflowWorkspace.tsx"
+      ),
+      "utf8"
+    );
+    const ipc = readFileSync(
+      path.join(repoRoot, "src/electron/ipc.ts"),
+      "utf8"
+    );
+    const types = readFileSync(
+      path.join(repoRoot, "src/electron/ipc-types.ts"),
+      "utf8"
+    );
+    assert.match(captureStep, /Dán ảnh \(Ctrl\+V\)/);
+    assert.match(captureStep, /type="file"/);
+    assert.match(captureStep, /onDrop=\{handleDrop\}/);
+    assert.match(captureStep, /window\.addEventListener\("paste"/);
+    assert.match(captureStep, /Chọn từ máy/);
+    assert.match(captureStep, /Nội dung comment/);
+    assert.match(captureStep, /"Lưu"/);
+    assert.match(captureStep, /savePendingComment/);
+    assert.doesNotMatch(captureStep, /Dán link reply Threads/);
+    assert.match(workspace, /importCommentImage\(/);
+    assert.match(ipc, /capture:comment-image/);
+    assert.doesNotMatch(ipc, /capture:comment"/);
+    assert.match(types, /ImportCommentImagePayload/);
+    assert.doesNotMatch(types, /CaptureCommentPayload/);
+  });
+
   it("falls back to pressable cards when Column body is missing", () => {
     assert.ok(PRESSABLE_SELECTOR.includes(THREAD_COLUMN_SELECTOR));
     assert.match(
       PRESSABLE_SELECTOR,
       /body:not\(:has\(\[aria-label="Column body"\]\)\)/
     );
-    const capture = readFileSync(
-      path.join(repoRoot, "src/capture.ts"),
+    const extract = readFileSync(
+      path.join(repoRoot, "src/extract.ts"),
       "utf8"
     );
-    assert.match(capture, /column && !element\.closest\(columnSelector\)/);
-    assert.match(capture, /!containers\.includes\(container\)/);
+    assert.match(extract, /snapshotPressableCards/);
+    assert.match(extract, /PRESSABLE_SELECTOR/);
   });
 });
 
@@ -2234,16 +2305,13 @@ describe("watermark drift", () => {
     assert.ok(after.x < peak.x);
   });
 
-  it("adds a locked watermark lane clip from settings, not the project file", () => {
+  it("hides the watermark lane because it comes from settings, not the project file", () => {
     const project = createEmptyTimelineProject();
     project.totalDuration = 8;
-    const tracks = getProjectTracks(project, {
-      watermark: clampWatermarkStyle({ text: "xamxixiu" })
-    });
-    const lane = tracks.find((track) => track.id === "watermark");
-    assert.equal(lane?.clips.length, 1);
-    assert.equal(lane?.clips[0]?.locked, true);
-    assert.equal(lane?.clips[0]?.editable, false);
+    const tracks = getProjectTracks(project);
+    assert.equal(tracks.some((track) => track.id === "watermark"), false);
+    assert.equal(isEditorTimelineTrack("watermark"), false);
+    assert.equal(isEditorTimelineTrack("voice"), true);
     assert.equal(
       clipCanRemove({ trackId: "watermark", locked: true }),
       false
@@ -2259,20 +2327,37 @@ describe("timeline tracks", () => {
       "title-card",
       "images",
       "meme",
+      "sfx",
       "video",
       "watermark",
       "voice",
-      "sfx",
       "beep",
       "music"
     ]);
     assert.equal(TRACK_LABELS.voice, "Voice");
     assert.equal(TRACK_LABELS.beep, "Beep");
     assert.equal(TRACK_LABELS.watermark, "Watermark");
+    assert.equal(
+      TRACK_IDS.filter(isEditorTimelineTrack).includes("watermark"),
+      false
+    );
     assert.equal(trackLaneHeight("meme"), 44);
     assert.equal(trackLaneHeight("images"), 44);
     assert.equal(trackLaneHeight("watermark"), 44);
-    assert.equal(trackLaneHeight("voice"), 32);
+    assert.equal(trackLaneHeight("voice"), 44);
+    assert.equal(trackLaneHeight("sfx"), 44);
+    assert.equal(waveformBarCount(64), 32);
+    assert.equal(waveformBarCount(0), 0);
+    assert.deepEqual(sampleWaveformPeaks([0.2, 1, 0.4, 0.8], 2), [1, 0.8]);
+    assert.equal(waveformBarHeightPercent(0), 14);
+    assert.equal(waveformBarHeightPercent(1), 96);
+    const tracksSource = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineTracks.tsx"),
+      "utf8"
+    );
+    assert.match(tracksSource, /waveformBarHeightPercent/);
+    assert.match(tracksSource, /flex items-end justify-between/);
+    assert.doesNotMatch(tracksSource, /peaks\.slice\(0, 24\)/);
   });
 
   it("classifies video files and clip labels", () => {
@@ -2765,6 +2850,103 @@ describe("timeline tracks", () => {
     assert.equal(fromSettings.titleY, 0.3);
     assert.equal(fromSettings.meme.scale, 0.9);
   });
+
+  it("groups topic and a comment thread into scene bands without bed tracks", () => {
+    const source = timeline({
+      totalDuration: 20,
+      scenes: [
+        {
+          id: "topic",
+          commentIndex: null,
+          imageFile: "processed/topic.png",
+          imageStart: 0,
+          imageDuration: 2,
+          audioFile: "audio/topic.mp3",
+          audioStart: 0,
+          audioDuration: 2,
+          overlays: []
+        },
+        {
+          id: "comments-0-1",
+          commentIndex: 0,
+          imageFile: "processed/comment-0.png",
+          imageStart: 0,
+          imageDuration: 4,
+          sceneDuration: 4,
+          audioFile: "audio/comment-0.mp3",
+          audioStart: 0,
+          audioDuration: 2,
+          overlays: [],
+          blocks: [
+            {
+              commentIndex: 0,
+              imageFile: "processed/comment-0.png",
+              imageStart: 0,
+              imageDuration: 4,
+              audioFile: "audio/comment-0.mp3",
+              audioStart: 0,
+              audioDuration: 2,
+              overlays: []
+            },
+            {
+              commentIndex: 1,
+              imageFile: "processed/comment-1.png",
+              imageStart: 2,
+              imageDuration: 2,
+              audioFile: "audio/comment-1.mp3",
+              audioStart: 2,
+              audioDuration: 1.8,
+              overlays: []
+            }
+          ]
+        }
+      ]
+    });
+    const project = videoTimelineToProject(source);
+    const bands = getSceneBands(project);
+    assert.equal(bands.length, 2);
+    assert.equal(bands[0]?.kind, "topic");
+    assert.equal(bands[0]?.label, "Topic");
+    assert.equal(bands[0]?.start, 0);
+    assert.equal(bands[0]?.end, 2.1);
+    assert.equal(bands[1]?.kind, "comment");
+    assert.equal(bands[1]?.label, "Cmt #0–#1");
+    assert.equal(bands[1]?.start, 2.1);
+    assert.equal(bands[1]?.end, 6.1);
+    assert.ok((bands[1]?.end ?? 0) < 20);
+    assert.deepEqual(bands[1]?.commentIndexes, [0, 1]);
+
+    const fromTimeline = getTimelineSceneBands(source);
+    assert.equal(fromTimeline.length, 2);
+    assert.equal(fromTimeline[0]?.label, "Topic");
+    assert.equal(fromTimeline[1]?.label, "Cmt #0–#1");
+    assert.equal(fromTimeline[0]?.end, 2.1);
+    assert.equal(fromTimeline[1]?.start, 2.1);
+    assert.equal(fromTimeline[1]?.end, 6.1);
+    assert.equal(activeSceneBandId(bands, 0.5), bands[0]?.id);
+    assert.equal(activeSceneBandId(bands, 4), bands[1]?.id);
+
+    const packed = getSceneBands(twoCommentProject());
+    assert.equal(packed.length, 2);
+    assert.equal(packed[0]?.label, "Cmt #0");
+    assert.equal(packed[0]?.start, 0);
+    assert.equal(packed[0]?.end, 5);
+    assert.equal(packed[1]?.label, "Cmt #1");
+    assert.equal(packed[1]?.start, 5);
+    assert.equal(packed[1]?.end, 8);
+
+    const tracksSource = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineTracks.tsx"),
+      "utf8"
+    );
+    assert.match(tracksSource, />\s*Scene\s*</);
+    assert.match(tracksSource, /getSceneBands/);
+    assert.match(tracksSource, /TIMELINE_SELECTION_KEEP_SELECTOR/);
+    assert.match(tracksSource, /data-scene-band/);
+    assert.match(TIMELINE_SELECTION_KEEP_SELECTOR, /data-clip-id/);
+    assert.match(TIMELINE_SELECTION_KEEP_SELECTOR, /data-keep-selection/);
+    assert.match(TIMELINE_SELECTION_KEEP_SELECTOR, /data-scene-band/);
+  });
 });
 
 describe("timeline preview chrome", () => {
@@ -2784,6 +2966,28 @@ describe("timeline preview chrome", () => {
   });
 
   it("uses a taller docked frame and a fullscreen host", () => {
+    const player = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/HyperframesPlayer.tsx"),
+      "utf8"
+    );
+    const workspace = readFileSync(
+      path.join(repoRoot, "renderer/features/preview/TimelineWorkspace.tsx"),
+      "utf8"
+    );
+    assert.match(player, /"data-clip-id": clip\.id/);
+    assert.match(player, /onSelect=\{\(\) => onSelectClip\?\.\(clip\.id\)\}/);
+    assert.match(player, /function PreviewSeekBar/);
+    assert.match(player, /expanded && onSeek/);
+    assert.match(player, /onScrubbingChange/);
+    assert.match(workspace, /onSeek=\{preview\.setPreviewTime\}/);
+    assert.match(workspace, /onScrubbingChange=\{preview\.setPreviewScrubbing\}/);
+    assert.doesNotMatch(
+      workspace.slice(
+        workspace.indexOf("<HyperframesPlayer"),
+        workspace.indexOf("onSelectClip={setSelectedClipId}")
+      ),
+      /setPreviewPlaying\(false\)/
+    );
     assert.match(previewFrameClass("docked"), /52vh/);
     assert.doesNotMatch(previewFrameClass("docked"), /38vh/);
     assert.match(previewHostClass("overlay"), /fixed inset-0/);
@@ -2835,6 +3039,20 @@ describe("timeline preview clock", () => {
   it("uses a tighter seek threshold while playing", () => {
     assert.equal(previewSeekThreshold(true), 0.08);
     assert.equal(previewSeekThreshold(false), 1 / 30);
+  });
+
+  it("maps a fullscreen scrubber click onto clamped preview time", () => {
+    const bar = { left: 100, width: 200 };
+    assert.equal(previewTimeFromBar(200, bar, 10), 5);
+    assert.equal(previewTimeFromBar(80, bar, 10), 0);
+    assert.equal(previewTimeFromBar(400, bar, 10), 10);
+    assert.equal(previewTimeFromBar(200, { left: 0, width: 0 }, 10), 0);
+    assert.equal(previewProgressPercent(2.5, 10), 25);
+    assert.equal(previewProgressPercent(12, 10), 100);
+    assert.equal(previewProgressPercent(1, 0), 0);
+    assert.equal(shouldAdvancePreviewClock(true, false), true);
+    assert.equal(shouldAdvancePreviewClock(true, true), false);
+    assert.equal(shouldAdvancePreviewClock(false, false), false);
   });
 });
 
@@ -4682,4 +4900,59 @@ describe("scene auto format", () => {
     assert.equal(img1.start, roundTime(thread0End + 1));
   });
 });
+
+describe("import comment image", () => {
+  it("names processed comment pngs from a 0-based index", () => {
+    assert.equal(commentProcessedPngName(0), "comment-01.png");
+    assert.equal(commentProcessedPngName(11), "comment-12.png");
+  });
+
+  it("writes a processed png and returns an empty comment", async () => {
+    const projectDir = await mkdtemp(
+      path.join(tmpdir(), "xamxixiu-comment-image-")
+    );
+    const bytes = await sharp({
+      create: {
+        width: 12,
+        height: 8,
+        channels: 4,
+        background: { r: 20, g: 30, b: 40, alpha: 1 }
+      }
+    })
+      .png()
+      .toBuffer();
+
+    try {
+      const comment = await importCommentImage({
+        projectDir,
+        imageIndex: 3,
+        bytes
+      });
+      assert.deepEqual(comment, emptyImportedComment(3));
+      const output = path.join(
+        projectDir,
+        "processed",
+        "comment-04.png"
+      );
+      const written = await sharp(output).metadata();
+      assert.equal(written.format, "png");
+      assert.ok(written.width && written.width <= 12);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects empty image bytes", async () => {
+    await assert.rejects(
+      () =>
+        importCommentImage({
+          projectDir: tmpdir(),
+          imageIndex: 0,
+          bytes: Buffer.alloc(0)
+        }),
+      /Comment image cannot be empty/
+    );
+  });
+});
+
 

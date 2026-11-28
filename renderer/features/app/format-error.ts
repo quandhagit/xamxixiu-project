@@ -7,15 +7,6 @@ const TRANSLATIONS: Array<
   [RegExp, (match: RegExpMatchArray) => string]
 > = [
   [
-    /^Could not find the reply comment$/,
-    () =>
-      "Không tìm thấy comment trong trang. Hãy kiểm tra lại link."
-  ],
-  [
-    /^Could not extract the reply comment$/,
-    () => "Không đọc được nội dung comment."
-  ],
-  [
     /^Could not extract any Threads content$/,
     () => "Không đọc được nội dung từ Threads."
   ],
@@ -44,8 +35,16 @@ const TRANSLATIONS: Array<
     () => "Vị trí ảnh không hợp lệ."
   ],
   [
-    /^Existing comments are invalid$/,
-    () => "Danh sách comment hiện tại không hợp lệ."
+    /^Comment image cannot be empty$/,
+    () => "Ảnh comment không được để trống."
+  ],
+  [
+    /^Comment image is too large$/,
+    () => "Ảnh comment quá lớn (tối đa 10MB)."
+  ],
+  [
+    /^Invalid comment image$/,
+    () => "Ảnh comment không hợp lệ."
   ],
   [
     /^Project could not be loaded: (.+)$/,

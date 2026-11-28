@@ -25,7 +25,7 @@ export function previewStageMode(options: {
 
 export function previewHostClass(mode: PreviewStageMode): string {
   if (mode === "docked") {
-    return "flex shrink-0 flex-col";
+    return "flex h-full min-h-0 shrink-0 flex-col";
   }
   if (mode === "native") {
     return "flex h-full w-full items-center justify-center bg-black";
@@ -35,7 +35,7 @@ export function previewHostClass(mode: PreviewStageMode): string {
 
 export function previewFrameClass(mode: PreviewStageMode): string {
   if (mode === "docked") {
-    return "relative mx-auto aspect-[9/16] h-[min(52vh,480px)] w-auto overflow-hidden rounded-lg border border-line bg-black";
+    return "relative mx-auto aspect-[9/16] h-full max-h-[min(52vh,480px)] w-auto overflow-hidden rounded-lg border border-line bg-black";
   }
   return "relative aspect-[9/16] h-[min(100dvh,calc(100dvw*16/9))] w-auto overflow-hidden bg-black";
 }

@@ -20,3 +20,18 @@ export const CURATE_KEEP_MAX = 12;
 export const ANALYZE_TARGET_COMMENT_COUNT = Math.round(
   (CURATE_KEEP_MIN + CURATE_KEEP_MAX) / 2
 );
+
+/** Max bytes for a pasted/dropped comment screenshot. */
+export const COMMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
+const COMMENT_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif"
+]);
+
+export function isCommentImageMime(mime: string): boolean {
+  return COMMENT_IMAGE_MIME_TYPES.has(mime.trim().toLowerCase());
+}

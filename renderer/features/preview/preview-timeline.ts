@@ -74,6 +74,37 @@ export function previewSeekThreshold(
   return playing ? 0.08 : 1 / 30;
 }
 
+export function previewTimeFromBar(
+  clientX: number,
+  bar: { left: number; width: number },
+  duration: number
+): number {
+  const width = bar.width;
+  if (
+    !Number.isFinite(duration) ||
+    duration <= 0 ||
+    !Number.isFinite(width) ||
+    width <= 0
+  ) {
+    return 0;
+  }
+  const time = ((clientX - bar.left) / width) * duration;
+  if (!Number.isFinite(time)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(duration, time));
+}
+
+export function previewProgressPercent(
+  time: number,
+  duration: number
+): number {
+  if (!Number.isFinite(time) || !Number.isFinite(duration) || duration <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (time / duration) * 100));
+}
+
 export function getOverlayStyle(
   overlay: TimelineOverlay
 ): React.CSSProperties {

@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import type {
   AddBeepPayload,
   AutoFormatTimelinePayload,
-  CaptureCommentPayload,
+  ImportCommentImagePayload,
   CleanCommentTextPayload,
   DesktopApi,
   ExportProgress,
@@ -32,9 +32,9 @@ import {
 import { runAnalyze } from "../analyze.js";
 import { scanAssets } from "../assets/scanner.js";
 import {
-  captureComment,
   captureThread
 } from "../capture.js";
+import { importCommentImage } from "../comments/import-comment-image.js";
 import { openLoginBrowser } from "../browser.js";
 import { runCurate } from "../curate.js";
 import { runMatchReactions } from "../match-reactions.js";
@@ -265,16 +265,14 @@ export function registerIpc(
   );
 
   ipcMain.handle(
-    "capture:comment",
+    "capture:comment-image",
     async (
       _event,
-      payload: CaptureCommentPayload
+      payload: ImportCommentImagePayload
     ) => {
       if (
         !payload ||
-        typeof payload.projectId !== "string" ||
-        typeof payload.url !== "string" ||
-        !Array.isArray(payload.existing)
+        typeof payload.projectId !== "string"
       ) {
         throw new Error(
           "Invalid capture comment payload"
@@ -290,46 +288,14 @@ export function registerIpc(
         );
       }
 
-      for (const item of payload.existing) {
-        if (
-          !item ||
-          typeof item.author !== "string" ||
-          typeof item.text !== "string"
-        ) {
-          throw new Error(
-            "Existing comments are invalid"
-          );
-        }
-      }
-
-      if (!payload.url.trim()) {
+      const rawBytes = payload.bytes;
+      if (
+        rawBytes == null ||
+        typeof rawBytes !== "object" ||
+        !("byteLength" in rawBytes)
+      ) {
         throw new Error(
-          "Threads URL cannot be empty"
-        );
-      }
-
-      let parsedUrl: URL;
-
-      try {
-        parsedUrl = new URL(payload.url);
-      } catch {
-        throw new Error(
-          "Invalid Threads URL"
-        );
-      }
-
-      const allowedHosts = new Set([
-        "threads.net",
-        "www.threads.net",
-        "threads.com",
-        "www.threads.com"
-      ]);
-
-      if (!allowedHosts.has(
-        parsedUrl.hostname.toLowerCase()
-      )) {
-        throw new Error(
-          "URL must belong to Threads"
+          "Invalid capture comment payload"
         );
       }
 
@@ -361,20 +327,10 @@ export function registerIpc(
         );
       }
 
-      const project =
-        await store.getProject(payload.projectId);
-      return captureComment({
+      return importCommentImage({
         projectDir: directory,
-        url: payload.url,
         imageIndex: payload.imageIndex,
-        existing: payload.existing,
-        abbreviations: entriesToTable(
-          await loadAbbreviationEntries()
-        ),
-        viewport: parseCaptureViewport(
-          project?.content?.viewport ??
-            project?.thread?.viewport
-        )
+        bytes: Buffer.from(rawBytes)
       });
     }
   );

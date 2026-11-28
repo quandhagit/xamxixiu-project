@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import type { Page } from "playwright";
@@ -10,7 +9,6 @@ import {
 } from "./browser.js";
 
 import {
-  extractPressableComment,
   parentIndexFromSnapshot,
   parsePressableComment,
   PRESSABLE_SELECTOR,
@@ -20,7 +18,6 @@ import {
 
 import {
   createImageProcessor,
-  processImage,
   type ImageProcessor
 } from "./process-image.js";
 
@@ -35,10 +32,6 @@ import {
   type ThreadComment,
   type ThreadData
 } from "./types.js";
-
-import {
-  expandComment
-} from "./comments/speech-abbreviations.js";
 
 import {
   CAPTURE_COMMENT_MAX,
@@ -57,7 +50,6 @@ const MAX_STALLED_ROUNDS = 5;
 const SCROLL_WAIT_MS = 600;
 const POST_GOTO_TIMEOUT_MS = 8000;
 const SCROLL_TOP_WAIT_MS = 400;
-const POLL_WAIT_MS = 400;
 
 interface HarvestedComment {
   key: string;
@@ -531,299 +523,6 @@ export async function captureThread(
     };
   } finally {
     await processor.drain().catch(() => undefined);
-    await context.close();
-  }
-}
-
-export interface CaptureCommentInput {
-  projectDir: string;
-  url: string;
-  imageIndex: number;
-  existing: Array<{
-    author: string;
-    text: string;
-  }>;
-  /** Abbreviation table (lowercased keys); defaults to the starter list. */
-  abbreviations?: Record<string, string>;
-  viewport?: CaptureViewport;
-}
-
-function replyCodesFromUrl(url: string): string[] {
-  let parsed: URL;
-
-  try {
-    parsed = new URL(url);
-  } catch {
-    return [];
-  }
-
-  const match =
-    /\/(?:reply|post|share)\/([^/]+)/.exec(
-      parsed.pathname
-    );
-
-  if (!match?.[1]) {
-    return [];
-  }
-
-  const codes = new Set<string>([match[1]]);
-
-  try {
-    const decoded =
-      decodeURIComponent(match[1]);
-
-    if (decoded.trim()) {
-      codes.add(decoded);
-    }
-  } catch {
-    // Keep the raw path segment when it is not valid encoding.
-  }
-
-  return [...codes];
-}
-
-async function findReplyContainerIndex(
-  page: Page,
-  codes: string[]
-): Promise<number> {
-  return page.evaluate(
-    ({ needles, columnSelector, pressableSelector }) => {
-      const anchors = Array.from(
-        document.querySelectorAll("a[href]")
-      );
-      const containers = Array.from(
-        document.querySelectorAll(pressableSelector)
-      );
-      // Permalink links also appear in the right-rail Quotes
-      // card. Only a card inside the thread column counts, and
-      // a link inside a nested quote still belongs to the
-      // outer comment.
-      let container: Element | null = null;
-
-      for (const element of anchors) {
-        const href =
-          element.getAttribute("href") ?? "";
-
-        if (
-          !needles.some(
-            (code) =>
-              code.length > 0 &&
-              href.includes(code)
-          )
-        ) {
-          continue;
-        }
-
-        const column = document.querySelector(columnSelector);
-
-        if (column && !element.closest(columnSelector)) {
-          continue;
-        }
-
-        container = element.closest(
-          '[data-pressable-container="true"]'
-        );
-
-        if (!container || (column && !column.contains(container))) {
-          container = null;
-          continue;
-        }
-
-        while (
-          container &&
-          !containers.includes(container)
-        ) {
-          const parent: Element | null =
-            container.parentElement?.closest(
-              '[data-pressable-container="true"]'
-            ) ?? null;
-
-          if (
-            !parent ||
-            (column && !column.contains(parent))
-          ) {
-            break;
-          }
-
-          container = parent;
-        }
-
-        if (!container || !containers.includes(container)) {
-          container = null;
-          continue;
-        }
-
-        break;
-      }
-
-      if (!container) {
-        return -1;
-      }
-
-      return containers.indexOf(container);
-    },
-    {
-      needles: codes,
-      columnSelector: THREAD_COLUMN_SELECTOR,
-      pressableSelector: PRESSABLE_SELECTOR
-    }
-  );
-}
-
-export async function captureComment(
-  input: CaptureCommentInput
-): Promise<ThreadComment> {
-  const codes = replyCodesFromUrl(input.url);
-
-  // Share links (e.g. /share/XXXX) have no /reply/{code};
-  // the code is resolved from the redirected page URL below.
-  const filename = `comment-${String(
-    input.imageIndex + 1
-  ).padStart(2, "0")}.png`;
-  const outputPath = path.join(
-    input.projectDir,
-    "processed",
-    filename
-  );
-
-  const captureViewport = parseCaptureViewport(input.viewport);
-  const context = await createContext(captureViewport);
-
-  try {
-    const page = await openThreads(
-      context,
-      input.url
-    );
-
-    await waitForThreadCards(page);
-
-    for (const code of replyCodesFromUrl(page.url())) {
-      if (!codes.includes(code)) {
-        codes.push(code);
-      }
-    }
-
-    if (/\/share\//.test(page.url())) {
-      await page
-        .waitForURL((u) => !/\/share\//.test(u.pathname), {
-          timeout: 10000
-        })
-        .catch(() => undefined);
-      await waitForThreadCards(page);
-
-      for (const code of replyCodesFromUrl(page.url())) {
-        if (!codes.includes(code)) {
-          codes.push(code);
-        }
-      }
-    }
-
-    let containerIndex = codes.length > 0
-      ? await findReplyContainerIndex(page, codes)
-      : -1;
-
-    for (
-      let attempt = 0;
-      containerIndex < 0 && attempt < 6;
-      attempt++
-    ) {
-      await page.waitForTimeout(POLL_WAIT_MS);
-
-      for (const code of replyCodesFromUrl(page.url())) {
-        if (!codes.includes(code)) {
-          codes.push(code);
-        }
-      }
-
-      containerIndex = codes.length > 0
-        ? await findReplyContainerIndex(page, codes)
-        : -1;
-    }
-
-    if (containerIndex < 0) {
-      throw new Error(
-        "Không tìm thấy comment trong trang. Hãy kiểm tra lại link."
-      );
-    }
-
-    const extracted =
-      await extractPressableComment(
-        page,
-        containerIndex
-      );
-
-    if (!extracted) {
-      throw new Error(
-        "Không đọc được nội dung comment."
-      );
-    }
-
-    const author = extracted.author.trim();
-    const text = extracted.text.trim();
-    const duplicateIndex = input.existing.findIndex(
-      (item) =>
-        item.author.trim() === author &&
-        item.text.trim() === text
-    );
-
-    if (duplicateIndex >= 0) {
-      throw new Error(
-        `Comment bạn vừa thêm đã có sẵn trong list comment. index: ${duplicateIndex}`
-      );
-    }
-
-    await fs.mkdir(
-      path.dirname(outputPath),
-      { recursive: true }
-    );
-    await fs.rm(outputPath, { force: true });
-
-    const tempPath = path.join(
-      os.tmpdir(),
-      `xamxixiu-${Date.now()}-${filename}`
-    );
-
-    try {
-      await screenshotContainer(
-        page,
-        containerIndex,
-        tempPath,
-        () =>
-          findContainerIndexByContent(
-            page,
-            (candidateAuthor, candidateText) =>
-              candidateAuthor.trim() === author &&
-              candidateText.trim() === text,
-            containerIndex
-          ),
-        captureViewport === "mobile"
-      );
-      await processImage(
-        tempPath,
-        outputPath
-      );
-    } catch (error: unknown) {
-      await fs.rm(outputPath, {
-        force: true
-      });
-      throw error;
-    } finally {
-      await fs.rm(tempPath, {
-        force: true
-      });
-    }
-
-    return expandComment(
-      {
-        author: extracted.author,
-        text: extracted.text,
-        likes: extracted.likes,
-        containerIndex,
-        commentIndex: input.imageIndex
-      },
-      input.abbreviations
-    );
-  } finally {
     await context.close();
   }
 }
