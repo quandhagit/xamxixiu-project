@@ -118,13 +118,19 @@ function ThreadTree({
     }
 
     function measure(): void {
+      const treeRoot = rootRef.current;
+
+      if (!treeRoot) {
+        return;
+      }
+
       const items = [
-        ...root.querySelectorAll(":scope > [data-tree-item]")
+        ...treeRoot.querySelectorAll(":scope > [data-tree-item]")
       ] as HTMLElement[];
 
       setFrame({
-        width: root.clientWidth,
-        height: root.clientHeight,
+        width: treeRoot.clientWidth,
+        height: treeRoot.clientHeight,
         elbows: items.map((item) => item.offsetTop + TREE_ELBOW_Y)
       });
     }
@@ -642,7 +648,13 @@ export function CaptureComments({
     }
 
     function update(): void {
-      const rect = scroller.getBoundingClientRect();
+      const overflowParent = findOverflowParent(listRef.current);
+
+      if (!overflowParent) {
+        return;
+      }
+
+      const rect = overflowParent.getBoundingClientRect();
       setScrollPort({
         top: rect.top,
         left: rect.left,
